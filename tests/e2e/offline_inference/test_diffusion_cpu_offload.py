@@ -6,6 +6,7 @@ from pathlib import Path
 import pytest
 import torch
 
+from vllm_omni.inputs.data import OmniDiffusionSamplingParams
 from vllm_omni.utils.platform_utils import is_npu, is_rocm
 
 # ruff: noqa: E402
@@ -66,11 +67,13 @@ def test_cpu_offload_diffusion_model(model_name: str):
 
         m.generate(
             "a photo of a cat sitting on a laptop keyboard",
-            height=height,
-            width=width,
-            num_inference_steps=9,
-            guidance_scale=0.0,
-            generator=torch.Generator("cuda").manual_seed(42),
+            OmniDiffusionSamplingParams(
+                height=height,
+                width=width,
+                num_inference_steps=9,
+                guidance_scale=0.0,
+                generator=torch.Generator("cuda").manual_seed(42),
+            ),
         )
 
         monitor.stop()

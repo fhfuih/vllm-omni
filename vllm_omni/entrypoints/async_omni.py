@@ -3,7 +3,7 @@
 import asyncio
 import time
 import weakref
-from collections.abc import AsyncGenerator, Iterable
+from collections.abc import AsyncGenerator, Iterable, Sequence
 from dataclasses import asdict
 from pprint import pformat
 from typing import Any
@@ -34,6 +34,7 @@ from vllm_omni.entrypoints.stage_utils import maybe_load_from_ipc as _load
 from vllm_omni.entrypoints.utils import (
     get_final_stage_id_for_e2e,
 )
+from vllm_omni.inputs.data import OmniDiffusionSamplingParams, OmniPromptType, OmniSamplingParams
 from vllm_omni.outputs import OmniRequestOutput
 
 logger = init_logger(__name__)
@@ -65,10 +66,8 @@ class AsyncOmni(OmniBase):
     asynchronous LLM and Diffusion models.
 
     Args:
-        *args: Variable length argument list.
-            - args[0]: Model name or path to load.
+        model: Model name or path to load.
         **kwargs: Arbitrary keyword arguments.
-            - model: Model name or path to load (if not in args).
             - stage_configs_path: Optional path to YAML file containing stage
               configurations. If None, configurations are loaded from the model.
             - log_stats: Whether to enable statistics logging
@@ -94,7 +93,7 @@ class AsyncOmni(OmniBase):
         ...     print(output)
     """
 
-    def __init__(self, *args: Any, **kwargs: dict[str, Any]) -> None:
+    def __init__(self, model: str, **kwargs: dict[str, Any]) -> None:
         # Pause/resume control attributes
         self._pause_cond: asyncio.Condition = asyncio.Condition()
         self._paused: bool = False
@@ -103,7 +102,7 @@ class AsyncOmni(OmniBase):
         self.request_states: dict[str, ClientRequestState] = {}
         self.output_handler: asyncio.Task | None = None
 
-        super().__init__(*args, **kwargs)
+        super().__init__(model, **kwargs)
 
         # Register weak reference cleanup (called on garbage collection)
         self._weak_finalizer = weakref.finalize(
@@ -231,7 +230,14 @@ class AsyncOmni(OmniBase):
         if hasattr(self, "_weak_finalizer"):
             self._weak_finalizer()
 
-    async def generate(self, *args: Any, **kwargs: dict[str, Any]) -> AsyncGenerator[OmniRequestOutput, None]:
+    async def generate(
+        self,
+        prompt: OmniPromptType,
+        request_id: str,
+        sampling_params_list: Sequence[OmniSamplingParams] | None = None,
+        *,
+        output_modalities: list[str] | None = None,
+    ) -> AsyncGenerator[OmniRequestOutput, None]:
         """Generate outputs for the given prompt asynchronously.
 
         Coordinates multi-stage pipeline through YAML configuration.
@@ -241,21 +247,13 @@ class AsyncOmni(OmniBase):
         sampling parameters from the sampling_params_list.
 
         Args:
-            *args: Arguments for generation.
-                - prompt: Prompt to process. Can be a text string, token IDs,
-                    or multimodal prompt.
-                - request_id: Unique identifier for this request
-                - sampling_params_list: List of SamplingParams, one for each stage.
-                    Must have the same length as the number of stages.
-                    If None, uses default sampling params for each stage.
-            **kwargs: Additional arguments for generation.
-                - prompt: Prompt to process. Can be a text string, token IDs,
-                    or multimodal prompt.
-                - request_id: Unique identifier for this request
-                - sampling_params_list: List of SamplingParams, one for each stage.
-                    Must have the same length as the number of stages.
-                    If None, uses default sampling params for each stage.
-                - output_modalities: Optional list of output modalities.
+            prompt: Prompt to process. Can be a text string, token IDs,
+                or multimodal prompt.
+            request_id: Unique identifier for this request
+            sampling_params_list: List of SamplingParams, one for each stage.
+                Must have the same length as the number of stages.
+                If None, uses default sampling params for each stage.
+            output_modalities: Optional list of output modalities.
 
         Yields:
             OmniRequestOutput objects as they are produced by each stage.
@@ -274,31 +272,17 @@ class AsyncOmni(OmniBase):
             # Start output handler on the first call to generate()
             self._run_output_handler()
 
-            prompt = args[0] if args else kwargs.get("prompt")
-            request_id = args[1] if len(args) > 1 else kwargs.get("request_id")
-            sampling_params_list = args[2] if len(args) > 2 else kwargs.get("sampling_params_list")
-            output_modalities = kwargs.get("output_modalities", None)
             # TODO: lora_request, trace_headers, priority are not supported yet
 
             if sampling_params_list is None:
-                # For Omni LLM, the params are parsed via the yaml file. For the current version,
-                # diffusion params can parsed via the command line.
-                omni_params_kwargs = {
-                    k: v for k, v in kwargs.items() if k not in ["prompt", "request_id", "output_modalities"]
-                }
-
-                per_stage_params: list[Any] = []
+                per_stage_params: list[OmniSamplingParams] = []
                 for stage_id, stage in enumerate(self.stage_list):
-                    stage_type = getattr(stage, "stage_type", "llm")
+                    stage_type = stage.stage_type
+                    default_dict = self.default_sampling_params_list[stage_id]
                     if stage_type == "diffusion":
-                        default_dict = self.default_sampling_params_list[stage_id]
-                        # Merge user-provided kwargs
-                        merged = {**default_dict, **omni_params_kwargs}
-                        # Diffusion only needs to keep diff params, will be used via OmniDiffusionRequest
-                        per_stage_params.append(merged)
+                        per_stage_params.append(OmniDiffusionSamplingParams(**default_dict))
                     else:
-                        # LLM directly constructs SamplingParams, don't use the merged params
-                        per_stage_params.append(self.default_sampling_params_list[stage_id])
+                        per_stage_params.append(SamplingParams(**default_dict))
 
                 sampling_params_list = per_stage_params
 
@@ -332,7 +316,7 @@ class AsyncOmni(OmniBase):
             # Mark first input time for stage-0
             metrics.stage_first_ts[0] = metrics.stage_first_ts[0] or time.time()
 
-            sp0: SamplingParams = sampling_params_list[0]  # type: ignore[index]
+            sp0 = sampling_params_list[0]
             task = {
                 "request_id": request_id,
                 "engine_inputs": prompt,

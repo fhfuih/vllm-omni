@@ -79,6 +79,7 @@ from PIL import Image
 
 from vllm_omni.diffusion.data import DiffusionParallelConfig, logger
 from vllm_omni.entrypoints.omni import Omni
+from vllm_omni.inputs.data import OmniDiffusionSamplingParams
 from vllm_omni.outputs import OmniRequestOutput
 from vllm_omni.utils.platform_utils import detect_device_type, is_npu
 
@@ -357,20 +358,22 @@ def main():
 
     generation_start = time.perf_counter()
     # Generate edited image
-    generate_kwargs = {
-        "prompt": args.prompt,
-        "pil_image": input_image,
-        "negative_prompt": args.negative_prompt,
-        "generator": generator,
-        "true_cfg_scale": args.cfg_scale,
-        "guidance_scale": args.guidance_scale,
-        "num_inference_steps": args.num_inference_steps,
-        "num_outputs_per_prompt": args.num_outputs_per_prompt,
-        "layers": args.layers,
-        "resolution": args.resolution,
-    }
-
-    outputs = omni.generate(**generate_kwargs)
+    outputs = omni.generate(
+        {
+            "prompt": args.prompt,
+            "negative_prompt": args.negative_prompt,
+            "multi_modal_data": {"image": input_image},
+        },
+        OmniDiffusionSamplingParams(
+            generator=generator,
+            true_cfg_scale=args.cfg_scale,
+            guidance_scale=args.guidance_scale,
+            num_inference_steps=args.num_inference_steps,
+            num_outputs_per_prompt=args.num_outputs_per_prompt,
+            layers=args.layers,
+            resolution=args.resolution,
+        ),
+    )
     generation_end = time.perf_counter()
     generation_time = generation_end - generation_start
 
