@@ -14,10 +14,8 @@ from typing import Any
 
 from omegaconf import OmegaConf
 from tqdm.auto import tqdm
-from vllm.inputs import PromptType
 from vllm.logger import init_logger
 
-from vllm_omni.diffusion.request import OmniDiffusionRequest
 from vllm_omni.distributed.omni_connectors import (
     get_stage_connector_config,
     initialize_orchestrator_connectors,
@@ -38,6 +36,7 @@ from vllm_omni.entrypoints.utils import (
     load_stage_configs_from_yaml,
     resolve_model_config_path,
 )
+from vllm_omni.inputs.data import OmniPromptType
 from vllm_omni.outputs import OmniRequestOutput
 
 logger = init_logger(__name__)
@@ -78,10 +77,8 @@ class OmniBase:
     """Base class for serving Omni models.
 
     Args:
-        *args: Variable length argument list.
-            - args[0]: Model name or path to load.
+        model: Model name or path to load.
         **kwargs: Arbitrary keyword arguments.
-            - model: Model name or path to load (if not in args).
             - stage_configs_path: Optional path to YAML file containing stage
               configurations. If None, configurations are loaded from the model.
             - log_stats: Whether to enable statistics logging
@@ -98,14 +95,9 @@ class OmniBase:
             - Additional keyword arguments passed to stage engines.
     """
 
-    def __init__(self, *args: Any, **kwargs: dict[str, Any]) -> None:
-        model = args[0] if args else kwargs.get("model", "")
-        assert model != "", "Null model id detected, please specify a model id."
+    def __init__(self, model: str, **kwargs: Any) -> None:
         model = omni_snapshot_download(model)
-        if args:
-            args[0] = model
-        elif kwargs.get("model", "") != "":
-            kwargs["model"] = model
+        kwargs["model"] = model
 
         # Stage management attributes
         self.stage_list: list[OmniStage] = []
@@ -423,10 +415,8 @@ class Omni(OmniBase):
     """Unified entrypoint for both LLM and Diffusion models for better usability.
 
     Args:
-        *args: Variable length argument list.
-            - args[0]: Model name or path to load.
+        model: Model name or path to load.
         **kwargs: Arbitrary keyword arguments.
-            - model: Model name or path to load (if not in args).
             - stage_configs_path: Optional path to YAML file containing stage
               configurations. If None, configurations are loaded from the model.
             - log_stats: Whether to enable statistics logging
@@ -448,8 +438,8 @@ class Omni(OmniBase):
         >>> print(outputs)
     """
 
-    def __init__(self, *args: Any, **kwargs: dict[str, Any]) -> None:
-        super().__init__(*args, **kwargs)
+    def __init__(self, model: str, **kwargs: Any) -> None:
+        super().__init__(model, **kwargs)
 
         # Register weak reference cleanup (called on garbage collection)
         self._weak_finalizer = weakref.finalize(
@@ -461,7 +451,12 @@ class Omni(OmniBase):
         )
 
     def generate(
-        self, *args: Any, **kwargs: dict[str, Any]
+        self,
+        prompts: str | list[str],
+        sampling_params_list: Any | Sequence[Any] | None = None,
+        *,
+        py_generator: bool = False,
+        **kwargs: Any,
     ) -> Generator[OmniRequestOutput, None, None] | list[OmniRequestOutput]:
         """Generate outputs for the given prompts.
 
@@ -469,12 +464,10 @@ class Omni(OmniBase):
         Each stage will use OmniLLM or OmniDiffusion based on stage_type.
 
         Args:
-            *args: Variable length argument list.
-                - args[0]: Input prompts for generation.
-                - args[1]: Optional list of per-stage parameters.
+            prompts: Input prompt(s) for generation.
+            sampling_params_list: Optional list of per-stage parameters.
+            py_generator: Whether the returned result(s) are wrapped in a generator instead of a list.
             **kwargs: Arbitrary keyword arguments.
-                - prompt: Input prompts for generation (if not in args).
-                - sampling_params_list: Optional list of per-stage parameters (if not in args).
 
         Returns:
             List of OmniRequestOutput objects, one for each input prompt.
@@ -484,14 +477,6 @@ class Omni(OmniBase):
         Raises:
             ValueError: If sampling_params_list is None or has incorrect length.
         """
-        prompts = args[0] if args else kwargs.get("prompts")
-        sampling_params_list = args[1] if len(args) > 1 else kwargs.get("sampling_params_list")
-        py_generator = kwargs.get("py_generator", False)
-        if prompts is None:
-            if kwargs.get("prompt") is None:
-                raise ValueError("prompts is required for generation")
-            prompts = kwargs.get("prompt")
-
         if sampling_params_list is None:
             # For Omni LLM, the params are parsed via the yaml file. For the current version,
             # diffusion params can parsed via the command line.
@@ -528,10 +513,15 @@ class Omni(OmniBase):
 
     def _run_generation_with_generator(
         self,
-        prompts: PromptType | Sequence[PromptType] | OmniDiffusionRequest | Sequence[OmniDiffusionRequest],
+        prompts: OmniPromptType | Sequence[OmniPromptType],
         sampling_params_list: Any | Sequence[Any] | None,
     ) -> Generator[OmniRequestOutput, None, None]:
-        """Run generation through all stages in the pipeline and return a generator."""
+        """Run generation through all stages in the pipeline and return a generator.
+
+        .. caution::
+            Support for non-str (or list[str]), vllm-native prompt classes is still underway.
+            These type annotations are added for development, and intentionally not exposed to user-facing interfaces.
+        """
         gen = self._run_generation(prompts, sampling_params_list)
         try:
             yield from gen
@@ -544,11 +534,16 @@ class Omni(OmniBase):
 
     def _run_generation(
         self,
-        prompts: PromptType | Sequence[PromptType] | OmniDiffusionRequest | Sequence[OmniDiffusionRequest],
+        prompts: OmniPromptType | Sequence[OmniPromptType],
         sampling_params_list: Any | Sequence[Any] | None = None,
         use_tqdm: bool | Callable[..., tqdm] = True,
     ) -> Generator[OmniRequestOutput, None, None]:
-        """Run generation through all stages in the pipeline."""
+        """Run generation through all stages in the pipeline.
+
+        .. caution::
+            Support for non-str (or list[str]), vllm-native prompt classes is still underway.
+            These type annotations are added for development, and intentionally not exposed to user-facing interfaces.
+        """
         logger.debug(f"[{self._name}] generate() called")
         if sampling_params_list is None:
             raise ValueError("sampling_params_list is required for pipelined generation")
@@ -563,8 +558,9 @@ class Omni(OmniBase):
             raise ValueError(f"Expected {len(self.stage_list)} sampling params, got {len(sampling_params_list)}")
 
         # Normalize prompts to a list for per-request iteration
-        if not isinstance(prompts, (list, tuple)):
-            request_prompts: list[PromptType] = [prompts]
+        # str is also Sequence but only test list-like containers here
+        if isinstance(prompts, str) or not isinstance(prompts, Sequence):
+            request_prompts: list[OmniPromptType] = [prompts]
         else:
             request_prompts = list(prompts)
 
@@ -572,8 +568,8 @@ class Omni(OmniBase):
         num_stages = len(self.stage_list)
 
         # Generate globally unique request IDs and map them to original prompts
-        request_ids: list[str] = [f"{i}_{uuid.uuid4()}" for i in range(len(request_prompts))]
-        request_id_to_prompt: dict[str, PromptType] = {rid: p for rid, p in zip(request_ids, request_prompts)}
+        request_ids = [f"{i}_{uuid.uuid4()}" for i in range(len(request_prompts))]
+        request_id_to_prompt = {rid: p for rid, p in zip(request_ids, request_prompts)}
 
         # Track per-request start time for end-to-end timing
         _req_start_ts: dict[str, float] = {}

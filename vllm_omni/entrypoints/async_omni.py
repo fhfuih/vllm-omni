@@ -3,7 +3,7 @@
 import asyncio
 import time
 import weakref
-from collections.abc import AsyncGenerator, Iterable
+from collections.abc import AsyncGenerator, Iterable, Sequence
 from dataclasses import asdict
 from pprint import pformat
 from typing import Any
@@ -34,6 +34,7 @@ from vllm_omni.entrypoints.stage_utils import maybe_load_from_ipc as _load
 from vllm_omni.entrypoints.utils import (
     get_final_stage_id_for_e2e,
 )
+from vllm_omni.inputs.data import OmniPromptType
 from vllm_omni.outputs import OmniRequestOutput
 
 logger = init_logger(__name__)
@@ -65,10 +66,8 @@ class AsyncOmni(OmniBase):
     asynchronous LLM and Diffusion models.
 
     Args:
-        *args: Variable length argument list.
-            - args[0]: Model name or path to load.
+        model: Model name or path to load.
         **kwargs: Arbitrary keyword arguments.
-            - model: Model name or path to load (if not in args).
             - stage_configs_path: Optional path to YAML file containing stage
               configurations. If None, configurations are loaded from the model.
             - log_stats: Whether to enable statistics logging
@@ -94,7 +93,7 @@ class AsyncOmni(OmniBase):
         ...     print(output)
     """
 
-    def __init__(self, *args: Any, **kwargs: dict[str, Any]) -> None:
+    def __init__(self, model: str, **kwargs: dict[str, Any]) -> None:
         # Pause/resume control attributes
         self._pause_cond: asyncio.Condition = asyncio.Condition()
         self._paused: bool = False
@@ -103,7 +102,7 @@ class AsyncOmni(OmniBase):
         self.request_states: dict[str, ClientRequestState] = {}
         self.output_handler: asyncio.Task | None = None
 
-        super().__init__(*args, **kwargs)
+        super().__init__(model, **kwargs)
 
         # Register weak reference cleanup (called on garbage collection)
         self._weak_finalizer = weakref.finalize(
@@ -228,7 +227,15 @@ class AsyncOmni(OmniBase):
         if hasattr(self, "_weak_finalizer"):
             self._weak_finalizer()
 
-    async def generate(self, *args: Any, **kwargs: dict[str, Any]) -> AsyncGenerator[OmniRequestOutput, None]:
+    async def generate(
+        self,
+        prompt: OmniPromptType,
+        request_id: str,
+        sampling_params_list: Sequence[Any] | None = None,
+        *,
+        output_modalities: list[str] | None = None,
+        **kwargs: dict[str, Any],
+    ) -> AsyncGenerator[OmniRequestOutput, None]:
         """Generate outputs for the given prompt asynchronously.
 
         Coordinates multi-stage pipeline through YAML configuration.
@@ -237,22 +244,19 @@ class AsyncOmni(OmniBase):
         outputs as they become available. Each stage uses its corresponding
         sampling parameters from the sampling_params_list.
 
+        .. caution::
+            Support for non-str (or list[str]), vllm-native prompt classes is still underway.
+            These type annotations are added for development, and intentionally not exposed to user-facing interfaces.
+
         Args:
-            *args: Arguments for generation.
-                - prompt: Prompt to process. Can be a text string, token IDs,
-                    or multimodal prompt.
-                - request_id: Unique identifier for this request
-                - sampling_params_list: List of SamplingParams, one for each stage.
-                    Must have the same length as the number of stages.
-                    If None, uses default sampling params for each stage.
+            prompt: Prompt to process. Can be a text string, token IDs,
+                or multimodal prompt.
+            request_id: Unique identifier for this request
+            sampling_params_list: List of SamplingParams, one for each stage.
+                Must have the same length as the number of stages.
+                If None, uses default sampling params for each stage.
+            output_modalities: Optional list of output modalities.
             **kwargs: Additional arguments for generation.
-                - prompt: Prompt to process. Can be a text string, token IDs,
-                    or multimodal prompt.
-                - request_id: Unique identifier for this request
-                - sampling_params_list: List of SamplingParams, one for each stage.
-                    Must have the same length as the number of stages.
-                    If None, uses default sampling params for each stage.
-                - output_modalities: Optional list of output modalities.
 
         Yields:
             OmniRequestOutput objects as they are produced by each stage.
@@ -271,10 +275,6 @@ class AsyncOmni(OmniBase):
             # Start output handler on the first call to generate()
             self._run_output_handler()
 
-            prompt = args[0] if args else kwargs.get("prompt")
-            request_id = args[1] if len(args) > 1 else kwargs.get("request_id")
-            sampling_params_list = args[2] if len(args) > 2 else kwargs.get("sampling_params_list")
-            output_modalities = kwargs.get("output_modalities", None)
             # TODO: lora_request, trace_headers, priority are not supported yet
 
             if sampling_params_list is None:

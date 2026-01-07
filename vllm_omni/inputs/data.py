@@ -1,4 +1,6 @@
-from typing import Any
+from typing import Any, TypeAlias
+
+from vllm import PromptType
 
 try:
     from typing import NotRequired
@@ -69,6 +71,9 @@ class OmniEmbedsPrompt(EmbedsPrompt):
     # New: optional additional information dictionary
     # Values may be torch.Tensor or list
     additional_information: NotRequired[dict[str, Any]]
+
+
+OmniPromptType: TypeAlias = PromptType | OmniTokensPrompt | OmniEmbedsPrompt
 
 
 def token_inputs_omni(
