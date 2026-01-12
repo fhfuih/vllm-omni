@@ -34,7 +34,7 @@ from vllm_omni.entrypoints.stage_utils import maybe_load_from_ipc as _load
 from vllm_omni.entrypoints.utils import (
     get_final_stage_id_for_e2e,
 )
-from vllm_omni.inputs.data import OmniPromptType
+from vllm_omni.inputs.data import OmniDiffusionSamplingParams, OmniPromptType, OmniSamplingParams
 from vllm_omni.outputs import OmniRequestOutput
 
 logger = init_logger(__name__)
@@ -231,7 +231,7 @@ class AsyncOmni(OmniBase):
         self,
         prompt: OmniPromptType,
         request_id: str,
-        sampling_params_list: Sequence[Any] | None = None,
+        sampling_params_list: Sequence[OmniSamplingParams] | None = None,
         *,
         output_modalities: list[str] | None = None,
         **kwargs: dict[str, Any],
@@ -284,18 +284,19 @@ class AsyncOmni(OmniBase):
                     k: v for k, v in kwargs.items() if k not in ["prompt", "request_id", "output_modalities"]
                 }
 
-                per_stage_params: list[Any] = []
+                per_stage_params: list[OmniSamplingParams] = []
                 for stage_id, stage in enumerate(self.stage_list):
-                    stage_type = getattr(stage, "stage_type", "llm")
+                    stage_type = stage.stage_type
                     if stage_type == "diffusion":
                         default_dict = self.default_sampling_params_list[stage_id]
                         # Merge user-provided kwargs
                         merged = {**default_dict, **omni_params_kwargs}
                         # Diffusion only needs to keep diff params, will be used via OmniDiffusionRequest
-                        per_stage_params.append(merged)
+                        per_stage_params.append(OmniDiffusionSamplingParams(**merged))
                     else:
                         # LLM directly constructs SamplingParams, don't use the merged params
-                        per_stage_params.append(self.default_sampling_params_list[stage_id])
+                        default_dict = self.default_sampling_params_list[stage_id]
+                        per_stage_params.append(SamplingParams(**default_dict))
 
                 sampling_params_list = per_stage_params
 
@@ -329,7 +330,7 @@ class AsyncOmni(OmniBase):
             # Mark first input time for stage-0
             metrics.stage_first_ts[0] = metrics.stage_first_ts[0] or time.time()
 
-            sp0: SamplingParams = sampling_params_list[0]  # type: ignore[index]
+            sp0 = sampling_params_list[0]
             task = {
                 "request_id": request_id,
                 "engine_inputs": prompt,

@@ -3,7 +3,7 @@ from dataclasses import asdict, dataclass, field
 from typing import Any, TypeAlias
 
 import PIL.Image
-from vllm import PromptType
+from vllm import PromptType, SamplingParams
 
 try:
     from typing import NotRequired
@@ -308,3 +308,5 @@ class OmniDiffusionSamplingParams:
 
     def __str__(self):
         return pprint.pformat(asdict(self), indent=2, width=120)
+
+OmniSamplingParams: TypeAlias = SamplingParams | OmniDiffusionSamplingParams

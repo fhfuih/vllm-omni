@@ -99,6 +99,10 @@ class OmniDiffusion:
         return self._run_engine(request)
 
     def _run_engine(self, request: OmniDiffusionRequest) -> list[OmniRequestOutput]:
+        print("==============")
+        print("OmniDiffusionRequest")
+        print(request)
+        print("==============")
         return self.engine.step(request)
 
     def close(self) -> None:
