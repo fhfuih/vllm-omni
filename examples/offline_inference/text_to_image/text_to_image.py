@@ -9,6 +9,7 @@ import torch
 
 from vllm_omni.diffusion.data import DiffusionParallelConfig, logger
 from vllm_omni.entrypoints.omni import Omni
+from vllm_omni.inputs.data import OmniDiffusionSamplingParams, OmniTextPrompt
 from vllm_omni.outputs import OmniRequestOutput
 from vllm_omni.utils.platform_utils import detect_device_type, is_npu
 
@@ -157,15 +158,19 @@ def main():
 
     generation_start = time.perf_counter()
     outputs = omni.generate(
-        args.prompt,
-        negative_prompt=args.negative_prompt,
-        height=args.height,
-        width=args.width,
-        generator=generator,
-        true_cfg_scale=args.cfg_scale,
-        guidance_scale=args.guidance_scale,
-        num_inference_steps=args.num_inference_steps,
-        num_outputs_per_prompt=args.num_images_per_prompt,
+        OmniTextPrompt(
+            args.prompt,
+            negative_prompt=args.negative_prompt,
+        ),
+        OmniDiffusionSamplingParams(
+            height=args.height,
+            width=args.width,
+            generator=generator,
+            true_cfg_scale=args.cfg_scale,
+            guidance_scale=args.guidance_scale,
+            num_inference_steps=args.num_inference_steps,
+            num_outputs_per_prompt=args.num_images_per_prompt,
+        ),
     )
     generation_end = time.perf_counter()
     generation_time = generation_end - generation_start

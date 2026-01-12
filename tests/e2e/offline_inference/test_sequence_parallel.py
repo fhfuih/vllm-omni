@@ -20,6 +20,8 @@ import torch
 import torch.distributed as dist
 from PIL import Image
 
+from vllm_omni.inputs.data import OmniDiffusionSamplingParams
+
 # ruff: noqa: E402
 REPO_ROOT = Path(__file__).resolve().parents[2]
 if str(REPO_ROOT) not in sys.path:
@@ -126,12 +128,14 @@ def test_sequence_parallel(
     try:
         outputs = baseline.generate(
             PROMPT,
-            height=height,
-            width=width,
-            num_inference_steps=num_inference_steps,
-            guidance_scale=0.0,
-            generator=torch.Generator(get_device_name()).manual_seed(seed),
-            num_outputs_per_prompt=1,
+            OmniDiffusionSamplingParams(
+                height=height,
+                width=width,
+                num_inference_steps=num_inference_steps,
+                guidance_scale=0.0,
+                generator=torch.Generator(get_device_name()).manual_seed(seed),
+                num_outputs_per_prompt=1,
+            ),
         )
         baseline_images = outputs[0].request_output[0].images
     finally:
@@ -158,12 +162,14 @@ def test_sequence_parallel(
     try:
         outputs = sp.generate(
             PROMPT,
-            height=height,
-            width=width,
-            num_inference_steps=num_inference_steps,
-            guidance_scale=0.0,
-            generator=torch.Generator(get_device_name()).manual_seed(seed),
-            num_outputs_per_prompt=1,
+            OmniDiffusionSamplingParams(
+                height=height,
+                width=width,
+                num_inference_steps=num_inference_steps,
+                guidance_scale=0.0,
+                generator=torch.Generator(get_device_name()).manual_seed(seed),
+                num_outputs_per_prompt=1,
+            ),
         )
         sp_images = outputs[0].request_output[0].images
     finally:
@@ -237,12 +243,14 @@ def test_sequence_parallel_ulysses_sp_only(
     try:
         outputs = baseline.generate(
             PROMPT,
-            height=height,
-            width=width,
-            num_inference_steps=num_inference_steps,
-            guidance_scale=0.0,
-            generator=torch.Generator(get_device_name()).manual_seed(seed),
-            num_outputs_per_prompt=1,
+            OmniDiffusionSamplingParams(
+                height=height,
+                width=width,
+                num_inference_steps=num_inference_steps,
+                guidance_scale=0.0,
+                generator=torch.Generator(get_device_name()).manual_seed(seed),
+                num_outputs_per_prompt=1,
+            ),
         )
         baseline_images = outputs[0].request_output[0].images
     finally:
@@ -269,12 +277,14 @@ def test_sequence_parallel_ulysses_sp_only(
     try:
         outputs = sp.generate(
             PROMPT,
-            height=height,
-            width=width,
-            num_inference_steps=num_inference_steps,
-            guidance_scale=0.0,
-            generator=torch.Generator(get_device_name()).manual_seed(seed),
-            num_outputs_per_prompt=1,
+            OmniDiffusionSamplingParams(
+                height=height,
+                width=width,
+                num_inference_steps=num_inference_steps,
+                guidance_scale=0.0,
+                generator=torch.Generator(get_device_name()).manual_seed(seed),
+                num_outputs_per_prompt=1,
+            ),
         )
         sp_images = outputs[0].request_output[0].images
     finally:

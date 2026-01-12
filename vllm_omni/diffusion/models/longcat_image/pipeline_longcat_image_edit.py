@@ -6,7 +6,7 @@ import math
 import os
 import re
 from collections.abc import Iterable
-from typing import Any
+from typing import Any, cast
 
 import numpy as np
 import PIL.Image
@@ -59,22 +59,35 @@ def get_longcat_image_edit_pre_process_func(
     latent_channels = vae_config.get("latent_channels", 16)
 
     def pre_process_func(
-        requests: list[OmniDiffusionRequest],
+        request: OmniDiffusionRequest,
     ):
         """Pre-process requests for QwenImageEditPipeline."""
-        for req in requests:
-            image = req.pil_image
+        for prompt in request.prompts:
+            multi_modal_data = prompt.get("multi_modal_data", {}) if not isinstance(prompt, str) else None
+            raw_image = multi_modal_data.get("image", None) if multi_modal_data is not None else None
 
-            image_size = image[0].size if isinstance(image, list) else image.size
+            if raw_image is None or isinstance(raw_image, list):
+                logger.error(
+                    """Received no image or a list of image. Only a single image is supported by this model."""
+                    """Please correctly set `"multi_modal_data": {"image": <an image object or file path>, …}`"""
+                )
+                continue
+
+            if isinstance(raw_image, str):
+                image = PIL.Image.open(raw_image)
+            else:
+                image = cast(PIL.Image.Image | torch.Tensor | np.ndarray, raw_image)
+
+            image_size = image.size
             calculated_width, calculated_height = calculate_dimensions(1024 * 1024, image_size[0] * 1.0 / image_size[1])
-            height = req.height or calculated_height
-            width = req.width or calculated_width
+            height = request.sampling_params.height or calculated_height
+            width = request.sampling_params.width or calculated_width
 
             # Store calculated dimensions in request
-            req.calculated_height = calculated_height
-            req.calculated_width = calculated_width
-            req.height = height
-            req.width = width
+            request.sampling_params.calculated_height = calculated_height
+            request.sampling_params.calculated_width = calculated_width
+            request.sampling_params.height = height
+            request.sampling_params.width = width
 
             # Preprocess image
             if image is not None and not (isinstance(image, torch.Tensor) and image.size(1) == latent_channels):
@@ -83,9 +96,9 @@ def get_longcat_image_edit_pre_process_func(
                 image = image_processor.preprocess(image, calculated_height, calculated_width)
 
                 # Store preprocessed image and prompt image in request
-                req.preprocessed_image = image
-                req.prompt_image = prompt_image
-        return requests
+                request.sampling_params.preprocessed_image = image
+                request.sampling_params.prompt_image = prompt_image
+        return request
 
     return pre_process_func
 
@@ -500,42 +513,62 @@ class LongCatImageEditPipeline(nn.Module, SupportImageInput):
         self,
         req: OmniDiffusionRequest,
         image: PIL.Image.Image | torch.Tensor | None = None,
-        prompt: str | list[str] = None,
-        negative_prompt: str | list[str] = None,
+        prompt: str | list[str] | None = None,
+        negative_prompt: str | list[str] | None = None,
         num_inference_steps: int = 50,
         sigmas: list[float] | None = None,
         guidance_scale: float = 3.5,
         num_images_per_prompt: int | None = 1,
         generator: torch.Generator | list[torch.Generator] | None = None,
         latents: torch.FloatTensor | None = None,
-        prompt_embeds: torch.FloatTensor | None = None,
-        negative_prompt_embeds: torch.FloatTensor | None = None,
+        prompt_embeds: torch.Tensor | None = None,
+        negative_prompt_embeds: torch.Tensor | None = None,
         output_type: str | None = "pil",
         return_dict: bool = True,
         joint_attention_kwargs: dict[str, Any] | None = None,
     ):
-        prompt = req.prompt if req.prompt is not None else prompt
-        negative_prompt = req.negative_prompt if req.negative_prompt is not None else negative_prompt
-        negative_prompt = "" if negative_prompt is None else negative_prompt
-        guidance_scale = req.guidance_scale if req.guidance_scale is not None else guidance_scale
-        num_inference_steps = req.num_inference_steps or num_inference_steps
-        num_images_per_prompt = getattr(req, "num_outputs_per_prompt", None) or num_images_per_prompt
-        generator = req.generator or generator
-        prompt_embeds = getattr(req, "prompt_embeds", None) or prompt_embeds
-        negative_prompt_embeds = getattr(req, "negative_prompt_embeds", None) or negative_prompt_embeds
-        height = req.height or self.default_sample_size * self.vae_scale_factor
-        width = req.width or self.default_sample_size * self.vae_scale_factor
+        prompt = [p if isinstance(p, str) else p.get("prompt", "") for p in req.prompts] or prompt
+        negative_prompt = [
+            "" if isinstance(p, str) else p.get("negative_prompt", "") for p in req.prompts
+        ] or negative_prompt
+        sigmas = req.sampling_params.sigmas or sigmas
+        guidance_scale = (
+            req.sampling_params.guidance_scale if req.sampling_params.guidance_scale is not None else guidance_scale
+        )
+        num_inference_steps = req.sampling_params.num_inference_steps or num_inference_steps
+        num_images_per_prompt = (
+            req.sampling_params.num_outputs_per_prompt
+            if req.sampling_params.num_outputs_per_prompt is not None
+            else num_images_per_prompt
+        )
+        generator = req.sampling_params.generator or generator
+        height = req.sampling_params.height or self.default_sample_size * self.vae_scale_factor
+        width = req.sampling_params.width or self.default_sample_size * self.vae_scale_factor
+
+        req_prompt_embeds = [p.get("prompt_embeds") if not isinstance(p, str) else None for p in req.prompts]
+        if any(p is not None for p in req_prompt_embeds):
+            # If at list one prompt is provided as an embedding,
+            # Then assume that the user wants to provide embeddings for all prompts, and enter this if block
+            # If the user in fact provides mixed input format, req_prompt_embeds will have some None's
+            # And `torch.stack` automatically raises an exception for us
+            prompt_embeds = torch.stack(req_prompt_embeds)  # type: ignore # intentionally expect TypeError
+
+        req_negative_prompt_embeds = [
+            p.get("negative_prompt_embeds") if not isinstance(p, str) else None for p in req.prompts
+        ]
+        if any(p is not None for p in req_negative_prompt_embeds):
+            negative_prompt_embeds = torch.stack(req_negative_prompt_embeds)  # type: ignore # intentionally expect TypeError
 
         if prompt is not None:
             batch_size = 1 if isinstance(prompt, str) else len(prompt)
         else:
             batch_size = prompt_embeds.shape[0]
 
-        if hasattr(req, "preprocessed_image"):
-            prompt_image = req.prompt_image
-            image = req.preprocessed_image
-            calculated_height = req.calculated_height if hasattr(req, "calculated_height") else height
-            calculated_width = req.calculated_width if hasattr(req, "calculated_width") else width
+        if hasattr(req.sampling_params, "preprocessed_image"):
+            prompt_image = req.sampling_params.prompt_image
+            image = req.sampling_params.preprocessed_image
+            calculated_height = getattr(req.sampling_params, "calculated_height", height)
+            calculated_width = getattr(req.sampling_params, "calculated_width", width)
         else:
             image_size = image[0].size if isinstance(image, list) else image.size
             calculated_width, calculated_height = calculate_dimensions(1024 * 1024, image_size[0] * 1.0 / image_size[1])

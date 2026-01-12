@@ -2,7 +2,7 @@
 # SPDX-FileCopyrightText: Copyright contributors to the vLLM project
 
 import logging
-from dataclasses import fields
+from collections.abc import Sequence
 
 from vllm.logger import init_logger
 from vllm.transformers_utils.config import get_hf_file_to_dict
@@ -10,27 +10,13 @@ from vllm.transformers_utils.config import get_hf_file_to_dict
 from vllm_omni.diffusion.data import OmniDiffusionConfig, TransformerConfig
 from vllm_omni.diffusion.diffusion_engine import DiffusionEngine
 from vllm_omni.diffusion.request import OmniDiffusionRequest
+from vllm_omni.inputs.data import OmniDiffusionSamplingParams, OmniPromptType
+from vllm_omni.outputs import OmniRequestOutput
 
 # TODO configure logging properly
 logging.basicConfig(level=logging.INFO)
 
 logger = init_logger(__name__)
-
-
-def prepare_requests(prompt: str | list[str], **kwargs):
-    field_names = {f.name for f in fields(OmniDiffusionRequest)}
-
-    init_kwargs = {"prompt": prompt}
-
-    for key, value in kwargs.items():
-        if key in field_names:
-            init_kwargs[key] = value
-
-    if "guidance_scale" in kwargs:
-        init_kwargs["guidance_scale_provided"] = True
-
-    return OmniDiffusionRequest(**init_kwargs)
-
 
 class OmniDiffusion:
     """
@@ -84,39 +70,23 @@ class OmniDiffusion:
 
     def generate(
         self,
-        prompt: str | list[str],
-        **kwargs,
-    ):
-        prompts = []
-        if isinstance(prompt, str):
-            prompts.append(prompt)
-        elif isinstance(prompt, list):
-            prompts.extend(prompt)
+        prompts: OmniPromptType | Sequence[OmniPromptType],
+        sampling_params: OmniDiffusionSamplingParams,
+    ) -> list[OmniRequestOutput]:
+        if isinstance(prompts, (str, dict)):
+            prompts = [prompts]
         else:
-            raise ValueError("Prompt must be a string or a list of strings")
+            prompts = list(prompts)
 
-        requests: list[OmniDiffusionRequest] = []
+        request = OmniDiffusionRequest(prompts, sampling_params)
+        return self._run_engine(request)
 
-        # Check if request_id is provided in kwargs
-        request_id = kwargs.get("request_id")
-
-        for i, p in enumerate(prompts):
-            req_kwargs = kwargs.copy()
-            if request_id is None:
-                # Generate default ID consistent with OmniLLM: "{i}_{uuid}"
-                req_kwargs["request_id"] = f"{i}"
-
-            requests.append(
-                prepare_requests(
-                    p,
-                    **req_kwargs,
-                )
-            )
-        logger.info(f"Prepared {len(requests)} requests for generation.")
-        return self._run_engine(requests)
-
-    def _run_engine(self, requests: list[OmniDiffusionRequest]):
-        return self.engine.step(requests)
+    def _run_engine(self, request: OmniDiffusionRequest) -> list[OmniRequestOutput]:
+        print("==============")
+        print("OmniDiffusionRequest")
+        print(request)
+        print("==============")
+        return self.engine.step(request)
 
     def close(self) -> None:
         self.engine.close()

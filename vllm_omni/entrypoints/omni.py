@@ -14,6 +14,7 @@ from typing import Any
 
 from omegaconf import OmegaConf
 from tqdm.auto import tqdm
+from vllm import SamplingParams
 from vllm.logger import init_logger
 
 from vllm_omni.distributed.omni_connectors import (
@@ -36,7 +37,7 @@ from vllm_omni.entrypoints.utils import (
     load_stage_configs_from_yaml,
     resolve_model_config_path,
 )
-from vllm_omni.inputs.data import OmniPromptType
+from vllm_omni.inputs.data import OmniDiffusionSamplingParams, OmniPromptType, OmniSamplingParams
 from vllm_omni.outputs import OmniRequestOutput
 
 logger = init_logger(__name__)
@@ -452,11 +453,10 @@ class Omni(OmniBase):
 
     def generate(
         self,
-        prompts: str | list[str],
-        sampling_params_list: Any | Sequence[Any] | None = None,
+        prompts: OmniPromptType | Sequence[OmniPromptType],
+        sampling_params_list: OmniSamplingParams | Sequence[OmniSamplingParams] | None = None,
         *,
         py_generator: bool = False,
-        **kwargs: Any,
     ) -> Generator[OmniRequestOutput, None, None] | list[OmniRequestOutput]:
         """Generate outputs for the given prompts.
 
@@ -467,7 +467,6 @@ class Omni(OmniBase):
             prompts: Input prompt(s) for generation.
             sampling_params_list: Optional list of per-stage parameters.
             py_generator: Whether the returned result(s) are wrapped in a generator instead of a list.
-            **kwargs: Arbitrary keyword arguments.
 
         Returns:
             List of OmniRequestOutput objects, one for each input prompt.
@@ -478,24 +477,14 @@ class Omni(OmniBase):
             ValueError: If sampling_params_list is None or has incorrect length.
         """
         if sampling_params_list is None:
-            # For Omni LLM, the params are parsed via the yaml file. For the current version,
-            # diffusion params can parsed via the command line.
-            omni_params_kwargs = {
-                k: v for k, v in kwargs.items() if k not in ["prompt", "request_id", "output_modalities"]
-            }
-
-            per_stage_params: list[Any] = []
+            per_stage_params: list[OmniSamplingParams] = []
             for stage_id, stage in enumerate(self.stage_list):
-                stage_type = getattr(stage, "stage_type", "llm")
+                stage_type = stage.stage_type
+                default_dict = self.default_sampling_params_list[stage_id]
                 if stage_type == "diffusion":
-                    default_dict = self.default_sampling_params_list[stage_id]
-                    # Merge user-provided kwargs
-                    merged = {**default_dict, **omni_params_kwargs}
-                    # Diffusion only needs to keep diff params, will be used via OmniDiffusionRequest
-                    per_stage_params.append(merged)
+                    per_stage_params.append(OmniDiffusionSamplingParams(**default_dict))
                 else:
-                    # LLM directly constructs SamplingParams, don't use the merged params
-                    per_stage_params.append(self.default_sampling_params_list[stage_id])
+                    per_stage_params.append(SamplingParams(**default_dict))
 
             sampling_params_list = per_stage_params
         try:
@@ -514,7 +503,7 @@ class Omni(OmniBase):
     def _run_generation_with_generator(
         self,
         prompts: OmniPromptType | Sequence[OmniPromptType],
-        sampling_params_list: Any | Sequence[Any] | None,
+        sampling_params_list: OmniSamplingParams | Sequence[OmniSamplingParams],
     ) -> Generator[OmniRequestOutput, None, None]:
         """Run generation through all stages in the pipeline and return a generator.
 
@@ -535,7 +524,7 @@ class Omni(OmniBase):
     def _run_generation(
         self,
         prompts: OmniPromptType | Sequence[OmniPromptType],
-        sampling_params_list: Any | Sequence[Any] | None = None,
+        sampling_params_list: OmniSamplingParams | Sequence[OmniSamplingParams],
         use_tqdm: bool | Callable[..., tqdm] = True,
     ) -> Generator[OmniRequestOutput, None, None]:
         """Run generation through all stages in the pipeline.
@@ -549,13 +538,20 @@ class Omni(OmniBase):
             raise ValueError("sampling_params_list is required for pipelined generation")
 
         # Normalize sampling_params_list to a list
-        if not isinstance(sampling_params_list, (list, tuple)):
+        if not isinstance(sampling_params_list, Sequence):
             sampling_params_list = [sampling_params_list]
         else:
             sampling_params_list = list(sampling_params_list)
 
         if len(sampling_params_list) != len(self.stage_list):
             raise ValueError(f"Expected {len(self.stage_list)} sampling params, got {len(sampling_params_list)}")
+
+        for i, (stage, sp) in enumerate(zip(self.stage_list, sampling_params_list)):
+            ExpectedSPType = OmniDiffusionSamplingParams if stage.stage_type == "diffusion" else SamplingParams
+            if not isinstance(sp, ExpectedSPType):
+                raise ValueError(
+                    f"Expected sampling parameters with type {ExpectedSPType} in stage {i}, got {sp.__class__}"
+                )
 
         # Normalize prompts to a list for per-request iteration
         # str is also Sequence but only test list-like containers here

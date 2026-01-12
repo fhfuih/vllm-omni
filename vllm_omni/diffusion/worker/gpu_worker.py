@@ -117,35 +117,32 @@ class GPUWorker:
         if self.cache_backend is not None:
             self.cache_backend.enable(self.pipeline)
 
-    def generate(self, requests: list[OmniDiffusionRequest]) -> DiffusionOutput:
+    def generate(self, request: OmniDiffusionRequest) -> DiffusionOutput:
         """
         Generate output for the given requests.
 
         Args:
-            requests: List of diffusion requests
+            requests: A diffusion requests containing one or multiple prompts and a sampling parameter group
 
         Returns:
             DiffusionOutput with generated results
         """
-        return self.execute_model(requests, self.od_config)
+        return self.execute_model(request, self.od_config)
 
     @torch.inference_mode()
-    def execute_model(self, reqs: list[OmniDiffusionRequest], od_config: OmniDiffusionConfig) -> DiffusionOutput:
+    def execute_model(self, req: OmniDiffusionRequest, od_config: OmniDiffusionConfig) -> DiffusionOutput:
         """
         Execute a forward pass.
         """
         assert self.pipeline is not None
-        if not reqs or len(reqs) == 0:
+        if len(req.prompts) == 0:
             raise ValueError("Cannot execute model with empty request list")
-        # TODO: dealing with first req for now
-        req = reqs[0]
-
-        if req.generator is None and req.seed is not None:
-            req.generator = torch.Generator(device=self.device).manual_seed(req.seed)
+        if req.sampling_params.generator is None and req.sampling_params.seed is not None:
+            req.sampling_params.generator = torch.Generator(device=self.device).manual_seed(req.sampling_params.seed)
 
         # Refresh cache context if needed
         if self.cache_backend is not None and self.cache_backend.is_enabled():
-            self.cache_backend.refresh(self.pipeline, req.num_inference_steps)
+            self.cache_backend.refresh(self.pipeline, req.sampling_params.num_inference_steps)
         with set_forward_context(vllm_config=self.vllm_config, omni_diffusion_config=self.od_config):
             output = self.pipeline.forward(req)
         return output
