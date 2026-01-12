@@ -15,7 +15,6 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import fields
 from typing import Any
 
-from PIL import Image
 from vllm.logger import init_logger
 from vllm.transformers_utils.config import get_hf_file_to_dict
 
@@ -172,41 +171,21 @@ class AsyncOmniDiffusion:
         # Run engine in thread pool
         loop = asyncio.get_event_loop()
         try:
+            # In async mode, only a single request is submitted at a time
             result = await loop.run_in_executor(
                 self._executor,
                 self.engine.step,
                 [request],
             )
+            result = result[0]
         except Exception as e:
             logger.error("Generation failed for request %s: %s", request_id, e)
             raise RuntimeError(f"Diffusion generation failed: {e}") from e
 
-        # Check if result is already OmniRequestOutput
-        if isinstance(result, OmniRequestOutput):
-            # Update request_id if needed
-            if not result.request_id:
-                result.request_id = request_id
-            return result
-
-        # Process results if not OmniRequestOutput
-        images: list[Image.Image] = []
-        if result is not None:
-            if isinstance(result, list):
-                for item in result:
-                    if isinstance(item, Image.Image):
-                        images.append(item)
-            elif isinstance(result, Image.Image):
-                images.append(result)
-
-        return OmniRequestOutput.from_diffusion(
-            request_id=request_id,
-            images=images,
-            prompt=prompt,
-            metrics={
-                "num_inference_steps": num_inference_steps,
-                "guidance_scale": request.guidance_scale,
-            },
-        )
+        # Update request_id if needed
+        if not result.request_id:
+            result.request_id = request_id
+        return result
 
     async def generate_stream(
         self,
