@@ -823,6 +823,7 @@ def _stage_worker(
                                 "metrics": _metrics,
                             }
                         )
+                    print("!!!!!! OmniStage output to queue:", payload)
                 except Exception:
                     out_q.put(
                         {
