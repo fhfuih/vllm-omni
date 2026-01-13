@@ -75,8 +75,10 @@ class OmniDiffusion:
     ) -> list[OmniRequestOutput]:
         if isinstance(prompts, (str, dict)):
             prompts = [prompts]
+        else:
+            prompts = list(prompts)
 
-        request = OmniDiffusionRequest(list(prompts), sampling_params)
+        request = OmniDiffusionRequest(prompts, sampling_params)
         return self._run_engine(request)
 
     def _run_engine(self, request: OmniDiffusionRequest) -> list[OmniRequestOutput]:
