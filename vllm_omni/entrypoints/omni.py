@@ -562,7 +562,7 @@ class Omni(OmniBase):
         for i, (stage, sp) in enumerate(zip(self.stage_list, sampling_params_list)):
             ExpectedSPType = OmniDiffusionSamplingParams if stage.stage_type == "diffusion" else SamplingParams
             if not isinstance(sp, ExpectedSPType):
-                raise ValueError(f"Expected sampling parameters with type {ExpectedSPType}, got {sp.__class__}")
+                raise ValueError(f"Expected sampling parameters with type {ExpectedSPType} in stage {i}, got {sp.__class__}")
 
         # Normalize prompts to a list for per-request iteration
         # str is also Sequence but only test list-like containers here

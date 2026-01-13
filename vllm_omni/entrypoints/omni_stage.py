@@ -16,9 +16,9 @@ import sys
 import traceback
 from collections.abc import Sequence
 from dataclasses import fields
-from typing import Any, Literal, cast, overload
+from typing import Any, Literal, cast
 
-from vllm import RequestOutput
+from vllm import PromptType, RequestOutput
 from vllm.inputs import TextPrompt
 from vllm.inputs.preprocess import InputPreprocessor
 from vllm.logger import init_logger
@@ -48,7 +48,7 @@ from vllm_omni.entrypoints.stage_utils import (
     maybe_dump_to_shm,
     set_stage_devices,
 )
-from vllm_omni.inputs.data import OmniPromptType, OmniTokensPrompt, OmniSamplingParams
+from vllm_omni.inputs.data import OmniDiffusionSamplingParams, OmniPromptType, OmniSamplingParams, OmniTokensPrompt
 from vllm_omni.outputs import OmniRequestOutput
 from vllm_omni.utils import detect_device_type
 
@@ -1136,7 +1136,6 @@ async def _stage_worker_async(
             _rx_decode_ms_by_rid[rid] = float(_rx_metrics.get("rx_decode_time_ms", 0.0))
             _rx_bytes_by_rid[rid] = int(_rx_metrics.get("rx_transfer_bytes", 0))
 
-            sampling_params: OmniSamplingParams = task["sampling_params"]
             logger.debug("Received batch size=1, request_ids=%s", rid)
             _gen_t0 = _time.time()
             if isinstance(ein, Sequence) and not isinstance(ein, str):
@@ -1144,15 +1143,18 @@ async def _stage_worker_async(
 
             if stage_type == "diffusion":
                 stage_engine = cast(AsyncOmniDiffusion, stage_engine)
+                diffusion_sampling_params = cast(OmniDiffusionSamplingParams, task["sampling_params"])
                 # AsyncOmniDiffusion.generate returns a single result, not an async generator
-                gen_output = await stage_engine.generate(prompt=ein, request_id=rid, sampling_params)
+                gen_output = await stage_engine.generate(ein, diffusion_sampling_params, rid)
                 _gen_t1 = _time.time()
                 _gen_ms = (_gen_t1 - _gen_t0) * 1000.0
                 await generation_out_q.put((rid, gen_output, _gen_ms))
             else:
                 stage_engine = cast(AsyncLLM, stage_engine)
+                ein = cast(PromptType, ein)
+                llm_sampling_params: SamplingParams = task["sampling_params"]
                 gen_output = None
-                async for res in stage_engine.generate(ein, sampling_params, rid):
+                async for res in stage_engine.generate(ein, llm_sampling_params, rid):
                     gen_output = res
                     _gen_t1 = _time.time()
                     _gen_ms = (_gen_t1 - _gen_t0) * 1000.0
