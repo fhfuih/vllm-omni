@@ -4,8 +4,6 @@
 
 from dataclasses import dataclass
 
-import torch
-
 from vllm_omni.inputs.data import OmniDiffusionSamplingParams, OmniPromptType
 
 
@@ -28,3 +26,21 @@ class OmniDiffusionRequest:
     sampling_params: OmniDiffusionSamplingParams
 
     request_id: str | None = None
+
+    def __post_init__(self):
+        """Initialize dependent fields after dataclass initialization."""
+        for p in self.prompts:
+            if not isinstance(p, str) and "negative_prompt_embeds" in p and p["negative_prompt_embeds"] is None:
+                p.negative_prompt_embeds = []  # type: ignore # already ensure that p is a prompt type with "negative_prompt_embeds" key
+
+        # Set do_classifier_free_guidance based on guidance scale and negative prompt
+        if self.sampling_params.guidance_scale > 1.0 and any(
+            (not isinstance(p, str) and p.get("negative_prompt")) for p in self.prompts
+        ):
+            self.sampling_params.do_classifier_free_guidance = True
+        if self.sampling_params.guidance_scale_2 is None:
+            self.sampling_params.guidance_scale_2 = self.sampling_params.guidance_scale
+
+        # Moved from omni_diffusion.py prepare_requests(), for stable audio open support
+        if self.sampling_params.guidance_scale:
+            self.sampling_params.guidance_scale_provided = True

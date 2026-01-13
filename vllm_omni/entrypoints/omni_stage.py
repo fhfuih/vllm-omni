@@ -644,6 +644,7 @@ def _stage_worker(
             continue
 
         batch_tasks: list[dict[str, Any]] = [task]
+        tasks_failed_to_add_to_batch: list[dict[str, Any]] = []
         start_time = _time.time()
         if max_batch_size > 1:
             while len(batch_tasks) < max_batch_size:
@@ -660,6 +661,18 @@ def _stage_worker(
                     batch_tasks.append(extra)
                     end_time = _time.time()
                     duration = end_time - start_time
+                    # Ensure that all tasks have the same sampling params
+                    # If no, put them in a temporary container and add back to queue
+                    # This should be always true, because user only calls omni.generate() once and it blocks
+                    # User can only pass one sampling param object, but the list of prompts are separated.
+                    if task.get("sampling_params") != extra.get("sampling_params"):
+                        logger.warning(
+                            """In offline mode, expect all prompts in one `omni.generate()` call to share same sampling params"""  # noqa: E501 # line too long
+                            f"""However, prompt {task.get("engine_inputs")} has sampling params {task.get("sampling_params")}, """  # noqa: E501 # line too long
+                            f"""whereas the prompt {extra.get("engine_inputs")} has sampling params {extra.get("sampling_params")}."""  # noqa: E501 # line too long
+                            """The two tasks cannot be combined in one batch request."""
+                        )
+                        tasks_failed_to_add_to_batch.append(extra)
                     if duration > batch_timeout:
                         break
                     else:
@@ -672,6 +685,10 @@ def _stage_worker(
                         break
                     else:
                         continue
+        for task_to_readd in tasks_failed_to_add_to_batch:
+            in_q.put(task_to_readd)
+        # Ensure that the popped tasks are with identical sampling params. Take one of them.
+        batch_engine_sampling_params: OmniSamplingParams = batch_tasks[0]["sampling_params"]
 
         batch_request_ids: list[Any] = []
         batch_engine_inputs: list[OmniPromptType] = []
@@ -717,7 +734,6 @@ def _stage_worker(
             else:
                 # For other types (e.g., OmniTokensPrompt, TextPrompt), append as-is
                 batch_engine_inputs.append(ein)
-        batch_engine_sampling_params: list[OmniSamplingParams] = [t["sampling_params"] for t in batch_tasks]
         logger.debug(
             "Received batch size=%d, request_ids=%s",
             len(batch_tasks),
@@ -729,6 +745,7 @@ def _stage_worker(
             _gen_t0 = _time.time()
             if stage_type == "diffusion":
                 stage_engine = cast(OmniDiffusion, stage_engine)
+                batch_engine_sampling_params = cast(OmniDiffusionSamplingParams, batch_engine_sampling_params)
                 # Diffusion generate returns results directly, not an iterator
                 diffusion_results = stage_engine.generate(batch_engine_inputs, batch_engine_sampling_params)
                 gen_outputs.extend(diffusion_results)
@@ -739,8 +756,9 @@ def _stage_worker(
                             result.request_id = batch_request_ids[idx]
             else:
                 stage_engine = cast(OmniLLM, stage_engine)
+                batch_engine_sampling_params = cast(SamplingParams, batch_engine_sampling_params)
                 results = stage_engine.generate(
-                    batch_engine_inputs,  # type: ignore # silent complaints about subclassed TypedDict
+                    batch_engine_inputs,  # type: ignore # silent complaints about list of subclassed TypedDict
                     batch_engine_sampling_params,
                     use_tqdm=False,
                 )

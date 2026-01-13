@@ -3,8 +3,6 @@
 
 import logging
 from collections.abc import Sequence
-from dataclasses import fields
-from typing import Any
 
 from vllm.logger import init_logger
 from vllm.transformers_utils.config import get_hf_file_to_dict
@@ -19,22 +17,6 @@ from vllm_omni.outputs import OmniRequestOutput
 logging.basicConfig(level=logging.INFO)
 
 logger = init_logger(__name__)
-
-
-def prepare_requests(sp_dict: dict[str, Any]) -> OmniDiffusionSamplingParams:
-    field_names = {f.name for f in fields(OmniDiffusionSamplingParams)}
-
-    init_kwargs = {}
-
-    for key, value in sp_dict.items():
-        if key in field_names:
-            init_kwargs[key] = value
-
-    if "guidance_scale" in sp_dict:
-        init_kwargs["guidance_scale_provided"] = True
-
-    return OmniDiffusionSamplingParams(**init_kwargs)
-
 
 class OmniDiffusion:
     """
@@ -89,13 +71,12 @@ class OmniDiffusion:
     def generate(
         self,
         prompts: OmniPromptType | Sequence[OmniPromptType],
-        sampling_params: dict[str, Any] = {},
+        sampling_params: OmniDiffusionSamplingParams,
     ) -> list[OmniRequestOutput]:
         if isinstance(prompts, (str, dict)):
             prompts = [prompts]
 
-        omni_diffusion_sp = prepare_requests(sampling_params)
-        request = OmniDiffusionRequest(list(prompts), omni_diffusion_sp)
+        request = OmniDiffusionRequest(list(prompts), sampling_params)
         return self._run_engine(request)
 
     def _run_engine(self, request: OmniDiffusionRequest) -> list[OmniRequestOutput]:

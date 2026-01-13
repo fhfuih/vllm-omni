@@ -208,9 +208,9 @@ class OmniDiffusionSamplingParams:
     num_frames_round_down: bool = False  # Whether to round down num_frames if it's not divisible by num_gpus
 
     # Original dimensions (before VAE scaling)
-    height: list[int] | int | None = None
-    width: list[int] | int | None = None
-    fps: list[int] | int | None = None
+    height: int | None = None
+    width: int | None = None
+    fps: int | None = None
     height_not_provided: bool = False
     width_not_provided: bool = False
 
@@ -295,16 +295,6 @@ class OmniDiffusionSamplingParams:
             seed=None if seed == -1 else seed,
             **kwargs,
         )
-
-    def __post_init__(self):
-        """Initialize dependent fields after dataclass initialization."""
-        # Set do_classifier_free_guidance based on guidance scale and negative prompt
-        if self.guidance_scale > 1.0 and (not isinstance(self.prompt, str) and self.prompt.get("negative_prompt")):
-            self.do_classifier_free_guidance = True
-        if self.negative_prompt_embeds is None:
-            self.negative_prompt_embeds = []
-        if self.guidance_scale_2 is None:
-            self.guidance_scale_2 = self.guidance_scale
 
     def __str__(self):
         return pprint.pformat(asdict(self), indent=2, width=120)

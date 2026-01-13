@@ -122,7 +122,7 @@ class GPUWorker:
         Generate output for the given requests.
 
         Args:
-            requests: List of diffusion requests
+            requests: A diffusion requests containing one or multiple prompts and a sampling parameter group
 
         Returns:
             DiffusionOutput with generated results

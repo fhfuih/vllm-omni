@@ -19,7 +19,7 @@ from vllm_omni.diffusion.registry import (
 )
 from vllm_omni.diffusion.request import OmniDiffusionRequest
 from vllm_omni.diffusion.scheduler import Scheduler, scheduler
-from vllm_omni.inputs.data import OmniDiffusionSamplingParams
+from vllm_omni.inputs.data import OmniDiffusionSamplingParams, OmniTextPrompt
 from vllm_omni.outputs import OmniRequestOutput
 from vllm_omni.utils.platform_utils import get_diffusion_worker_class
 
@@ -286,7 +286,6 @@ class DiffusionEngine:
 
     def _dummy_run(self):
         """A dummy run to warm up the model."""
-        prompt = "dummy run"
         num_inference_steps = 1
         height = 1024
         width = 1024
@@ -296,12 +295,17 @@ class DiffusionEngine:
             dummy_image = PIL.Image.new("RGB", (width, height), color=(0, 0, 0))
         else:
             dummy_image = None
+        prompt = OmniTextPrompt(
+            prompt="dummy run",
+            multi_modal_data={
+                "image": dummy_image
+            }
+        )
         req = OmniDiffusionRequest(
             prompts=[prompt],
             sampling_params=OmniDiffusionSamplingParams(
                 height=height,
                 width=width,
-                pil_image=dummy_image,
                 num_inference_steps=num_inference_steps,
                 num_outputs_per_prompt=1,
             ),
