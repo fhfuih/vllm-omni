@@ -78,7 +78,7 @@ def get_qwen_image_layered_pre_process_func(
             if raw_image is None or isinstance(raw_image, list):
                 logger.error(
                     """Received no image or a list of image. Only a single image is supported by this model."""
-                    """Please correctly se `"multi_modal_data": {"image": <an image object or file path>, …}`"""
+                    """t `"multi_modal_data": {"image": <an image object or file path>, …}`"""
                 )
                 continue
 
