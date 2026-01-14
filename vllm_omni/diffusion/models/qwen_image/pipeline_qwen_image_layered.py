@@ -761,7 +761,7 @@ the image\n<|vision_start|><|image_pad|><|vision_end|><|im_end|>\n<|im_start|>as
             else num_images_per_prompt
         )
 
-        if hasattr(req, "preprocessed_image"):
+        if hasattr(req.sampling_params, "preprocessed_image"):
             prompt_image = req.sampling_params.prompt_image
             image = req.sampling_params.preprocessed_image
             image = image.to(dtype=self.text_encoder.dtype)  # Now we get the type
