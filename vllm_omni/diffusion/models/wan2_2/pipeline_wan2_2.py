@@ -7,6 +7,7 @@ import json
 import logging
 import os
 from collections.abc import Iterable
+from typing import cast
 
 import PIL.Image
 import torch
@@ -21,9 +22,9 @@ from vllm_omni.diffusion.distributed.utils import get_local_device
 from vllm_omni.diffusion.model_loader.diffusers_loader import DiffusersPipelineLoader
 from vllm_omni.diffusion.models.wan2_2.wan2_2_transformer import WanTransformer3DModel
 from vllm_omni.diffusion.request import OmniDiffusionRequest
-from vllm_omni.inputs.data import OmniPromptType
 
 logger = logging.getLogger(__name__)
+
 
 def retrieve_latents(
     encoder_output: torch.Tensor,
@@ -300,11 +301,11 @@ class Wan22Pipeline(nn.Module):
         req: OmniDiffusionRequest,
         prompt: str | None = None,
         negative_prompt: str | None = None,
-        height: int | None = None,
-        width: int | None = None,
-        num_inference_steps: int | None = None,
+        height: int = 720,
+        width: int = 1280,
+        num_inference_steps: int = 40,
         guidance_scale: float | tuple[float, float] = 4.0,
-        frame_num: int | None = None,
+        frame_num: int = 81,
         output_type: str | None = "np",
         generator: torch.Generator | None = None,
         prompt_embeds: torch.Tensor | None = None,
@@ -312,20 +313,21 @@ class Wan22Pipeline(nn.Module):
         attention_kwargs: dict | None = None,
         **kwargs,
     ) -> DiffusionOutput:
+        # Get parameters from request or arguments
         if len(req.prompts) > 1:
-            logger.error(
+            raise ValueError(
                 """This model only supports a single prompt, not a batched request.""",
                 """Please pass in a single prompt object or string, or a single-item list.""",
             )
-        if len(req.prompts) == 1:
+        if len(req.prompts) == 1:  # If req.prompt is empty, default to prompt & neg_prompt in param list
             prompt = req.prompts[0] if isinstance(req.prompts[0], str) else req.prompts[0].get("prompt")
             negative_prompt = None if isinstance(req.prompts[0], str) else req.prompts[0].get("negative_prompt")
         if prompt is None and prompt_embeds is None:
             raise ValueError("Prompt or prompt_embeds is required for Wan2.2 generation.")
 
-        height = req.height or height or 720
-        width = req.width or width or 1280
-        num_frames = req.num_frames if req.num_frames else frame_num or 81
+        height = req.sampling_params.height or height
+        width = req.sampling_params.width or width
+        num_frames = req.sampling_params.num_frames if req.sampling_params.num_frames else frame_num
 
         # Ensure dimensions are compatible with VAE and patch size
         # For expand_timesteps mode, we need latent dims to be even (divisible by patch_size)
@@ -333,12 +335,13 @@ class Wan22Pipeline(nn.Module):
         mod_value = self.vae_scale_factor_spatial * patch_size[1]  # 16*2=32 for TI2V, 8*2=16 for I2V
         height = (height // mod_value) * mod_value
         width = (width // mod_value) * mod_value
-        num_steps = req.num_inference_steps or num_inference_steps or 40
+        num_steps = req.sampling_params.num_inference_steps or num_inference_steps
 
+        guidance_scale = req.sampling_params.guidance_scale or guidance_scale
         guidance_low = guidance_scale if isinstance(guidance_scale, (int, float)) else guidance_scale[0]
         guidance_high = (
-            req.guidance_scale_2
-            if req.guidance_scale_2 is not None
+            req.sampling_params.guidance_scale_2
+            if req.sampling_params.guidance_scale_2 is not None
             else (
                 guidance_scale[1]
                 if isinstance(guidance_scale, (list, tuple)) and len(guidance_scale) > 1
@@ -370,9 +373,13 @@ class Wan22Pipeline(nn.Module):
 
         # Seed / generator
         if generator is None:
-            generator = req.generator
-        if generator is None and req.seed is not None:
-            generator = torch.Generator(device=device).manual_seed(req.seed)
+            generator = (
+                req.sampling_params.generator
+                if not isinstance(req.sampling_params.generator, list)
+                else req.sampling_params.generator[0]
+            )
+        if generator is None and req.sampling_params.seed is not None:
+            generator = torch.Generator(device=device).manual_seed(req.sampling_params.seed)
 
         # Encode prompts
         if prompt_embeds is None:
@@ -380,8 +387,8 @@ class Wan22Pipeline(nn.Module):
                 prompt=prompt,
                 negative_prompt=negative_prompt,
                 do_classifier_free_guidance=guidance_low > 1.0 or guidance_high > 1.0,
-                num_videos_per_prompt=req.num_outputs_per_prompt or 1,
-                max_sequence_length=req.max_sequence_length or 512,
+                num_videos_per_prompt=req.sampling_params.num_outputs_per_prompt or 1,
+                max_sequence_length=req.sampling_params.max_sequence_length or 512,
                 device=device,
                 dtype=dtype,
             )
@@ -403,7 +410,22 @@ class Wan22Pipeline(nn.Module):
             boundary_timestep = self.boundary_ratio * self.scheduler.config.num_train_timesteps
 
         # Handle I2V mode when expand_timesteps=True and image is provided
-        image = req.pil_image
+        multi_modal_data = req.prompts[0].get("multi_modal_data", {}) if not isinstance(req.prompts[0], str) else None
+        raw_image = multi_modal_data.get("image", None) if multi_modal_data is not None else None
+        if isinstance(raw_image, list):
+            if len(raw_image) > 1:
+                logger.warning(
+                    """Received a list of image. Only a single image is supported by this model."""
+                    """Taking only the first image for now."""
+                )
+            raw_image = raw_image[0]
+        if raw_image is None:
+            image = None
+        elif isinstance(raw_image, str):
+            image = PIL.Image.open(raw_image)
+        else:
+            image = cast(PIL.Image.Image | torch.Tensor, raw_image)
+
         latent_condition = None
         first_frame_mask = None
 
@@ -434,7 +456,7 @@ class Wan22Pipeline(nn.Module):
                 dtype=torch.float32,
                 device=device,
                 generator=generator,
-                latents=req.latents,
+                latents=req.sampling_params.latents,
             )
 
             # Encode image condition
@@ -476,7 +498,7 @@ class Wan22Pipeline(nn.Module):
                 dtype=torch.float32,
                 device=device,
                 generator=generator,
-                latents=req.latents,
+                latents=req.sampling_params.latents,
             )
 
         if attention_kwargs is None:

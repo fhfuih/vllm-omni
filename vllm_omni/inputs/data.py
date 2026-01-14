@@ -2,7 +2,6 @@ import pprint
 from dataclasses import asdict, dataclass, field
 from typing import Any, TypeAlias
 
-import PIL.Image
 from vllm import PromptType, SamplingParams
 
 try:
@@ -204,7 +203,7 @@ class OmniDiffusionSamplingParams:
     # Latent dimensions
     height_latents: list[int] | int | None = None
     width_latents: list[int] | int | None = None
-    num_frames: list[int] | int = 1  # Default for image models
+    num_frames: int = 1  # Default for image models
     num_frames_round_down: bool = False  # Whether to round down num_frames if it's not divisible by num_gpus
 
     # Original dimensions (before VAE scaling)
@@ -298,5 +297,6 @@ class OmniDiffusionSamplingParams:
 
     def __str__(self):
         return pprint.pformat(asdict(self), indent=2, width=120)
+
 
 OmniSamplingParams: TypeAlias = SamplingParams | OmniDiffusionSamplingParams
