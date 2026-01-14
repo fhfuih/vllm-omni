@@ -743,6 +743,7 @@ the image\n<|vision_start|><|image_pad|><|vision_end|><|im_end|>\n<|im_start|>as
         ] or negative_prompt
         layers = req.sampling_params.layers if req.sampling_params.layers is not None else layers
         resolution = req.sampling_params.resolution if req.sampling_params.resolution is not None else resolution
+        max_sequence_length = req.sampling_params.max_sequence_length or max_sequence_length
         cfg_normalize = (
             req.sampling_params.cfg_normalize if req.sampling_params.cfg_normalize is not None else cfg_normalize
         )
@@ -750,6 +751,7 @@ the image\n<|vision_start|><|image_pad|><|vision_end|><|im_end|>\n<|im_start|>as
             req.sampling_params.use_en_prompt if req.sampling_params.use_en_prompt is not None else use_en_prompt
         )
         num_inference_steps = req.sampling_params.num_inference_steps or num_inference_steps
+        sigmas = req.sampling_params.sigmas or sigmas
         generator = req.sampling_params.generator or generator
         true_cfg_scale = req.sampling_params.true_cfg_scale or true_cfg_scale
         guidance_scale = (
