@@ -329,7 +329,9 @@ class Wan22I2VPipeline(nn.Module):
         num_steps = req.sampling_params.num_inference_steps or num_inference_steps
 
         # Handle guidance scales
-        guidance_scale = req.sampling_params.guidance_scale or guidance_scale
+        guidance_scale = (
+            req.sampling_params.guidance_scale if req.sampling_params.guidance_scale is not None else guidance_scale
+        )
         guidance_low = guidance_scale if isinstance(guidance_scale, (int, float)) else guidance_scale[0]
         guidance_high = (
             req.sampling_params.guidance_scale_2

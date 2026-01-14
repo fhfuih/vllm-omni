@@ -266,7 +266,9 @@ class Wan22TI2VPipeline(nn.Module):
         num_frames = req.sampling_params.num_frames if req.sampling_params.num_frames else frame_num
         num_steps = req.sampling_params.num_inference_steps or num_inference_steps
 
-        self._guidance_scale = req.sampling_params.guidance_scale or guidance_scale
+        self._guidance_scale = (
+            req.sampling_params.guidance_scale if req.sampling_params.guidance_scale is not None else guidance_scale
+        )
 
         # Validate inputs
         self.check_inputs(
