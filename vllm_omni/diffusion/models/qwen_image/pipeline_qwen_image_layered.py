@@ -738,8 +738,10 @@ the image\n<|vision_start|><|image_pad|><|vision_end|><|im_end|>\n<|im_start|>as
 
         # 1. Get preprocessed image from request (pre-processing is done in DiffusionEngine)
         # Override parameters from request if provided
-        prompt = [p if isinstance(p, str) else p.get("prompt", "") for p in req.prompts]
-        negative_prompt = [p if isinstance(p, str) else p.get("negative_prompt", "") for p in req.prompts]
+        prompt = [p if isinstance(p, str) else p.get("prompt", "") for p in req.prompts] or prompt
+        negative_prompt = [
+            p if isinstance(p, str) else p.get("negative_prompt", "") for p in req.prompts
+        ] or negative_prompt
         layers = req.sampling_params.layers if req.sampling_params.layers is not None else layers
         resolution = req.sampling_params.resolution if req.sampling_params.resolution is not None else resolution
         cfg_normalize = req.sampling_params.cfg_normalize if req.sampling_params.cfg_normalize is not None else cfg_normalize
