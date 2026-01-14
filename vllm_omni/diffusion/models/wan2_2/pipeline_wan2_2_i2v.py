@@ -283,7 +283,7 @@ class Wan22I2VPipeline(nn.Module):
         guidance_scale: float | tuple[float, float] = 5.0,
         frame_num: int = 81,
         output_type: str | None = "np",
-        generator: torch.Generator | None = None,
+        generator: torch.Generator | list[torch.Generator] | None = None,
         prompt_embeds: torch.Tensor | None = None,
         negative_prompt_embeds: torch.Tensor | None = None,
         image_embeds: torch.Tensor | None = None,
@@ -369,11 +369,7 @@ class Wan22I2VPipeline(nn.Module):
 
         # Generator setup
         if generator is None:
-            generator = (
-                req.sampling_params.generator
-                if not isinstance(req.sampling_params.generator, list)
-                else req.sampling_params.generator[0]
-            )
+            generator = req.sampling_params.generator
         if generator is None and req.sampling_params.seed is not None:
             generator = torch.Generator(device=device).manual_seed(req.sampling_params.seed)
 
