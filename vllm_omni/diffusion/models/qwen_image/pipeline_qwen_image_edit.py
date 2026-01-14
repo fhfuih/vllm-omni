@@ -762,9 +762,14 @@ class QwenImageEditPipeline(
         num_inference_steps = req.sampling_params.num_inference_steps or num_inference_steps
         generator = req.sampling_params.generator or generator
         true_cfg_scale = req.sampling_params.true_cfg_scale or true_cfg_scale
-        req_num_outputs = req.sampling_params.num_outputs_per_prompt
-        if req_num_outputs and req_num_outputs > 0:
-            num_images_per_prompt = req_num_outputs
+        guidance_scale = (
+            req.sampling_params.guidance_scale if req.sampling_params.guidance_scale is not None else guidance_scale
+        )
+        num_images_per_prompt = (
+            req.sampling_params.num_outputs_per_prompt
+            if req.sampling_params.num_outputs_per_prompt > 0
+            else num_images_per_prompt
+        )
 
         # 1. check inputs
         # 2. encode prompts

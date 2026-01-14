@@ -87,7 +87,6 @@ def get_qwen_image_layered_pre_process_func(
             else:
                 image = cast(PIL.Image.Image | torch.Tensor | np.ndarray, raw_image)
 
-
             # 1. calculate dimensions
             image_size = image.size
             assert request.sampling_params.resolution in [640, 1024], (
@@ -744,14 +743,23 @@ the image\n<|vision_start|><|image_pad|><|vision_end|><|im_end|>\n<|im_start|>as
         ] or negative_prompt
         layers = req.sampling_params.layers if req.sampling_params.layers is not None else layers
         resolution = req.sampling_params.resolution if req.sampling_params.resolution is not None else resolution
-        cfg_normalize = req.sampling_params.cfg_normalize if req.sampling_params.cfg_normalize is not None else cfg_normalize
-        use_en_prompt = req.sampling_params.use_en_prompt if req.sampling_params.use_en_prompt is not None else use_en_prompt
+        cfg_normalize = (
+            req.sampling_params.cfg_normalize if req.sampling_params.cfg_normalize is not None else cfg_normalize
+        )
+        use_en_prompt = (
+            req.sampling_params.use_en_prompt if req.sampling_params.use_en_prompt is not None else use_en_prompt
+        )
         num_inference_steps = req.sampling_params.num_inference_steps or num_inference_steps
         generator = req.sampling_params.generator or generator
         true_cfg_scale = req.sampling_params.true_cfg_scale or true_cfg_scale
-        req_num_outputs = req.sampling_params.num_outputs_per_prompt
-        if req_num_outputs and req_num_outputs > 0:
-            num_images_per_prompt = req_num_outputs
+        guidance_scale = (
+            req.sampling_params.guidance_scale if req.sampling_params.guidance_scale is not None else guidance_scale
+        )
+        num_images_per_prompt = (
+            req.sampling_params.num_outputs_per_prompt
+            if req.sampling_params.num_outputs_per_prompt > 0
+            else num_images_per_prompt
+        )
 
         if hasattr(req, "preprocessed_image"):
             prompt_image = req.sampling_params.prompt_image
