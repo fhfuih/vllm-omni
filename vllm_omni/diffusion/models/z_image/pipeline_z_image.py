@@ -419,6 +419,8 @@ class ZImagePipeline(nn.Module):
         width = req.sampling_params.width or width
         num_inference_steps = req.sampling_params.num_inference_steps or num_inference_steps
         generator = req.sampling_params.generator
+        sigmas = req.sampling_params.sigmas or sigmas
+        max_sequence_length = req.sampling_params.max_sequence_length or max_sequence_length
         guidance_scale = (
             req.sampling_params.guidance_scale if req.sampling_params.guidance_rescale is not None else guidance_scale
         )
