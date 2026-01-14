@@ -6,12 +6,15 @@ import uuid
 from collections.abc import AsyncGenerator, AsyncIterator, Callable, Sequence
 from datetime import datetime, timedelta, timezone
 from io import BytesIO
-from typing import TYPE_CHECKING, Any, Final, Optional
+from typing import TYPE_CHECKING, Any, Final, Optional, cast
 
 import jinja2
 from fastapi import Request
 from PIL import Image
 from pydantic import TypeAdapter
+
+from vllm_omni.entrypoints.async_omni import AsyncOmni
+from vllm_omni.inputs.data import OmniDiffusionSamplingParams, OmniTextPrompt
 
 try:
     import soundfile
@@ -1853,34 +1856,36 @@ class OmniOpenAIServingChat(OpenAIServingChat, AudioMixin):
                     logger.warning("Failed to decode reference image: %s", e)
 
             # Build generation kwargs
-            gen_kwargs: dict[str, Any] = {
-                "prompt": prompt,
-                "request_id": request_id,
-                "num_inference_steps": num_inference_steps,
-                "height": height,
-                "width": width,
-                "negative_prompt": negative_prompt,
-                "num_outputs_per_prompt": num_outputs_per_prompt,
-                "seed": seed,
-            }
+            gen_prompt = OmniTextPrompt(
+                prompt=prompt,
+                negative_prompt=negative_prompt,
+            )
+            gen_params = OmniDiffusionSamplingParams(
+                num_inference_steps=num_inference_steps,
+                height=height,
+                width=width,
+                num_outputs_per_prompt=num_outputs_per_prompt,
+                seed=seed,
+            )
 
             if guidance_scale is not None:
-                gen_kwargs["guidance_scale"] = guidance_scale
+                gen_params.guidance_scale = guidance_scale
 
             # Add Qwen-Image specific parameter
             if true_cfg_scale is not None:
-                gen_kwargs["true_cfg_scale"] = true_cfg_scale
+                gen_params.true_cfg_scale = true_cfg_scale
 
             # Add video generation parameters if set
             if num_frames is not None:
-                gen_kwargs["num_frames"] = num_frames
+                gen_params.num_frames = num_frames
             if guidance_scale_2 is not None:
-                gen_kwargs["guidance_scale_2"] = guidance_scale_2
+                gen_params.guidance_scale_2 = guidance_scale_2
 
             # Add reference image if provided
             if pil_images:
                 if len(pil_images) == 1:
-                    gen_kwargs["pil_image"] = pil_images[0]
+                    gen_prompt["multi_modal_data"] = {}
+                    gen_prompt["multi_modal_data"]["image"] = pil_images[0]
                 else:
                     od_config = getattr(self._diffusion_engine, "od_config", None)
                     supports_multimodal_inputs = getattr(od_config, "supports_multimodal_inputs", False)
@@ -1888,7 +1893,8 @@ class OmniOpenAIServingChat(OpenAIServingChat, AudioMixin):
                         # TODO: entry is asyncOmni. We hack the od config here.
                         supports_multimodal_inputs = True
                     if supports_multimodal_inputs:
-                        gen_kwargs["pil_image"] = pil_images
+                        gen_prompt["multi_modal_data"] = {}
+                        gen_prompt["multi_modal_data"]["image"] = pil_images
                     else:
                         return self._create_error_response(
                             "Multiple input images are not supported by the current diffusion model. "
@@ -1901,18 +1907,24 @@ class OmniOpenAIServingChat(OpenAIServingChat, AudioMixin):
             # Handle both AsyncOmniDiffusion (returns OmniRequestOutput) and AsyncOmni (returns AsyncGenerator)
             if hasattr(self._diffusion_engine, "stage_list"):
                 # AsyncOmni: iterate through async generator to get final output
+                diffusion_engine = cast(AsyncOmni, self._diffusion_engine)
                 result = None
-                async for output in self._diffusion_engine.generate(
-                    prompt=gen_kwargs["prompt"],
-                    request_id=gen_kwargs.get("request_id"),
-                    sampling_params_list=[gen_kwargs],  # Pass as single-stage params
+                async for output in diffusion_engine.generate(
+                    prompt=gen_prompt,
+                    sampling_params_list=[gen_params],  # Pass as single-stage params
+                    request_id=request_id,
                 ):
                     result = output
                 if result is None:
                     return self._create_error_response("No output generated from AsyncOmni")
             else:
                 # AsyncOmniDiffusion: direct call
-                result = await self._diffusion_engine.generate(**gen_kwargs)
+                diffusion_engine = cast(AsyncOmniDiffusion, self._diffusion_engine)
+                result = await diffusion_engine.generate(
+                    prompt=gen_prompt,
+                    sampling_params=gen_params,
+                    request_id=request_id,
+                )
             # Extract images from result
             # Handle nested OmniRequestOutput structure where images might be in request_output
             images = getattr(result.request_output, "images", [])

@@ -104,9 +104,9 @@ class AsyncOmniDiffusion:
             request_id = f"diff-{uuid.uuid4().hex[:16]}"
 
         request = OmniDiffusionRequest(
-            [prompt],
-            sampling_params,
-            request_id,
+            prompts=[prompt],
+            sampling_params=sampling_params,
+            request_id=request_id,
         )
 
         logger.debug("Starting generation for request %s", request_id)
