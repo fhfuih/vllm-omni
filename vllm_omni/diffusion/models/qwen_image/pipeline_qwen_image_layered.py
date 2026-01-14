@@ -740,7 +740,7 @@ the image\n<|vision_start|><|image_pad|><|vision_end|><|im_end|>\n<|im_start|>as
         # Override parameters from request if provided
         prompt = [p if isinstance(p, str) else p.get("prompt", "") for p in req.prompts] or prompt
         negative_prompt = [
-            p if isinstance(p, str) else p.get("negative_prompt", "") for p in req.prompts
+            "" if isinstance(p, str) else p.get("negative_prompt", "") for p in req.prompts
         ] or negative_prompt
         layers = req.sampling_params.layers if req.sampling_params.layers is not None else layers
         resolution = req.sampling_params.resolution if req.sampling_params.resolution is not None else resolution

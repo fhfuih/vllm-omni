@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 from collections.abc import Iterable
 
@@ -20,7 +21,9 @@ from vllm_omni.diffusion.distributed.utils import get_local_device
 from vllm_omni.diffusion.model_loader.diffusers_loader import DiffusersPipelineLoader
 from vllm_omni.diffusion.models.wan2_2.wan2_2_transformer import WanTransformer3DModel
 from vllm_omni.diffusion.request import OmniDiffusionRequest
+from vllm_omni.inputs.data import OmniPromptType
 
+logger = logging.getLogger(__name__)
 
 def retrieve_latents(
     encoder_output: torch.Tensor,
@@ -126,39 +129,54 @@ def get_wan22_pre_process_func(
 
     video_processor = VideoProcessor(vae_scale_factor=8)
 
-    def pre_process_func(requests: list[OmniDiffusionRequest]) -> list[OmniDiffusionRequest]:
-        for req in requests:
-            # Load image if path is provided
-            if req.image_path is not None and req.pil_image is None:
-                req.pil_image = PIL.Image.open(req.image_path).convert("RGB")
+    def pre_process_func(request: OmniDiffusionRequest) -> OmniDiffusionRequest:
+        for prompt in request.prompts:
+            multi_modal_data = prompt.get("multi_modal_data", {}) if not isinstance(prompt, str) else None
+            raw_image = multi_modal_data.get("image", None) if multi_modal_data is not None else None
 
-            if req.pil_image is not None:
-                image = req.pil_image
+            if raw_image is None:
+                logger.error(
+                    """No image is provided. This model requires an image to run.""",
+                    """Please correctly set `"multi_modal_data": {"image": <an image object or file path>, …}`""",
+                )
+                continue
+            if not isinstance(raw_image, (str, PIL.Image.Image)):
+                logger.error(
+                    f"""Unsupported image format {raw_image.__class__}.""",
+                    """Please correctly set `"multi_modal_data": {"image": <an image object or file path>, …}`""",
+                )
+                continue
+            image = PIL.Image.open(raw_image).convert("RGB") if isinstance(raw_image, str) else raw_image
 
-                # Calculate dimensions based on aspect ratio if not provided
-                if req.height is None or req.width is None:
-                    # Default max area for 720P
-                    max_area = 720 * 1280
-                    aspect_ratio = image.height / image.width
+            # Calculate dimensions based on aspect ratio if not provided
+            if request.sampling_params.height is None or request.sampling_params.width is None:
+                # Default max area for 720P
+                max_area = 720 * 1280
+                aspect_ratio = image.height / image.width
 
-                    # Calculate dimensions maintaining aspect ratio
-                    mod_value = 16  # Must be divisible by 16
-                    height = round(np.sqrt(max_area * aspect_ratio)) // mod_value * mod_value
-                    width = round(np.sqrt(max_area / aspect_ratio)) // mod_value * mod_value
+                # Calculate dimensions maintaining aspect ratio
+                mod_value = 16  # Must be divisible by 16
+                height = round(np.sqrt(max_area * aspect_ratio)) // mod_value * mod_value
+                width = round(np.sqrt(max_area / aspect_ratio)) // mod_value * mod_value
 
-                    if req.height is None:
-                        req.height = height
-                    if req.width is None:
-                        req.width = width
+                if request.sampling_params.height is None:
+                    request.sampling_params.height = height
+                if request.sampling_params.width is None:
+                    request.sampling_params.width = width
 
-                # Resize image to target dimensions
-                image = image.resize((req.width, req.height), PIL.Image.Resampling.LANCZOS)
-                req.pil_image = image
+            # Resize image to target dimensions
+            image = image.resize(
+                (request.sampling_params.width, request.sampling_params.height),  # type: ignore # Above has ensured that width & height are not None
+                PIL.Image.Resampling.LANCZOS,
+            )
+            prompt["multi_modal_data"]["image"] = image  # type: ignore # key existence already checked above
 
-                # Preprocess for VAE
-                req.preprocessed_image = video_processor.preprocess(image, height=req.height, width=req.width)
+            # Preprocess for VAE
+            request.sampling_params.preprocessed_image = video_processor.preprocess(
+                image, height=request.sampling_params.height, width=request.sampling_params.width
+            )
 
-        return requests
+        return request
 
     return pre_process_func
 
@@ -294,8 +312,14 @@ class Wan22Pipeline(nn.Module):
         attention_kwargs: dict | None = None,
         **kwargs,
     ) -> DiffusionOutput:
-        prompt = req.prompt if req.prompt is not None else prompt
-        negative_prompt = req.negative_prompt if req.negative_prompt is not None else negative_prompt
+        if len(req.prompts) > 1:
+            logger.error(
+                """This model only supports a single prompt, not a batched request.""",
+                """Please pass in a single prompt object or string, or a single-item list.""",
+            )
+        if len(req.prompts) == 1:
+            prompt = req.prompts[0] if isinstance(req.prompts[0], str) else req.prompts[0].get("prompt")
+            negative_prompt = None if isinstance(req.prompts[0], str) else req.prompts[0].get("negative_prompt")
         if prompt is None and prompt_embeds is None:
             raise ValueError("Prompt or prompt_embeds is required for Wan2.2 generation.")
 

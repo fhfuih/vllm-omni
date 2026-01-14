@@ -731,7 +731,7 @@ class QwenImageEditPipeline(
         """Forward pass for image editing."""
         prompt = [p if isinstance(p, str) else p.get("prompt", "") for p in req.prompts] or prompt
         negative_prompt = [
-            p if isinstance(p, str) else p.get("negative_prompt", "") for p in req.prompts
+            "" if isinstance(p, str) else p.get("negative_prompt", "") for p in req.prompts
         ] or negative_prompt
 
         # Get preprocessed image from request (pre-processing is done in DiffusionEngine)

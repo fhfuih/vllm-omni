@@ -662,7 +662,7 @@ class QwenImagePipeline(
     ) -> DiffusionOutput:
         prompt = [p if isinstance(p, str) else p.get("prompt", "") for p in req.prompts] or prompt
         negative_prompt = [
-            p if isinstance(p, str) else p.get("negative_prompt", "") for p in req.prompts
+            "" if isinstance(p, str) else p.get("negative_prompt", "") for p in req.prompts
         ] or negative_prompt
         height = req.sampling_params.height or self.default_sample_size * self.vae_scale_factor
         width = req.sampling_params.width or self.default_sample_size * self.vae_scale_factor
