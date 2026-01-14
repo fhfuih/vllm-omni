@@ -15,6 +15,8 @@ from pathlib import Path
 import pytest
 import torch
 
+from vllm_omni.inputs.data import OmniDiffusionSamplingParams
+
 # ruff: noqa: E402
 REPO_ROOT = Path(__file__).resolve().parents[2]
 if str(REPO_ROOT) not in sys.path:
@@ -49,13 +51,15 @@ def test_teacache(model_name: str):
     num_inference_steps = 4  # Minimal steps for fast test
 
     outputs = m.generate(
-        "a photo of a cat sitting on a laptop keyboard",
-        height=height,
-        width=width,
-        num_inference_steps=num_inference_steps,
-        guidance_scale=0.0,
-        generator=torch.Generator("cuda").manual_seed(42),
-        num_outputs_per_prompt=1,  # Single output for speed
+        prompts="a photo of a cat sitting on a laptop keyboard",
+        sampling_params_list=OmniDiffusionSamplingParams(
+            height=height,
+            width=width,
+            num_inference_steps=num_inference_steps,
+            guidance_scale=0.0,
+            generator=torch.Generator("cuda").manual_seed(42),
+            num_outputs_per_prompt=1,  # Single output for speed
+        ),
     )
     # Extract images from request_output[0]['images']
     first_output = outputs[0]
