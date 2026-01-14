@@ -569,6 +569,7 @@ class StableDiffusion3Pipeline(
         height = req.sampling_params.height or self.default_sample_size * self.vae_scale_factor
         width = req.sampling_params.width or self.default_sample_size * self.vae_scale_factor
         sigmas = req.sampling_params.sigmas or sigmas
+        max_sequence_length = req.sampling_params.max_sequence_length or max_sequence_length
         num_inference_steps = req.sampling_params.num_inference_steps or num_inference_steps
         generator = req.sampling_params.generator or generator
         num_images_per_prompt = (
