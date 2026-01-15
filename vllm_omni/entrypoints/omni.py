@@ -457,7 +457,6 @@ class Omni(OmniBase):
         sampling_params_list: OmniSamplingParams | Sequence[OmniSamplingParams] | None = None,
         *,
         py_generator: bool = False,
-        **kwargs: Any,
     ) -> Generator[OmniRequestOutput, None, None] | list[OmniRequestOutput]:
         """Generate outputs for the given prompts.
 
@@ -468,7 +467,6 @@ class Omni(OmniBase):
             prompts: Input prompt(s) for generation.
             sampling_params_list: Optional list of per-stage parameters.
             py_generator: Whether the returned result(s) are wrapped in a generator instead of a list.
-            **kwargs: Arbitrary keyword arguments.
 
         Returns:
             List of OmniRequestOutput objects, one for each input prompt.
@@ -479,24 +477,13 @@ class Omni(OmniBase):
             ValueError: If sampling_params_list is None or has incorrect length.
         """
         if sampling_params_list is None:
-            # For Omni LLM, the params are parsed via the yaml file. For the current version,
-            # diffusion params can parsed via the command line.
-            omni_params_kwargs = {
-                k: v for k, v in kwargs.items() if k not in ["prompt", "request_id", "output_modalities"]
-            }
-
             per_stage_params: list[OmniSamplingParams] = []
             for stage_id, stage in enumerate(self.stage_list):
                 stage_type = stage.stage_type
+                default_dict = self.default_sampling_params_list[stage_id]
                 if stage_type == "diffusion":
-                    default_dict = self.default_sampling_params_list[stage_id]
-                    # Merge user-provided kwargs
-                    merged = {**default_dict, **omni_params_kwargs}
-                    # Diffusion only needs to keep diff params, will be used via OmniDiffusionRequest
-                    per_stage_params.append(OmniDiffusionSamplingParams(**merged))
+                    per_stage_params.append(OmniDiffusionSamplingParams(**default_dict))
                 else:
-                    # LLM directly constructs SamplingParams, don't use the merged params
-                    default_dict = self.default_sampling_params_list[stage_id]
                     per_stage_params.append(SamplingParams(**default_dict))
 
             sampling_params_list = per_stage_params
@@ -562,7 +549,9 @@ class Omni(OmniBase):
         for i, (stage, sp) in enumerate(zip(self.stage_list, sampling_params_list)):
             ExpectedSPType = OmniDiffusionSamplingParams if stage.stage_type == "diffusion" else SamplingParams
             if not isinstance(sp, ExpectedSPType):
-                raise ValueError(f"Expected sampling parameters with type {ExpectedSPType} in stage {i}, got {sp.__class__}")
+                raise ValueError(
+                    f"Expected sampling parameters with type {ExpectedSPType} in stage {i}, got {sp.__class__}"
+                )
 
         # Normalize prompts to a list for per-request iteration
         # str is also Sequence but only test list-like containers here

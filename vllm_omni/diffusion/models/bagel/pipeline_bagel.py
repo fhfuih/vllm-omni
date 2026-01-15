@@ -307,8 +307,8 @@ class BagelPipeline(nn.Module):
 
         # Add text prompt (prefill) on gen context.
         # [Omni] Check for injected KV Cache from remote transfer
-        injected_kv = req.sampling_params.extra.get("past_key_values", None)
-        injected_metadata = req.sampling_params.extra.get("kv_metkv_metadata", None)
+        injected_kv = req.sampling_params.extra_args.get("past_key_values", None)
+        injected_metadata = req.sampling_params.extra_args.get("kv_metkv_metadata", None)
 
         # Image input handling
         multi_modal_data = req.prompts[0].get("multi_modal_data", {}) if not isinstance(req.prompts[0], str) else None

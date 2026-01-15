@@ -500,9 +500,9 @@ class LongCatImagePipeline(
             if req.sampling_params.num_outputs_per_prompt is not None
             else num_images_per_prompt
         )
-        enable_prompt_rewrite = req.sampling_params.extra.get("enable_prompt_rewrite", enable_prompt_rewrite)
-        enable_cfg_renorm = req.sampling_params.extra.get("enable_cfg_renorm", enable_cfg_renorm)
-        cfg_renorm_min = req.sampling_params.extra.get("cfg_renorm_min", cfg_renorm_min)
+        enable_prompt_rewrite = req.sampling_params.extra_args.get("enable_prompt_rewrite", enable_prompt_rewrite)
+        enable_cfg_renorm = req.sampling_params.extra_args.get("enable_cfg_renorm", enable_cfg_renorm)
+        cfg_renorm_min = req.sampling_params.extra_args.get("cfg_renorm_min", cfg_renorm_min)
 
         req_prompt_embeds = [p.get("prompt_embeds") if not isinstance(p, str) else None for p in req.prompts]
         if any(p is not None for p in req_prompt_embeds):

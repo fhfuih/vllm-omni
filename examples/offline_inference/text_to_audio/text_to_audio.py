@@ -153,7 +153,7 @@ def main():
             guidance_scale=args.guidance_scale,
             num_inference_steps=args.num_inference_steps,
             num_outputs_per_prompt=args.num_waveforms,
-            extra={
+            extra_args={
                 "audio_start_in_s": args.audio_start,
                 "audio_end_in_s": audio_end_in_s,
             },

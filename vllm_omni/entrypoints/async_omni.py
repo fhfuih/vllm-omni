@@ -234,7 +234,6 @@ class AsyncOmni(OmniBase):
         sampling_params_list: Sequence[OmniSamplingParams] | None = None,
         *,
         output_modalities: list[str] | None = None,
-        **kwargs: dict[str, Any],
     ) -> AsyncGenerator[OmniRequestOutput, None]:
         """Generate outputs for the given prompt asynchronously.
 
@@ -256,7 +255,6 @@ class AsyncOmni(OmniBase):
                 Must have the same length as the number of stages.
                 If None, uses default sampling params for each stage.
             output_modalities: Optional list of output modalities.
-            **kwargs: Additional arguments for generation.
 
         Yields:
             OmniRequestOutput objects as they are produced by each stage.
@@ -278,24 +276,13 @@ class AsyncOmni(OmniBase):
             # TODO: lora_request, trace_headers, priority are not supported yet
 
             if sampling_params_list is None:
-                # For Omni LLM, the params are parsed via the yaml file. For the current version,
-                # diffusion params can parsed via the command line.
-                omni_params_kwargs = {
-                    k: v for k, v in kwargs.items() if k not in ["prompt", "request_id", "output_modalities"]
-                }
-
                 per_stage_params: list[OmniSamplingParams] = []
                 for stage_id, stage in enumerate(self.stage_list):
                     stage_type = stage.stage_type
+                    default_dict = self.default_sampling_params_list[stage_id]
                     if stage_type == "diffusion":
-                        default_dict = self.default_sampling_params_list[stage_id]
-                        # Merge user-provided kwargs
-                        merged = {**default_dict, **omni_params_kwargs}
-                        # Diffusion only needs to keep diff params, will be used via OmniDiffusionRequest
-                        per_stage_params.append(OmniDiffusionSamplingParams(**merged))
+                        per_stage_params.append(OmniDiffusionSamplingParams(**default_dict))
                     else:
-                        # LLM directly constructs SamplingParams, don't use the merged params
-                        default_dict = self.default_sampling_params_list[stage_id]
                         per_stage_params.append(SamplingParams(**default_dict))
 
                 sampling_params_list = per_stage_params

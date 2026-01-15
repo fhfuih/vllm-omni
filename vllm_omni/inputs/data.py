@@ -241,7 +241,7 @@ class OmniDiffusionSamplingParams:
     trajectory_latents: torch.Tensor | None = None
 
     # Extra parameters that might be needed by specific pipeline implementations
-    extra: dict[str, Any] = field(default_factory=dict)
+    extra_args: dict[str, Any] = field(default_factory=dict)
 
     # Misc
     save_output: bool = True

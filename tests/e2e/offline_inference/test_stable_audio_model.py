@@ -42,7 +42,7 @@ def test_stable_audio_model(model_name: str):
             guidance_scale=7.0,
             generator=torch.Generator("cuda").manual_seed(42),
             num_outputs_per_prompt=1,
-            extra={
+            extra_args={
                 "audio_start_in_s": audio_start_in_s,
                 "audio_end_in_s": audio_end_in_s,
             },

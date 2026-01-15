@@ -399,8 +399,8 @@ class StableAudioPipeline(nn.Module):
             generator = torch.Generator(device=self.device).manual_seed(req.sampling_params.seed)
 
         # Get audio duration from request extra params or defaults
-        audio_start_in_s = req.sampling_params.extra.get("audio_start_in_s", audio_start_in_s)
-        audio_end_in_s = req.sampling_params.extra.get("audio_end_in_s", audio_end_in_s)
+        audio_start_in_s = req.sampling_params.extra_args.get("audio_start_in_s", audio_start_in_s)
+        audio_end_in_s = req.sampling_params.extra_args.get("audio_end_in_s", audio_end_in_s)
 
         # Calculate audio length
         downsample_ratio = self.vae.hop_length
