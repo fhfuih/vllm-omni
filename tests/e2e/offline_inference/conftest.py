@@ -7,6 +7,7 @@ Pytest configuration and fixtures for vllm-omni tests.
 from typing import Any
 
 import pytest
+from vllm import TextPrompt
 from vllm.distributed.parallel_state import cleanup_dist_env_and_memory
 from vllm.sampling_params import SamplingParams
 
@@ -81,7 +82,7 @@ class OmniRunner:
         videos: PromptVideoInput = None,
         mm_processor_kwargs: dict[str, Any] | None = None,
         modalities: list[str] | None = None,
-    ) -> list[dict[str, Any]]:
+    ) -> list[TextPrompt]:
         """
         Construct Omni input format from prompts and multimodal data.
 
@@ -174,7 +175,7 @@ class OmniRunner:
                 f"<|im_start|>assistant\n"
             )
 
-            input_dict: dict[str, Any] = {"prompt": full_prompt}
+            input_dict = TextPrompt(prompt=full_prompt)
             if multi_modal_data:
                 input_dict["multi_modal_data"] = multi_modal_data
             if modalities:
@@ -188,7 +189,7 @@ class OmniRunner:
 
     def generate(
         self,
-        prompts: list[dict[str, Any]],
+        prompts: list[TextPrompt],
         sampling_params_list: list[SamplingParams] | None = None,
     ) -> list[OmniRequestOutput]:
         """
