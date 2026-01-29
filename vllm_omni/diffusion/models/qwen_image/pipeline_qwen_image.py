@@ -401,6 +401,7 @@ class QwenImagePipeline(
         )
 
         prompt_embeds = prompt_embeds.to(dtype=dtype)
+        encoder_attention_mask = encoder_attention_mask.to(dtype=torch.bool)
 
         return prompt_embeds, encoder_attention_mask
 

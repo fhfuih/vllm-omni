@@ -54,7 +54,6 @@ class SDPAImpl(AttentionImpl):
         value: torch.Tensor,
         attn_metadata: AttentionMetadata = None,
     ) -> torch.Tensor:
-        query, key, value = (x.permute(0, 2, 1, 3) for x in (query, key, value))
         attention_mask = attn_metadata.attn_mask if attn_metadata else None
 
         output = torch.nn.functional.scaled_dot_product_attention(
@@ -66,5 +65,4 @@ class SDPAImpl(AttentionImpl):
             is_causal=self.causal,
             scale=self.softmax_scale,
         )
-        out = output.permute(0, 2, 1, 3)
-        return out
+        return output
