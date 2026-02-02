@@ -3,10 +3,11 @@ from typing import Literal, cast
 # vllm_omni/nodes.py
 import torch
 import numpy as np
+from comfy_api.input import AudioInput, VideoInput
+
 from .utils.api_client import VLLMOmniClient
 from .utils.validators import (
     add_sampling_parameters_to_stage,
-    validate_model_config,
     validate_sampling_params_types,
 )
 from .utils.models import MODEL_PIPELINE_SPECS
@@ -23,8 +24,17 @@ class _VLLMOmniGenerateBase:
 
     @classmethod
     def VALIDATE_INPUTS(cls, **kwargs) -> Literal[True] | str:
+        if not kwargs.get("model", ""):
+            return "Model name must not be empty."
         if "image" not in kwargs and "mask" in kwargs:
             return "Mask input provided without an image input."
+        if kwargs.get("sampling_params", None) is not None:
+            try:
+                validate_sampling_params_types(
+                    kwargs["model"], kwargs["sampling_params"]
+                )
+            except Exception as e:
+                return str(e)
         return True
 
     def _get_client(self, url):
@@ -50,8 +60,8 @@ class VLLMOmniGenerateImage(_VLLMOmniGenerateBase):
             "optional": {
                 "image": ("IMAGE",),
                 "mask": ("MASK",),
-                "video": ("VIDEO",),
-                "audio": ("AUDIO",),
+                # "video": ("VIDEO",),
+                # "audio": ("AUDIO",),
                 "sampling_params": ("SAMPLING_PARAMS",),
             },
         }
@@ -62,8 +72,7 @@ class VLLMOmniGenerateImage(_VLLMOmniGenerateBase):
 
     @classmethod
     def VALIDATE_INPUTS(cls, **kwargs):
-        output = super().VALIDATE_INPUTS(**kwargs)
-        if output != True:
+        if output := super().VALIDATE_INPUTS(**kwargs):
             return output
         return True
 
@@ -77,8 +86,8 @@ class VLLMOmniGenerateImage(_VLLMOmniGenerateBase):
         negative_prompt: str | None = None,
         image: torch.Tensor | None = None,
         mask: torch.Tensor | None = None,
-        audio: str | None = None,
-        video: str | None = None,
+        audio: AudioInput | None = None,  # Hidden & unused
+        video: VideoInput | None = None,  # Hidden & unused
         sampling_params: dict | list[dict] | None = None,
         **kwargs,
     ):
@@ -86,7 +95,6 @@ class VLLMOmniGenerateImage(_VLLMOmniGenerateBase):
         print("DEBUG: Got sampling params", sampling_params)
 
         client = self._get_client(url)
-        validate_sampling_params_types(model, sampling_params)
 
         # Try use DALL-E compatible API first
         if (
@@ -98,7 +106,9 @@ class VLLMOmniGenerateImage(_VLLMOmniGenerateBase):
             if audio is None and image is None and video is None:
                 # No multimodal input --- use DALL-E image generation
                 print("DEBUG: Using DALL-E image generation endpoint")
-                output = await client.generate_image(model, prompt, width, height, negative_prompt, sampling_params)
+                output = await client.generate_image(
+                    model, prompt, width, height, negative_prompt, sampling_params
+                )
                 return (output,)
             elif image is not None and audio is None and video is None:
                 # Image and text input --- use DALL-E image edit
@@ -116,13 +126,90 @@ class VLLMOmniGenerateImage(_VLLMOmniGenerateBase):
                 return (output,)
 
         print("DEBUG: Using chat completion endpoint")
-        validate_model_config(model, image, audio, video)
-        sampling_params = add_sampling_parameters_to_stage(model, sampling_params, "diffusion", width=width, height=height)
+        sampling_params = add_sampling_parameters_to_stage(
+            model, sampling_params, "diffusion", width=width, height=height
+        )
         print("DEBUG: Edited sampling params", sampling_params)
 
-        output = await client.generate_image_chat_completion(model, prompt, negative_prompt, image, audio, video, sampling_params)
+        output = await client.generate_image_chat_completion(
+            model, prompt, negative_prompt, image, audio, video, sampling_params
+        )
 
         return (output,)
+
+
+class VLLMOmniComprehension(_VLLMOmniGenerateBase):
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "url": ("STRING", {"default": "http://localhost:8000/v1"}),
+                "model": ("STRING", {"default": "Qwen/Qwen2.5-Omni-7B"}),
+                "prompt": ("STRING", {"multiline": True}),
+                "output_text": ("BOOLEAN", {"default": True}),
+                "output_audio": ("BOOLEAN", {"default": True}),
+                "use_audio_in_video": ("BOOLEAN", {"default": True}),
+            },
+            "optional": {
+                "image": ("IMAGE",),
+                "video": ("VIDEO",),
+                "audio": ("AUDIO",),
+                "sampling_params": ("SAMPLING_PARAMS",),
+            },
+        }
+
+    RETURN_TYPES = ("STRING", "AUDIO")
+    RETURN_NAMES = ("text_response", "audio_response")
+    FUNCTION = "generate"
+
+    @classmethod
+    def VALIDATE_INPUTS(cls, **kwargs):
+        if output := super().VALIDATE_INPUTS(**kwargs):
+            return output
+        if not kwargs["output_text"] and not kwargs["output_audio"]:
+            return "At least one of output_text or output_audio must be True."
+        return True
+
+    async def generate(
+        self,
+        url: str,
+        model: str,
+        prompt: str,
+        image: torch.Tensor | None = None,
+        audio: AudioInput | None = None,
+        video: VideoInput | None = None,
+        sampling_params: dict | list[dict] | None = None,
+        output_text: bool = True,
+        output_audio: bool = True,
+        use_audio_in_video: bool = True,
+        **kwargs,
+    ):
+        print("DEBUG: Uncaught kwargs:", kwargs)
+        print("DEBUG: Got sampling params", sampling_params)
+
+        client = self._get_client(url)
+
+        modalities = []
+        if output_text:
+            modalities.append("text")
+        if output_audio:
+            modalities.append("audio")
+
+        (
+            text_response,
+            audio_tensor,
+        ) = await client.generate_comprehension_chat_completion(
+            model,
+            prompt,
+            image,
+            audio,
+            video,
+            sampling_params,
+            modalities,
+            mm_processor_kwargs={"use_audio_in_video": use_audio_in_video},
+        )
+
+        return (text_response, audio_tensor)
 
 
 class VLLMOmniGenerateVideo(_VLLMOmniGenerateBase):
@@ -188,7 +275,9 @@ class VLLMOmniGenerateVideo(_VLLMOmniGenerateBase):
             raise RuntimeError("Failed to generate video")
 
         # 转换为 ComfyUI 视频格式
-        video_tensor = torch.from_numpy(np.array(video_data).astype(np.float32) / 255.0).unsqueeze(0)
+        video_tensor = torch.from_numpy(
+            np.array(video_data).astype(np.float32) / 255.0
+        ).unsqueeze(0)
         return (video_tensor, text_response)
 
 
@@ -250,92 +339,6 @@ class VLLMOmniGenerateAudio(_VLLMOmniGenerateBase):
         return (audio_tensor, text_response)
 
 
-class VLLMOmniComprehension(_VLLMOmniGenerateBase):
-    @classmethod
-    def INPUT_TYPES(cls):
-        return {
-            "required": {
-                "url": ("STRING", {"default": "http://localhost:8000/v1"}),
-                "model": ("STRING", {"default": "Tongyi-MAI/Z-Image-Turbo"}),
-                "prompt": ("STRING", {"multiline": True}),
-            },
-            "optional": {
-                "image": ("IMAGE",),
-                "video": ("VIDEO",),
-                "audio": ("AUDIO",),
-                "sampling_params": ("SAMPLING_PARAMS",),
-            },
-        }
-
-    RETURN_TYPES = ("IMAGE", "STRING")
-    RETURN_NAMES = ("image", "text_response")
-    FUNCTION = "generate"
-
-    @classmethod
-    def VALIDATE_INPUTS(cls, **kwargs):
-        output = super().VALIDATE_INPUTS(**kwargs)
-        if output != True:
-            return output
-        return True
-
-    async def generate(
-        self,
-        url: str,
-        model: str,
-        prompt: str,
-        width: int,
-        height: int,
-        negative_prompt: str | None = None,
-        image: torch.Tensor | None = None,
-        mask: torch.Tensor | None = None,
-        audio: str | None = None,
-        video: str | None = None,
-        sampling_params: dict | list[dict] | None = None,
-        **kwargs,
-    ):
-        print("DEBUG: Uncaught kwargs:", kwargs)
-        print("DEBUG: Got sampling params", sampling_params)
-
-        client = self._get_client(url)
-        validate_sampling_params_types(model, sampling_params)
-
-        # Try use DALL-E compatible API first
-        if (
-            model not in MODEL_PIPELINE_SPECS
-            or MODEL_PIPELINE_SPECS["model"]["stages"] == "diffusion"
-            or MODEL_PIPELINE_SPECS["model"]["stages"] == ["diffusion"]
-        ):
-            sampling_params = cast(dict | None, sampling_params)
-            if audio is None and image is None and video is None:
-                # No multimodal input --- use DALL-E image generation
-                print("DEBUG: Using DALL-E image generation endpoint")
-                output = await client.generate_image(model, prompt, width, height, negative_prompt, sampling_params)
-                return (output,)
-            elif image is not None and audio is None and video is None:
-                # Image and text input --- use DALL-E image edit
-                print("DEBUG: Using DALL-E image edit endpoint")
-                output = await client.edit_image(
-                    model,
-                    prompt,
-                    image,
-                    width,
-                    height,
-                    negative_prompt,
-                    mask,
-                    sampling_params,
-                )
-                return (output,)
-
-        print("DEBUG: Using chat completion endpoint")
-        validate_model_config(model, image, audio, video)
-        sampling_params = add_sampling_parameters_to_stage(model, sampling_params, "diffusion", width=width, height=height)
-        print("DEBUG: Edited sampling params", sampling_params)
-
-        output = await client.generate_image_chat_completion(model, prompt, negative_prompt, image, audio, video, sampling_params)
-
-        return (output,)
-
-
 class VLLMOmniARSampling:
     @classmethod
     def INPUT_TYPES(cls):
@@ -362,7 +365,7 @@ class VLLMOmniARSampling:
     CATEGORY = "vLLM-Omni/Sampling Params"
 
     def get_params(self, **kwargs):
-        return (kwargs,)
+        return ({"type": "llm", **kwargs},)
 
 
 class VLLMOmniDiffusionSampling:
@@ -425,7 +428,7 @@ class VLLMOmniDiffusionSampling:
 
     def get_params(self, **kwargs):
         print("DEBUG: in sampling parameter node, got", kwargs)
-        return (kwargs,)
+        return ({"type": "diffusion", **kwargs},)
 
 
 class VLLMOmniSamplingParamsList:
@@ -449,12 +452,12 @@ class VLLMOmniSamplingParamsList:
     def VALIDATE_INPUTS(cls, **kwargs) -> Literal[True] | str:
         for k, v in kwargs.items():
             if isinstance(v, list):
-                return (
-                    f"Input {k} is a Multi-Stage Sampling Params List. Expected a single sampling parameters node (either AR or Diffusion)."
-                )
+                return f"Input {k} is a Multi-Stage Sampling Params List. Expected a single sampling parameters node (either AR or Diffusion)."
         return True
 
-    def aggregate(self, param1: dict, param2: dict | None = None, param3: dict | None = None):
+    def aggregate(
+        self, param1: dict, param2: dict | None = None, param3: dict | None = None
+    ):
         params = [param1]
         if param2 is not None:
             params.append(param2)

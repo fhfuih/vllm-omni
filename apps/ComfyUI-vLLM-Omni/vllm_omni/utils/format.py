@@ -8,9 +8,13 @@ import base64
 from io import BytesIO
 import mimetypes
 
+import av
 import numpy as np
 import torch
 from PIL import Image
+import torchaudio
+
+from comfy_api.input import AudioInput, VideoInput
 
 
 def base64_to_image_tensor(base64_str: str, mode: str = "RGB") -> torch.Tensor:
@@ -51,7 +55,9 @@ def base64_to_image_tensor(base64_str: str, mode: str = "RGB") -> torch.Tensor:
     return image_tensor
 
 
-def image_tensor_to_png_bytes(tensor: torch.Tensor, filename: str = "image.png") -> BytesIO:
+def image_tensor_to_png_bytes(
+    tensor: torch.Tensor, filename: str = "image.png"
+) -> BytesIO:
     """
     Convert ComfyUI image tensor to PNG BytesIO for multipart upload.
 
@@ -70,7 +76,9 @@ def image_tensor_to_png_bytes(tensor: torch.Tensor, filename: str = "image.png")
         ValueError: If tensor format is invalid (not 4D, wrong dtype, etc.)
     """
     if tensor.ndim != 4:
-        raise ValueError(f"Expected 4D tensor with shape (B, H, W, C), got {tensor.ndim}D tensor")
+        raise ValueError(
+            f"Expected 4D tensor with shape (B, H, W, C), got {tensor.ndim}D tensor"
+        )
 
     image_tensor = tensor[0]  # Shape: (H, W, C)
     image_np = (image_tensor.cpu().numpy() * 255.0).astype(np.uint8)
@@ -112,3 +120,116 @@ def image_tensor_to_base64(tensor: torch.Tensor, filename: str = "image.png") ->
     base64_str = base64.b64encode(byte_data).decode("utf-8")
     mime_type = mimetypes.guess_type(filename)[0] or "application/octet-stream"
     return f"data:{mime_type};base64,{base64_str}"
+
+
+def video_to_bytes(video: VideoInput, filename: str = "video.mp4") -> BytesIO:
+    output_buffer = BytesIO()
+    output_buffer.name = filename
+    video.save_to(output_buffer)
+    output_buffer.seek(0)
+    return output_buffer
+
+
+def video_to_base64(video: VideoInput, filename: str = "video.mp4") -> str:
+    video_buffer = video_to_bytes(video, filename)
+    video_buffer.seek(0)
+    byte_data = video_buffer.read()
+    base64_str = base64.b64encode(byte_data).decode("utf-8")
+    mime_type = mimetypes.guess_type(filename)[0] or "application/octet-stream"
+    return f"data:{mime_type};base64,{base64_str}"
+
+
+def audio_to_bytes(
+    audio: AudioInput, filename: str = "audio.mp3", quality: str = "128k"
+) -> BytesIO:
+    waveform = audio["waveform"][0]  # Shape: (C, T)
+    sample_rate = audio["sample_rate"]
+    format = filename.rsplit(".", maxsplit=1)[1]
+    layout = "mono" if waveform.shape[0] == 1 else "stereo"
+
+    output_buffer = BytesIO()
+    output_buffer.name = filename
+    output_container = av.open(output_buffer, mode="w", format=format)
+    if format == "opus":
+        out_stream = output_container.add_stream(
+            "libopus", rate=sample_rate, layout=layout
+        )
+        if quality == "64k":
+            out_stream.bit_rate = 64000  # type: ignore # copy from ComfyUI comfy_api/latest/_ui.py
+        elif quality == "96k":
+            out_stream.bit_rate = 96000  # type: ignore # copy from ComfyUI comfy_api/latest/_ui.py
+        elif quality == "128k":
+            out_stream.bit_rate = 128000  # type: ignore # copy from ComfyUI comfy_api/latest/_ui.py
+        elif quality == "192k":
+            out_stream.bit_rate = 192000  # type: ignore # copy from ComfyUI comfy_api/latest/_ui.py
+        elif quality == "320k":
+            out_stream.bit_rate = 320000  # type: ignore # copy from ComfyUI comfy_api/latest/_ui.py
+    elif format == "mp3":
+        out_stream = output_container.add_stream(
+            "libmp3lame", rate=sample_rate, layout=layout
+        )
+        if quality == "V0":
+            out_stream.codec_context.qscale = 1  # type: ignore # copy from ComfyUI comfy_api/latest/_ui.py
+        elif quality == "128k":
+            out_stream.bit_rate = 128000  # type: ignore # copy from ComfyUI comfy_api/latest/_ui.py
+        elif quality == "320k":
+            out_stream.bit_rate = 320000  # type: ignore # copy from ComfyUI comfy_api/latest/_ui.py
+    else:  # format == "flac":
+        out_stream = output_container.add_stream(
+            "flac", rate=sample_rate, layout=layout
+        )
+
+    frame = av.AudioFrame.from_ndarray(
+        waveform.movedim(0, 1).reshape(1, -1).float().numpy(),
+        format="flt",
+        layout=layout,
+    )
+    frame.sample_rate = sample_rate
+    frame.pts = 0
+    output_container.mux(out_stream.encode(frame))  # type: ignore # copy from ComfyUI comfy_api/latest/_ui.py
+    # Flush encoder
+    output_container.mux(out_stream.encode(None))  # type: ignore # copy from ComfyUI comfy_api/latest/_ui.py
+    output_container.close()
+    output_buffer.seek(0)
+
+    return output_buffer
+
+
+def audio_to_base64(
+    audio: AudioInput, filename: str = "audio.mp3", quality: str = "128k"
+) -> str:
+    audio_buffer = audio_to_bytes(audio, filename, quality)
+    audio_buffer.seek(0)
+    byte_data = audio_buffer.read()
+    base64_str = base64.b64encode(byte_data).decode("utf-8")
+    mime_type = mimetypes.guess_type(filename)[0] or "application/octet-stream"
+    return f"data:{mime_type};base64,{base64_str}"
+
+
+def base64_to_audio_tensor(base64_str: str) -> torch.Tensor:
+    """
+    Convert base64-encoded audio to ComfyUI audio tensor.
+
+    Args:
+        base64_str: Base64-encoded audio string
+    Returns:
+        torch.Tensor with shape (B, C, T) in float32 range [-1, 1]
+    """
+    if base64_str.startswith("data:audio"):
+        _, base64_str = base64_str.split(",", 1)
+
+    try:
+        # Decode base64 to bytes
+        audio_bytes = base64.b64decode(base64_str)
+    except Exception as e:
+        raise ValueError(f"Invalid base64 string: {e}")
+
+    with open("test-audio-output.wav", "wb") as f:
+        f.write(audio_bytes)
+        print("wrote test-audio-output.wav for debugging")
+
+    audio_buffer = BytesIO(audio_bytes)
+    audio_tensor, _ = torchaudio.load_with_torchcodec(
+        audio_buffer, channels_first=True
+    )  # [C, T]
+    return audio_tensor.unsqueeze(0)

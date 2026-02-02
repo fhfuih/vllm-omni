@@ -12,6 +12,7 @@ __version__ = "0.0.1"
 
 from .vllm_omni.nodes import (
     VLLMOmniGenerateImage,
+    VLLMOmniComprehension,
     VLLMOmniGenerateVideo,
     VLLMOmniGenerateAudio,
     VLLMOmniARSampling,
@@ -22,6 +23,7 @@ from .vllm_omni.nodes import (
 # A dictionary that contains all nodes you want to export with their names
 NODE_CLASS_MAPPINGS = {
     "VLLMOmniGenerateImage": VLLMOmniGenerateImage,
+    "VLLMOmniComprehension": VLLMOmniComprehension,
     "VLLMOmniGenerateVideo": VLLMOmniGenerateVideo,
     "VLLMOmniGenerateAudio": VLLMOmniGenerateAudio,
     "VLLMOmniARSampling": VLLMOmniARSampling,
@@ -32,6 +34,7 @@ NODE_CLASS_MAPPINGS = {
 # A dictionary that contains the friendly/humanly readable titles for the nodes
 NODE_DISPLAY_NAME_MAPPINGS = {
     "VLLMOmniGenerateImage": "Generate Image",
+    "VLLMOmniComprehension": "Multimodality Comprehension",
     "VLLMOmniGenerateVideo": "Generate Video",
     "VLLMOmniGenerateAudio": "Generate Audio",
     "VLLMOmniARSampling": "AR Sampling Params",

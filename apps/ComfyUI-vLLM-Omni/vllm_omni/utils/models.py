@@ -1,19 +1,16 @@
+def _qwen25_payload_preprocessor(payload: dict) -> dict:
+    if payload["messages"][0]["role"] != "system":
+        payload["messages"] = [
+            {
+                "role": "system",
+                "content": "You are Qwen, a virtual human developed by the Qwen Team, Alibaba Group, capable of perceiving auditory and visual inputs, as well as generating text and speech.",
+            },
+            *payload["messages"],
+        ]
+    return payload
+
+
 MODEL_PIPELINE_SPECS = {
-    "default-image-model": {
-        "modalities": ["image"],
-        "stages": ["autoregressive", "diffusion"],
-        "required_inputs": ["image", "audio", "video"],
-    },
-    "default-video-model": {
-        "modalities": ["video"],
-        "stages": ["autoregressive", "diffusion"],
-        "required_inputs": ["image", "audio"],
-    },
-    "default-audio-model": {
-        "modalities": ["audio"],
-        "stages": ["autoregressive"],
-        "required_inputs": ["image", "audio", "video"],
-    },
     "ByteDance-Seed/BAGEL-7B-MoT": {
         "input_modalities": ["image"],
         "stages": ["autoregressive", "diffusion"],
@@ -27,6 +24,7 @@ MODEL_PIPELINE_SPECS = {
         "extra_fields": {
             "modalities": ["text", "audio"],
         },
+        "payload_preprocessor": _qwen25_payload_preprocessor,
     },
     "Qwen/Qwen3-Omni-30B-A3B-Instruct": {
         "input_modalities": ["image", "audio", "video"],

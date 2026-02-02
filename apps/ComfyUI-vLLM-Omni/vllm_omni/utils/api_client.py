@@ -8,12 +8,21 @@ import aiohttp
 import openai
 from openai.types.chat import ChatCompletionMessageParam
 from typing import Any, Iterable, Literal, Optional
+from comfy_api.input import AudioInput, VideoInput
 
 import torch
 
+
 from .models import MODEL_PIPELINE_SPECS
 
-from .format import base64_to_image_tensor, image_tensor_to_base64, image_tensor_to_png_bytes
+from .format import (
+    audio_to_base64,
+    base64_to_audio_tensor,
+    base64_to_image_tensor,
+    image_tensor_to_base64,
+    image_tensor_to_png_bytes,
+    video_to_base64,
+)
 
 
 class VLLMOmniClient:
@@ -43,7 +52,13 @@ class VLLMOmniClient:
         if negative_prompt:
             payload["negative_prompt"] = negative_prompt
         if sampling_params is not None:
-            for k in ("n", "num_inference_steps", "guidance_scale", "true_cfg_scale", "vae_use_slicing"):
+            for k in (
+                "n",
+                "num_inference_steps",
+                "guidance_scale",
+                "true_cfg_scale",
+                "vae_use_slicing",
+            ):
                 if k in sampling_params:
                     payload[k] = sampling_params[k]
             if sampling_params.get("seed", 0) != 0:
@@ -69,14 +84,18 @@ class VLLMOmniClient:
                     except aiohttp.ContentTypeError as e:
                         raise RuntimeError(f"Invalid JSON response from vLLM-Omni: {e}")
                     if "data" not in data:
-                        raise RuntimeError("API response missing 'data' field - expected OpenAI DALL-E format")
+                        raise RuntimeError(
+                            "API response missing 'data' field - expected OpenAI DALL-E format"
+                        )
                     if not data["data"]:
                         raise RuntimeError("API returned empty data array")
 
                     image_tensors = []
                     for idx, img in enumerate(data["data"]):
                         if "b64_json" not in img:
-                            raise RuntimeError(f"API returned image #{idx} without 'b64_json' field")
+                            raise RuntimeError(
+                                f"API returned image #{idx} without 'b64_json' field"
+                            )
                         base64_str = img["b64_json"]
                         tensor = base64_to_image_tensor(base64_str)
                         image_tensors.append(tensor)
@@ -90,7 +109,9 @@ class VLLMOmniClient:
                     return batch_tensor
 
             except aiohttp.ClientError as e:
-                raise RuntimeError(f"Network error connecting to vLLM-Omni at {url}: {e}")
+                raise RuntimeError(
+                    f"Network error connecting to vLLM-Omni at {url}: {e}"
+                )
 
     async def edit_image(
         self,
@@ -110,7 +131,12 @@ class VLLMOmniClient:
         image_filename = "image.png"  # Required for multipart form
         form = aiohttp.FormData()
         form.add_field("model", model)
-        form.add_field("image", image_tensor_to_png_bytes(image, image_filename), filename=image_filename, content_type="image/png")
+        form.add_field(
+            "image",
+            image_tensor_to_png_bytes(image, image_filename),
+            filename=image_filename,
+            content_type="image/png",
+        )
         form.add_field("prompt", prompt)
         form.add_field("size", size)
         if negative_prompt:
@@ -123,7 +149,12 @@ class VLLMOmniClient:
                 form.add_field("seed", str(sampling_params["seed"]))
         if mask is not None:
             mask_filename = "mask.png"
-            form.add_field("mask", image_tensor_to_png_bytes(mask, mask_filename), filename=mask_filename, content_type="image/png")
+            form.add_field(
+                "mask",
+                image_tensor_to_png_bytes(mask, mask_filename),
+                filename=mask_filename,
+                content_type="image/png",
+            )
 
         url = self.base_url + "/images/edits"
         async with aiohttp.ClientSession(timeout=self.timeout) as session:
@@ -141,14 +172,18 @@ class VLLMOmniClient:
                         raise RuntimeError(f"Invalid JSON response from vLLM-Omni: {e}")
 
                     if "data" not in data:
-                        raise RuntimeError("API response missing 'data' field - expected OpenAI DALL-E format")
+                        raise RuntimeError(
+                            "API response missing 'data' field - expected OpenAI DALL-E format"
+                        )
                     if not data["data"]:
                         raise RuntimeError("API returned empty data array")
 
                     image_tensors = []
                     for idx, img in enumerate(data["data"]):
                         if "b64_json" not in img:
-                            raise RuntimeError(f"API returned image #{idx} without 'b64_json' field")
+                            raise RuntimeError(
+                                f"API returned image #{idx} without 'b64_json' field"
+                            )
                         base64_str = img["b64_json"]
                         tensor = base64_to_image_tensor(base64_str)
                         image_tensors.append(tensor)
@@ -156,7 +191,9 @@ class VLLMOmniClient:
                     return torch.stack(image_tensors, dim=0)
 
             except aiohttp.ClientError as e:
-                raise RuntimeError(f"Network error connecting to vLLM-Omni at {url}: {e}")
+                raise RuntimeError(
+                    f"Network error connecting to vLLM-Omni at {url}: {e}"
+                )
 
     async def generate_image_chat_completion(
         self,
@@ -164,14 +201,123 @@ class VLLMOmniClient:
         prompt: str,
         negative_prompt: str | None = None,
         image: torch.Tensor | None = None,
-        audio: str | None = None,
-        video: str | None = None,
+        audio: AudioInput | None = None,
+        video: VideoInput | None = None,
         sampling_params: dict | list[dict] | None = None,
     ) -> torch.Tensor:
+        payload = VLLMOmniClient._prepare_chat_completion_messages(
+            model, prompt, negative_prompt, image, audio, video, sampling_params
+        )
+        choices = await self._generate_base_chat_completion(model, payload)
+
+        image_tensors = []
+        for idx, img_content in enumerate(choices[0]["message"]["content"]):
+            base64_str = img_content.get("image_url", {}).get("url", "")
+            if not base64_str:
+                raise RuntimeError(f"API returned image #{idx} without image url")
+            tensor = base64_to_image_tensor(base64_str)
+            image_tensors.append(tensor)
+
+        return torch.stack(image_tensors, dim=0)
+
+    async def generate_comprehension_chat_completion(
+        self,
+        model: str,
+        prompt: str,
+        image: torch.Tensor | None = None,
+        audio: AudioInput | None = None,
+        video: VideoInput | None = None,
+        sampling_params: dict | list[dict] | None = None,
+        modalities: list[str] = ["text", "audio"],
+        **extra_body,
+    ) -> tuple[str | None, torch.Tensor | None]:
+        # Response may contain two choices: one with text, one with audio
+        payload = VLLMOmniClient._prepare_chat_completion_messages(
+            model,
+            prompt,
+            None,
+            image,
+            audio,
+            video,
+            sampling_params,
+            modalities,
+            **extra_body,
+        )
+        print("DEBUG: Omni payload", payload)
+
+        choices = await self._generate_base_chat_completion(model, payload)
+        for choice in choices:
+            try:
+                audio_base64 = choice["audio"]["data"]
+            except (KeyError, TypeError):
+                audio_base64 = None
+            try:
+                text_response = choice["message"]["content"]
+            except (KeyError, TypeError):
+                text_response = None
+        if audio_base64 is None and text_response is None:
+            raise RuntimeError(
+                "API response missing both 'audio' and 'message.content' fields"
+            )
+        if audio_base64 is not None:
+            audio_tensor = base64_to_audio_tensor(audio_base64)
+        else:
+            audio_tensor = None
+        return text_response, audio_tensor
+
+    def generate_video(
+        self,
+        model: str,
+        messages: Iterable[ChatCompletionMessageParam],
+        modalities: Optional[list[Literal["text", "audio"]]] | openai.Omit = None,
+        extra_body: Optional[dict[str, Any]] = None,
+    ) -> dict[str, Any]:
         if not self._check_model_exist(model):
             raise ValueError(f"Model {model} does not exist.")
 
-        payload = VLLMOmniClient._prepare_chat_completion_messages(model, prompt, negative_prompt, image, audio, video, sampling_params)
+        try:
+            response = self.client.chat.completions.create(
+                model=model,
+                messages=messages,
+                modalities=modalities,
+                extra_body=extra_body,
+            )
+            return {
+                "video": response.choices[0].message.content,
+                "text": response.choices[0].message.content,
+            }
+        except Exception as e:
+            raise RuntimeError(f"Failed to generate video: {str(e)}")
+
+    def generate_audio(
+        self,
+        model: str,
+        messages: Iterable[ChatCompletionMessageParam],
+        modalities: Optional[list[Literal["text", "audio"]]] | openai.Omit = None,
+        extra_body: Optional[dict[str, Any]] = None,
+    ) -> dict[str, Any]:
+        if not self._check_model_exist(model):
+            raise ValueError(f"Model {model} does not exist.")
+
+        try:
+            response = self.client.chat.completions.create(
+                model=model,
+                messages=messages,
+                modalities=modalities,
+                extra_body=extra_body,
+            )
+            return {
+                "audio": response.choices[0].message.audio,
+                "text": response.choices[0].message.content,
+            }
+        except Exception as e:
+            raise RuntimeError(f"Failed to generate audio: {str(e)}")
+
+    async def _generate_base_chat_completion(
+        self, model: str, payload: dict[str, Any]
+    ) -> list[dict[str, Any]]:
+        if not self._check_model_exist(model):
+            raise ValueError(f"Model {model} does not exist.")
 
         url = self.base_url + "/chat/completions"
         async with aiohttp.ClientSession(timeout=self.timeout) as session:
@@ -192,65 +338,21 @@ class VLLMOmniClient:
                     except aiohttp.ContentTypeError as e:
                         raise RuntimeError(f"Invalid JSON response from vLLM-Omni: {e}")
 
-                    if "choices" not in data:
-                        raise RuntimeError("API response missing 'choices' field - expected OpenAI Chat Completion format")
-                    if not data["choices"]:
-                        raise RuntimeError("API returned empty choices array")
-                    choice = data["choices"][0]
-
-                    image_tensors = []
-                    for idx, img_content in enumerate(choice["message"]["content"]):
-                        base64_str = img_content.get("image_url", {}).get("url", "")
-                        if not base64_str:
-                            raise RuntimeError(f"API returned image #{idx} without image url")
-                        tensor = base64_to_image_tensor(base64_str)
-                        image_tensors.append(tensor)
-
-                    return torch.stack(image_tensors, dim=0)
+                    try:
+                        return data["choices"]
+                    except (KeyError, TypeError):
+                        raise RuntimeError(
+                            "Invalid JSON response from vLLM-Omni: missing 'choices' field"
+                        )
 
             except aiohttp.ClientError as e:
-                raise RuntimeError(f"Network error connecting to vLLM-Omni at {self.base_url}: {e}")
-
-    def generate_video(
-        self,
-        model: str,
-        messages: Iterable[ChatCompletionMessageParam],
-        modalities: Optional[list[Literal["text", "audio"]]] | openai.Omit = None,
-        extra_body: Optional[dict[str, Any]] = None,
-    ) -> dict[str, Any]:
-        if not self._check_model_exist(model):
-            raise ValueError(f"Model {model} does not exist.")
-
-        try:
-            response = self.client.chat.completions.create(model=model, messages=messages, modalities=modalities, extra_body=extra_body)
-            return {
-                "video": response.choices[0].message.content,
-                "text": response.choices[0].message.content,
-            }
-        except Exception as e:
-            raise RuntimeError(f"Failed to generate video: {str(e)}")
-
-    def generate_audio(
-        self,
-        model: str,
-        messages: Iterable[ChatCompletionMessageParam],
-        modalities: Optional[list[Literal["text", "audio"]]] | openai.Omit = None,
-        extra_body: Optional[dict[str, Any]] = None,
-    ) -> dict[str, Any]:
-        if not self._check_model_exist(model):
-            raise ValueError(f"Model {model} does not exist.")
-
-        try:
-            response = self.client.chat.completions.create(model=model, messages=messages, modalities=modalities, extra_body=extra_body)
-            return {
-                "audio": response.choices[0].message.audio,
-                "text": response.choices[0].message.content,
-            }
-        except Exception as e:
-            raise RuntimeError(f"Failed to generate audio: {str(e)}")
+                raise RuntimeError(
+                    f"Network error connecting to vLLM-Omni at {self.base_url}: {e}"
+                )
 
     def _check_model_exist(self, model: str):
         model_list = self.client.models.list().data
+        print("!!!", model_list)
         return next((True for m in model_list if m.id == model), False)
 
     @staticmethod
@@ -259,44 +361,71 @@ class VLLMOmniClient:
         prompt: str,
         negative_prompt: str | None,
         image: torch.Tensor | None = None,
-        audio: Any | None = None,
-        video: Any | None = None,
+        audio: AudioInput | None = None,
+        video: VideoInput | None = None,
         sampling_params: dict | list[dict] | None = None,
+        modalities: list[str] | None = None,  # diffusion don't have this field
+        **extra_body,
     ):
         message_content: list[dict] = [{"type": "text", "text": prompt}]
         message_content.append({"type": "text", "text": prompt})
         if image is not None:
-            message_content.append({"type": "image_url", "image_url": {"url": image_tensor_to_base64(image)}})
+            message_content.append(
+                {
+                    "type": "image_url",
+                    "image_url": {"url": image_tensor_to_base64(image)},
+                }
+            )
         if audio is not None:
-            message_content.append({"type": "audio_url", "audio_url": {"url": audio}})
+            message_content.append(
+                {"type": "audio_url", "audio_url": {"url": audio_to_base64(audio)}}
+            )
         if video is not None:
-            message_content.append({"type": "video_url", "video_url": {"url": video}})
+            message_content.append(
+                {"type": "video_url", "video_url": {"url": video_to_base64(video)}}
+            )
         messages = [{"role": "user", "content": message_content}]
 
-        extra_body: dict[str, Any] = {}
+        combined_extra_body: dict[str, Any] = {}
         if sampling_params is not None:
-            if (not model in MODEL_PIPELINE_SPECS or MODEL_PIPELINE_SPECS["model"]["stages"] == ["diffusion"]) and (
-                isinstance(sampling_params, dict) or len(sampling_params) == 1
-            ):
-                # If model is not registered, default to regular diffusion models and diffusion format: extra_body directly contains sampling params
-                sampling_params = sampling_params if isinstance(sampling_params, dict) else sampling_params[0]
-                extra_body: dict[str, Any] = {**sampling_params}
-                if "n" in extra_body:
-                    extra_body["num_outputs_per_prompt"] = extra_body["n"]
-                    del extra_body["n"]
+            if (
+                model not in MODEL_PIPELINE_SPECS
+                or MODEL_PIPELINE_SPECS["model"]["stages"] == ["diffusion"]
+            ) and (isinstance(sampling_params, dict) or len(sampling_params) == 1):
+                # Diffusion format: extra_body directly contains sampling params.
+                # Fallback to this mode if model is not registered.
+                sampling_params = (
+                    sampling_params
+                    if isinstance(sampling_params, dict)
+                    else sampling_params[0]
+                )
+                combined_extra_body: dict[str, Any] = {**sampling_params}
+                if "n" in combined_extra_body:
+                    combined_extra_body["num_outputs_per_prompt"] = combined_extra_body[
+                        "n"
+                    ]
+                    del combined_extra_body["n"]
             else:
-                # Use AR style payload, extra_body has a sampling_params_list
-                extra_body: dict[str, Any] = {"sampling_params_list": sampling_params}
+                # Use AR style payload, extra_body has a sampling_params_list field
+                combined_extra_body: dict[str, Any] = {
+                    "sampling_params_list": sampling_params
+                }
 
         if negative_prompt:
-            extra_body["negative_prompt"] = negative_prompt
+            combined_extra_body["negative_prompt"] = negative_prompt
+
+        if extra_body:
+            combined_extra_body.update(extra_body)
 
         payload: dict[str, Any] = {"messages": messages}
-        if extra_body:
-            payload["extra_body"] = extra_body
+        if combined_extra_body:
+            payload["extra_body"] = combined_extra_body
+        if modalities:
+            payload["modalities"] = modalities
 
-        # TODO: Elegant way to handle Qwen Omni mm_processor_kwargs
-        if False:
-            extra_body["mm_processor_kwargs"] = {"use_audio_in_video": True}
+        if model in MODEL_PIPELINE_SPECS:
+            preprocessor = MODEL_PIPELINE_SPECS[model].get("payload_preprocessor", None)
+            if preprocessor is not None:
+                payload = preprocessor(payload)
 
         return payload

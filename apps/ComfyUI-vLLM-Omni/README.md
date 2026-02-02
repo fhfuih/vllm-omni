@@ -2,19 +2,11 @@
 
 ComfyUI integration for vLLM-Omni
 
-> [!NOTE]
-> This projected was created with a [cookiecutter](https://github.com/Comfy-Org/cookiecutter-comfy-extension) template. It helps you start writing custom nodes without worrying about the Python setup.
-
 ## Quickstart
 
-1. Install [ComfyUI](https://docs.comfy.org/get_started).
-1. Install [ComfyUI-Manager](https://github.com/ltdrdata/ComfyUI-Manager)
-1. Look up this extension in ComfyUI-Manager. If you are installing manually, clone this repository under `ComfyUI/custom_nodes`.
-1. Restart ComfyUI.
-
-# Features
-
-- A list of features
+* Copy this folder to the `custom_nodes` subfolder of your ComfyUI installation. Your directory should look like `ComfyUI/custom_nodes/ComfyUI-vLLM-Omni`.
+* Restart ComfyUI.
+    * If you are mainly using this node, you can launch ComfyUI with `python main.py --cpu` argument. This node only makes network requests and does not compute locally.
 
 ## Develop
 
