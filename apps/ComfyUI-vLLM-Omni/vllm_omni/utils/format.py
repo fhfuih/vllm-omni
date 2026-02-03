@@ -15,6 +15,7 @@ from PIL import Image
 import torchaudio
 
 from comfy_api.input import AudioInput, VideoInput
+from comfy_extras import nodes_audio
 
 
 def base64_to_image_tensor(base64_str: str, mode: str = "RGB") -> torch.Tensor:
@@ -206,7 +207,7 @@ def audio_to_base64(
     return f"data:{mime_type};base64,{base64_str}"
 
 
-def base64_to_audio_tensor(base64_str: str) -> torch.Tensor:
+def base64_to_audio(base64_str: str) -> AudioInput:
     """
     Convert base64-encoded audio to ComfyUI audio tensor.
 
@@ -229,6 +230,11 @@ def base64_to_audio_tensor(base64_str: str) -> torch.Tensor:
         print("wrote test-audio-output.wav for debugging")
 
     audio_buffer = BytesIO(audio_bytes)
+    waveform, sample_rate = nodes_audio.load(audio_buffer)  # type: ignore # Although expect string argument, it calls av.open underneath, which supports BytesIO (file-like)
+    return {"waveform": waveform.unsqueeze(0), "sample_rate": sample_rate}
+    with av.open(audio_buffer) as af:
+        if not af.streams.audio:
+            raise RuntimeError("No audio stream found in the file.")
     audio_tensor, _ = torchaudio.load_with_torchcodec(
         audio_buffer, channels_first=True
     )  # [C, T]

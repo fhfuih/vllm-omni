@@ -13,16 +13,18 @@ from comfy_api.input import AudioInput, VideoInput
 import torch
 
 
-from .models import MODEL_PIPELINE_SPECS
+from .models import lookup_model_spec
 
 from .format import (
     audio_to_base64,
-    base64_to_audio_tensor,
+    base64_to_audio,
     base64_to_image_tensor,
     image_tensor_to_base64,
     image_tensor_to_png_bytes,
     video_to_base64,
 )
+
+from .log import pretty_printer
 
 
 class VLLMOmniClient:
@@ -230,7 +232,7 @@ class VLLMOmniClient:
         sampling_params: dict | list[dict] | None = None,
         modalities: list[str] = ["text", "audio"],
         **extra_body,
-    ) -> tuple[str | None, torch.Tensor | None]:
+    ) -> tuple[str | None, AudioInput | None]:
         # Response may contain two choices: one with text, one with audio
         payload = VLLMOmniClient._prepare_chat_completion_messages(
             model,
@@ -243,27 +245,33 @@ class VLLMOmniClient:
             modalities,
             **extra_body,
         )
-        print("DEBUG: Omni payload", payload)
+        print("DEBUG: Omni payload", pretty_printer.pformat(payload))
 
         choices = await self._generate_base_chat_completion(model, payload)
+        text_response = None
+        audio_base64 = None
         for choice in choices:
-            try:
-                audio_base64 = choice["audio"]["data"]
-            except (KeyError, TypeError):
-                audio_base64 = None
             try:
                 text_response = choice["message"]["content"]
             except (KeyError, TypeError):
-                text_response = None
+                pass
+            try:
+                audio_base64 = choice["message"]["audio"]["data"]
+            except (KeyError, TypeError):
+                pass
         if audio_base64 is None and text_response is None:
             raise RuntimeError(
-                "API response missing both 'audio' and 'message.content' fields"
+                "API response missing both '.message.audio' and 'message.content' fields."
+                f"The choices object is {choices}"
             )
         if audio_base64 is not None:
-            audio_tensor = base64_to_audio_tensor(audio_base64)
+            audio = base64_to_audio(audio_base64)
+            print(
+                f"!!!DEBUG: audio sample rate {audio['sample_rate']}, audio shape {audio['waveform'].shape}, duration in second {audio['waveform'].shape[2] / audio['sample_rate']}"
+            )
         else:
-            audio_tensor = None
-        return text_response, audio_tensor
+            audio = None
+        return text_response, audio
 
     def generate_video(
         self,
@@ -338,6 +346,8 @@ class VLLMOmniClient:
                     except aiohttp.ContentTypeError as e:
                         raise RuntimeError(f"Invalid JSON response from vLLM-Omni: {e}")
 
+                    # print("!!!DEBUG: chat completion response", data)
+
                     try:
                         return data["choices"]
                     except (KeyError, TypeError):
@@ -368,7 +378,6 @@ class VLLMOmniClient:
         **extra_body,
     ):
         message_content: list[dict] = [{"type": "text", "text": prompt}]
-        message_content.append({"type": "text", "text": prompt})
         if image is not None:
             message_content.append(
                 {
@@ -389,8 +398,8 @@ class VLLMOmniClient:
         combined_extra_body: dict[str, Any] = {}
         if sampling_params is not None:
             if (
-                model not in MODEL_PIPELINE_SPECS
-                or MODEL_PIPELINE_SPECS["model"]["stages"] == ["diffusion"]
+                (spec := lookup_model_spec(model)) is None
+                or spec["stages"] == ["diffusion"]
             ) and (isinstance(sampling_params, dict) or len(sampling_params) == 1):
                 # Diffusion format: extra_body directly contains sampling params.
                 # Fallback to this mode if model is not registered.
@@ -423,8 +432,8 @@ class VLLMOmniClient:
         if modalities:
             payload["modalities"] = modalities
 
-        if model in MODEL_PIPELINE_SPECS:
-            preprocessor = MODEL_PIPELINE_SPECS[model].get("payload_preprocessor", None)
+        if spec := lookup_model_spec(model):
+            preprocessor = spec.get("payload_preprocessor", None)
             if preprocessor is not None:
                 payload = preprocessor(payload)
 

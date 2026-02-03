@@ -1,17 +1,19 @@
-from .models import MODEL_PIPELINE_SPECS
+from .models import lookup_model_spec
 
 
-def validate_sampling_params_types(
+def validate_model_and_sampling_params_types(
     model_name: str,
     sampling_param_list: dict | list[dict] | None = None,
 ):
-    pipeline_spec = MODEL_PIPELINE_SPECS.get(model_name)
+    if not model_name:
+        raise ValueError("Model name must not be empty.")
+
+    pipeline_spec = lookup_model_spec(model_name)
     if pipeline_spec is None:
+        print("!!!DEBUG: skipping sampling params check because spec is not found")
         return
 
     stages = pipeline_spec["stages"]
-    if isinstance(stages, str):
-        stages = [stages]
     if isinstance(sampling_param_list, list):
         if len(stages) != len(sampling_param_list):
             raise ValueError(
@@ -30,8 +32,8 @@ def validate_sampling_params_types(
             raise RuntimeError("Internal error: unknown sampling parameter type")
         if any(stage != sampling_param_list["type"] for stage in stages):
             raise ValueError(
-                f"When passing a single sampling parameter node, all stages of the model must match this sampling parameter type ({sampling_param_list['type']})."
-                f"However, the stages of model {model_name} are: {stages}"
+                f"When passing a single sampling parameter node, all stages of the model must match the provided sampling parameter's type."
+                f"However, the stages of model {model_name} are: {stages}. The provided sampling parameter is {sampling_param_list['type']}"
             )
         del sampling_param_list["type"]
 
@@ -44,7 +46,7 @@ def add_sampling_parameters_to_stage(
     **params_to_add,
 ) -> dict | list[dict]:
     """Given a model's name and the sampling parameter list to query this model, add arbitrary additional parameters to the sampling parameters of all stages of the given type."""
-    pipeline_spec = MODEL_PIPELINE_SPECS.get(model_name)
+    pipeline_spec = lookup_model_spec(model_name)
     if not pipeline_spec:
         print(
             f"Since the model {model_name} is not in our list, we cannot ensure if the fields ({tuple(params_to_add.keys())}) are added to the correct stage's sampling params. We will do it heuristiclly."

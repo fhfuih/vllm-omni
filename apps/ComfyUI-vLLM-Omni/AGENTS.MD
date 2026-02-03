@@ -1,6 +1,6 @@
 # 🧠 ComfyUI Plugin for vLLM-Omni: Multimodal Generation Nodes
 
-This project implements a ComfyUI plugin that provides custom nodes for interacting with **vLLM-Omni**, an all-in-one multimodal generative AI hosting service. It supports both diffusion and autoregressive models via an OpenAI-compatible API.
+This project implements a ComfyUI plugin that provides custom nodes for interacting with **vLLM-Omni**, an all-in-one multimodal generative AI hosting service. It supports both diffusion and autoregression models via an OpenAI-compatible API.
 
 ---
 
@@ -63,7 +63,7 @@ Since pipelines can be multi-stage and require different parameter sets per stag
 #### Available Nodes:
 | Node Type                     | For Which Model Stage? | Fields                                                                 |
 |------------------------------|------------------------|------------------------------------------------------------------------|
-| `AR Sampling`    | Autoregressive stage   | `max_tokens`, `temperature`, `top_p`, `repetition_penalty`            |
+| `AR Sampling`    | Autoregression stage   | `max_tokens`, `temperature`, `top_p`, `repetition_penalty`            |
 | `Diffusion Sampling`         | Diffusion stage        | `num_inference_steps`, `guidance_scale`                               |
 | `Sampling Params List` | Aggregate 1–3 stages    | Accepts up to three sampling param nodes; outputs aggregated config   |
 

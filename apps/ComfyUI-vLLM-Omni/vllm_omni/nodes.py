@@ -1,4 +1,4 @@
-from typing import Literal, cast
+from typing import cast
 
 # vllm_omni/nodes.py
 import torch
@@ -8,9 +8,9 @@ from comfy_api.input import AudioInput, VideoInput
 from .utils.api_client import VLLMOmniClient
 from .utils.validators import (
     add_sampling_parameters_to_stage,
-    validate_sampling_params_types,
+    validate_model_and_sampling_params_types,
 )
-from .utils.models import MODEL_PIPELINE_SPECS
+from .utils.models import lookup_model_spec
 
 
 class _VLLMOmniGenerateBase:
@@ -18,31 +18,17 @@ class _VLLMOmniGenerateBase:
 
     CATEGORY = "vLLM-Omni/Generate"
 
-    def __init__(self):
-        self._client = None
-        self._last_url = None
-
     @classmethod
-    def VALIDATE_INPUTS(cls, **kwargs) -> Literal[True] | str:
-        if not kwargs.get("model", ""):
-            return "Model name must not be empty."
-        if "image" not in kwargs and "mask" in kwargs:
-            return "Mask input provided without an image input."
-        if kwargs.get("sampling_params", None) is not None:
-            try:
-                validate_sampling_params_types(
-                    kwargs["model"], kwargs["sampling_params"]
-                )
-            except Exception as e:
-                return str(e)
+    def VALIDATE_INPUTS(cls, url, model):
+        """
+        Can only validate this model's own input. Cannot check inputs from other nodes.
+        See: https://docs.comfy.org/custom-nodes/backend/server_overview#validate_inputs
+        """
+        if not url:
+            return "URL must not be empty"
+        if not model:
+            return "Model must not be empty"
         return True
-
-    def _get_client(self, url):
-        """Lazy-initialize OpenAI client, reusing if URL hasn't changed."""
-        if self._client is None or self._last_url != url:
-            self._client = VLLMOmniClient(url)
-            self._last_url = url
-        return self._client
 
 
 class VLLMOmniGenerateImage(_VLLMOmniGenerateBase):
@@ -70,12 +56,6 @@ class VLLMOmniGenerateImage(_VLLMOmniGenerateBase):
     RETURN_NAMES = ("image", "text_response")
     FUNCTION = "generate"
 
-    @classmethod
-    def VALIDATE_INPUTS(cls, **kwargs):
-        if output := super().VALIDATE_INPUTS(**kwargs):
-            return output
-        return True
-
     async def generate(
         self,
         url: str,
@@ -93,15 +73,16 @@ class VLLMOmniGenerateImage(_VLLMOmniGenerateBase):
     ):
         print("DEBUG: Uncaught kwargs:", kwargs)
         print("DEBUG: Got sampling params", sampling_params)
+        validate_model_and_sampling_params_types(model, sampling_params)
+        if image is None and mask is None:
+            raise ValueError("Mask input provided without an image input.")
 
-        client = self._get_client(url)
+        client = VLLMOmniClient(url)
 
         # Try use DALL-E compatible API first
-        if (
-            model not in MODEL_PIPELINE_SPECS
-            or MODEL_PIPELINE_SPECS["model"]["stages"] == "diffusion"
-            or MODEL_PIPELINE_SPECS["model"]["stages"] == ["diffusion"]
-        ):
+        if (spec := lookup_model_spec(model)) is None or spec["stages"] == [
+            "diffusion"
+        ]:
             sampling_params = cast(dict | None, sampling_params)
             if audio is None and image is None and video is None:
                 # No multimodal input --- use DALL-E image generation
@@ -163,10 +144,9 @@ class VLLMOmniComprehension(_VLLMOmniGenerateBase):
     FUNCTION = "generate"
 
     @classmethod
-    def VALIDATE_INPUTS(cls, **kwargs):
-        if output := super().VALIDATE_INPUTS(**kwargs):
-            return output
-        if not kwargs["output_text"] and not kwargs["output_audio"]:
+    def VALIDATE_INPUTS(cls, url, model, output_text, output_audio):
+        super().VALIDATE_INPUTS(url, model)
+        if not output_text and not output_audio:
             return "At least one of output_text or output_audio must be True."
         return True
 
@@ -183,11 +163,12 @@ class VLLMOmniComprehension(_VLLMOmniGenerateBase):
         output_audio: bool = True,
         use_audio_in_video: bool = True,
         **kwargs,
-    ):
+    ) -> tuple[str, AudioInput]:
         print("DEBUG: Uncaught kwargs:", kwargs)
         print("DEBUG: Got sampling params", sampling_params)
+        validate_model_and_sampling_params_types(model, sampling_params)
 
-        client = self._get_client(url)
+        client = VLLMOmniClient(url)
 
         modalities = []
         if output_text:
@@ -195,9 +176,14 @@ class VLLMOmniComprehension(_VLLMOmniGenerateBase):
         if output_audio:
             modalities.append("audio")
 
+        if use_audio_in_video and video is not None:
+            use_audio_in_video = True
+        else:
+            use_audio_in_video = False
+
         (
             text_response,
-            audio_tensor,
+            audio,
         ) = await client.generate_comprehension_chat_completion(
             model,
             prompt,
@@ -209,7 +195,17 @@ class VLLMOmniComprehension(_VLLMOmniGenerateBase):
             mm_processor_kwargs={"use_audio_in_video": use_audio_in_video},
         )
 
-        return (text_response, audio_tensor)
+        if text_response is None:
+            text_response = ""
+        if audio is None:
+            channels = 1
+            duration = 1
+            sample_rate = 44100
+            num_samples = int(round(duration * sample_rate))
+            waveform = torch.zeros((1, channels, num_samples), dtype=torch.float32)
+            audio = {"waveform": waveform, "sample_rate": sample_rate}
+
+        return (text_response, audio)
 
 
 class VLLMOmniGenerateVideo(_VLLMOmniGenerateBase):
@@ -252,7 +248,7 @@ class VLLMOmniGenerateVideo(_VLLMOmniGenerateBase):
         audio=None,
     ):
         raise NotImplementedError()
-        client = self._get_client(url)
+        client = VLLMOmniClient(url)
 
         payload = self._validate_and_prepare_chat_completion_payload(
             model,
@@ -315,7 +311,7 @@ class VLLMOmniGenerateAudio(_VLLMOmniGenerateBase):
         video=None,
     ):
         raise NotImplementedError()
-        client = self._get_client(url)
+        client = VLLMOmniClient(url)
 
         payload = self._validate_and_prepare_chat_completion_payload(
             model,
@@ -361,11 +357,12 @@ class VLLMOmniARSampling:
         }
 
     RETURN_TYPES = ("SAMPLING_PARAMS",)
+    RETURN_NAMES = ("AR sampling params",)
     FUNCTION = "get_params"
     CATEGORY = "vLLM-Omni/Sampling Params"
 
     def get_params(self, **kwargs):
-        return ({"type": "llm", **kwargs},)
+        return ({"type": "autoregression", **kwargs},)
 
 
 class VLLMOmniDiffusionSampling:
@@ -423,11 +420,11 @@ class VLLMOmniDiffusionSampling:
         }
 
     RETURN_TYPES = ("SAMPLING_PARAMS",)
+    RETURN_NAMES = ("diffusion sampling params",)
     FUNCTION = "get_params"
     CATEGORY = "vLLM-Omni/Sampling Params"
 
     def get_params(self, **kwargs):
-        print("DEBUG: in sampling parameter node, got", kwargs)
         return ({"type": "diffusion", **kwargs},)
 
 
@@ -445,19 +442,20 @@ class VLLMOmniSamplingParamsList:
         }
 
     RETURN_TYPES = ("SAMPLING_PARAMS",)
+    RETURN_NAMES = ("param list",)
     FUNCTION = "aggregate"
     CATEGORY = "vLLM-Omni/Sampling Params"
-
-    @classmethod
-    def VALIDATE_INPUTS(cls, **kwargs) -> Literal[True] | str:
-        for k, v in kwargs.items():
-            if isinstance(v, list):
-                return f"Input {k} is a Multi-Stage Sampling Params List. Expected a single sampling parameters node (either AR or Diffusion)."
-        return True
 
     def aggregate(
         self, param1: dict, param2: dict | None = None, param3: dict | None = None
     ):
+        for i, p in enumerate((param1, param2, param3)):
+            print(f"Param {i} is {p}")
+            if isinstance(p, list):
+                raise ValueError(
+                    f"Input {i} is a Multi-Stage Sampling Params List. Expected a single sampling parameters node (either AR or Diffusion)."
+                )
+
         params = [param1]
         if param2 is not None:
             params.append(param2)
