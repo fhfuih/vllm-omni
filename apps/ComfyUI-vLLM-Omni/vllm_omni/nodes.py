@@ -170,31 +170,52 @@ class VLLMOmniComprehension(_VLLMOmniGenerateBase):
         validate_model_and_sampling_params_types(model, sampling_params)
 
         client = VLLMOmniClient(url)
+        spec, pattern = lookup_model_spec(model)
+        is_bagel = pattern is not None and "bagel" in pattern.lower()
 
-        modalities = []
-        if output_text:
-            modalities.append("text")
-        if output_audio:
-            modalities.append("audio")
-
-        if use_audio_in_video and video is not None:
-            use_audio_in_video = True
+        if is_bagel:
+            # A lot of special handlings here...
+            if output_audio:
+                raise ValueError("BAGEL models do not support audio output.")
+            if audio is not None or video is not None:
+                raise ValueError("BAGEL models do not support audio or video input.")
+            (
+                text_response,
+                _,
+            ) = await client.generate_comprehension_chat_completion(
+                model,
+                prompt,
+                image,
+                None,
+                None,
+                sampling_params,
+                ["text"],
+            )
         else:
-            use_audio_in_video = False
+            modalities = []
+            if output_text:
+                modalities.append("text")
+            if output_audio:
+                modalities.append("audio")
 
-        (
-            text_response,
-            audio,
-        ) = await client.generate_comprehension_chat_completion(
-            model,
-            prompt,
-            image,
-            audio,
-            video,
-            sampling_params,
-            modalities,
-            mm_processor_kwargs={"use_audio_in_video": use_audio_in_video},
-        )
+            if use_audio_in_video and video is not None:
+                use_audio_in_video = True
+            else:
+                use_audio_in_video = False
+
+            (
+                text_response,
+                audio,
+            ) = await client.generate_comprehension_chat_completion(
+                model,
+                prompt,
+                image,
+                audio,
+                video,
+                sampling_params,
+                modalities,
+                mm_processor_kwargs={"use_audio_in_video": use_audio_in_video},
+            )
 
         if text_response is None:
             text_response = ""
