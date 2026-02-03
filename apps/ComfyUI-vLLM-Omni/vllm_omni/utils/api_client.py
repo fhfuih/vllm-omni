@@ -54,6 +54,7 @@ class VLLMOmniClient:
         if negative_prompt:
             payload["negative_prompt"] = negative_prompt
         if sampling_params is not None:
+            # Only select specific sampling params
             for k in (
                 "n",
                 "num_inference_steps",
@@ -144,6 +145,7 @@ class VLLMOmniClient:
         if negative_prompt:
             form.add_field("negative_prompt", negative_prompt)
         if sampling_params is not None:
+            # Only select specific sampling params
             for k in ("n", "num_inference_steps", "guidance_scale", "true_cfg_scale"):
                 if k in sampling_params:
                     form.add_field(k, str(sampling_params[k]))
@@ -208,7 +210,14 @@ class VLLMOmniClient:
         sampling_params: dict | list[dict] | None = None,
     ) -> torch.Tensor:
         payload = VLLMOmniClient._prepare_chat_completion_messages(
-            model, prompt, negative_prompt, image, audio, video, sampling_params
+            model,
+            prompt,
+            negative_prompt,
+            image,
+            audio,
+            video,
+            sampling_params,
+            ["image"],
         )
         choices = await self._generate_base_chat_completion(model, payload)
 
@@ -245,7 +254,6 @@ class VLLMOmniClient:
             modalities,
             **extra_body,
         )
-        print("DEBUG: Omni payload", pretty_printer.pformat(payload))
 
         choices = await self._generate_base_chat_completion(model, payload)
         text_response = None
@@ -324,6 +332,8 @@ class VLLMOmniClient:
     async def _generate_base_chat_completion(
         self, model: str, payload: dict[str, Any]
     ) -> list[dict[str, Any]]:
+        print("!!!DEBUG: Omni payload", pretty_printer.pformat(payload))
+
         if not self._check_model_exist(model):
             raise ValueError(f"Model {model} does not exist.")
 
@@ -346,7 +356,10 @@ class VLLMOmniClient:
                     except aiohttp.ContentTypeError as e:
                         raise RuntimeError(f"Invalid JSON response from vLLM-Omni: {e}")
 
-                    # print("!!!DEBUG: chat completion response", data)
+                    print(
+                        "!!!DEBUG: chat completion response",
+                        pretty_printer.pformat(data),
+                    )
 
                     try:
                         return data["choices"]
@@ -397,12 +410,29 @@ class VLLMOmniClient:
 
         combined_extra_body: dict[str, Any] = {}
         if sampling_params is not None:
-            if (
-                (spec := lookup_model_spec(model)) is None
-                or spec["stages"] == ["diffusion"]
-            ) and (isinstance(sampling_params, dict) or len(sampling_params) == 1):
+            spec, _ = lookup_model_spec(model)
+            is_single_sampling_param = (
+                isinstance(sampling_params, dict) or len(sampling_params) == 1
+            )
+
+            # Exclude internal key
+            if isinstance(sampling_params, dict):
+                sampling_params = {
+                    k: v for k, v in sampling_params.items() if k != "type"
+                }
+            else:
+                sampling_params = [
+                    {k: v for k, v in sp.items() if k != "type"}
+                    for sp in sampling_params
+                ]
+
+            if (spec is None and is_single_sampling_param) or (
+                spec is not None and spec["stages"] == ["diffusion"]
+            ):
                 # Diffusion format: extra_body directly contains sampling params.
-                # Fallback to this mode if model is not registered.
+                # Validation should have taken care of matching sampling params' types.
+                # * Use this mode if the model is a simple one-stage diffusion model.
+                # * Fallback to this mode if model is not registered and a single sampling param is provided.
                 sampling_params = (
                     sampling_params
                     if isinstance(sampling_params, dict)
@@ -432,7 +462,8 @@ class VLLMOmniClient:
         if modalities:
             payload["modalities"] = modalities
 
-        if spec := lookup_model_spec(model):
+        spec, _ = lookup_model_spec(model)
+        if spec:
             preprocessor = spec.get("payload_preprocessor", None)
             if preprocessor is not None:
                 payload = preprocessor(payload)

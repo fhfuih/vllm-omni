@@ -52,8 +52,8 @@ class VLLMOmniGenerateImage(_VLLMOmniGenerateBase):
             },
         }
 
-    RETURN_TYPES = ("IMAGE", "STRING")
-    RETURN_NAMES = ("image", "text_response")
+    RETURN_TYPES = ("IMAGE",)
+    RETURN_NAMES = ("image",)
     FUNCTION = "generate"
 
     async def generate(
@@ -74,15 +74,16 @@ class VLLMOmniGenerateImage(_VLLMOmniGenerateBase):
         print("DEBUG: Uncaught kwargs:", kwargs)
         print("DEBUG: Got sampling params", sampling_params)
         validate_model_and_sampling_params_types(model, sampling_params)
-        if image is None and mask is None:
+        if image is None and mask is not None:
             raise ValueError("Mask input provided without an image input.")
 
         client = VLLMOmniClient(url)
 
-        # Try use DALL-E compatible API first
-        if (spec := lookup_model_spec(model)) is None or spec["stages"] == [
-            "diffusion"
-        ]:
+        spec, pattern = lookup_model_spec(model)
+        is_bagel = pattern is not None and "bagel" in pattern.lower()
+
+        # Prefer DALL-E compatible API for simple (one-stage) diffusion models
+        if (spec is None or spec["stages"] == ["diffusion"]) and not is_bagel:
             sampling_params = cast(dict | None, sampling_params)
             if audio is None and image is None and video is None:
                 # No multimodal input --- use DALL-E image generation

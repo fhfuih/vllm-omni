@@ -1,15 +1,22 @@
 import re
+from re import Pattern
 from typing import (
-    Any,
-    Callable,
-    Dict,
     Optional,
-    Pattern,
-    TypeAlias,
-    TypedDict,
 )
 
-PayloadPreprocessor: TypeAlias = Callable[[dict[str, Any]], dict[str, Any]]
+from .types import Modality, ModelMode, Spec
+
+
+def _bagel_payload_preprocessor(payload: dict) -> dict:
+    try:
+        for message in payload["messages"]:
+            for content in message["content"]:
+                if content["type"] == "text":
+                    content["text"] = "<|im_start|>" + content["text"] + "<|im_end|>"
+    except (KeyError, TypeError):
+        raise RuntimeError("Internal Error: malformatted BAGEL payload")
+    extra_body = payload.pop("extra_body", {})
+    return {**payload, **extra_body}
 
 
 def _qwen25_payload_preprocessor(payload: dict) -> dict:
@@ -24,49 +31,62 @@ def _qwen25_payload_preprocessor(payload: dict) -> dict:
     return payload
 
 
-class Spec(TypedDict):
-    input_modalities: list[str]
-    stages: list[str]
-    extra_fields: Dict[str, Any]
-    payload_preprocessor: Optional[PayloadPreprocessor]
-
-
-MODEL_PIPELINE_SPECS = {
+_MODEL_PIPELINE_SPECS: dict[str, Spec] = {
     r"BAGEL-7B-MoT": {
-        "input_modalities": ["image"],
-        "stages": ["autoregression", "diffusion"],
-        "extra_fields": {
-            "modalities": ["text", "image"],
-        },
+        "stages": [
+            "diffusion"  # The vLLM-Omni interface treats it as a single-stage diffusion model
+        ],
+        "modes": [
+            {
+                "mode": ModelMode.COMPREHENSION,
+                "input_modalities": [Modality.TEXT, Modality.IMAGE],
+            }
+        ],
+        "payload_preprocessor": _bagel_payload_preprocessor,
     },
     r"Qwen2.5-Omni*": {
-        "input_modalities": ["image", "audio", "video"],
         "stages": ["autoregression", "autoregression", "autoregression"],
-        "extra_fields": {
-            "modalities": ["text", "audio"],
-        },
         "payload_preprocessor": _qwen25_payload_preprocessor,
+        "modes": [
+            {
+                "mode": ModelMode.COMPREHENSION,
+                "input_modalities": [
+                    Modality.TEXT,
+                    Modality.IMAGE,
+                    Modality.VIDEO,
+                    Modality.AUDIO,
+                ],
+            }
+        ],
     },
     r"Qwen3-Omni*": {
-        "input_modalities": ["image", "audio", "video"],
         "stages": ["autoregression", "autoregression", "autoregression"],
-        "extra_fields": {
-            "modalities": ["text", "audio"],
-        },
+        "modes": [
+            {
+                "mode": ModelMode.COMPREHENSION,
+                "input_modalities": [
+                    Modality.TEXT,
+                    Modality.IMAGE,
+                    Modality.VIDEO,
+                    Modality.AUDIO,
+                ],
+            }
+        ],
     },
 }
-_MODEL_PIPELINE_SPECS: dict[Pattern, Spec] = {}
-for k, v in MODEL_PIPELINE_SPECS.items():
-    _MODEL_PIPELINE_SPECS[re.compile(k)] = v  # type: ignore
-del MODEL_PIPELINE_SPECS
-MODEL_PIPELINE_SPECS = _MODEL_PIPELINE_SPECS
+# Convert dict keys to regex patterns
+MODEL_PIPELINE_SPECS: dict[Pattern, Spec] = {}
+for k, v in _MODEL_PIPELINE_SPECS.items():
+    MODEL_PIPELINE_SPECS[re.compile(k)] = v
+del _MODEL_PIPELINE_SPECS
 
 
-def lookup_model_spec(model: str) -> Optional[Spec]:
+def lookup_model_spec(model: str) -> tuple[Optional[Spec], Optional[str]]:
     last_component = model.rstrip("/").rsplit("/", 1)[1]
     for pattern, spec in MODEL_PIPELINE_SPECS.items():
         if pattern.search(last_component):
-            return spec
+            return spec, pattern.pattern
+    return None, None
 
 
 # ============== DEMONSTRATION ==============
@@ -86,7 +106,7 @@ if __name__ == "__main__":
 
     print("Testing registry lookups:\n")
     for path in test_paths:
-        spec = lookup_model_spec(path)
+        spec, _ = lookup_model_spec(path)
         if spec:
             if preprocessor := spec.get("payload_preprocessor"):
                 result = preprocessor(test_payload)
