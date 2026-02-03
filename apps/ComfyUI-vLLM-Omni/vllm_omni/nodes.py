@@ -1,22 +1,21 @@
 from typing import cast
 
-# vllm_omni/nodes.py
-import torch
 import numpy as np
+import torch
 from comfy_api.input import AudioInput, VideoInput
 
 from .utils.api_client import VLLMOmniClient
+from .utils.models import lookup_model_spec
 from .utils.validators import (
     add_sampling_parameters_to_stage,
     validate_model_and_sampling_params_types,
 )
-from .utils.models import lookup_model_spec
 
 
 class _VLLMOmniGenerateBase:
     """Base class for vLLM-Omni generation nodes with shared functionality."""
 
-    CATEGORY = "vLLM-Omni/Generate"
+    CATEGORY = "vLLM-Omni"
 
     @classmethod
     def VALIDATE_INPUTS(cls, url, model):

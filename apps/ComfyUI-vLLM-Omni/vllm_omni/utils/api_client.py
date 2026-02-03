@@ -4,16 +4,13 @@ The image generation part is derived from dougbtv/comfyui-vllm-omni by Doug (@do
 Original source at https://github.com/dougbtv/comfyui-vllm-omni, distributed under the MIT License.
 """
 
+from typing import Any, Iterable, Literal, Optional
+
 import aiohttp
 import openai
-from openai.types.chat import ChatCompletionMessageParam
-from typing import Any, Iterable, Literal, Optional
-from comfy_api.input import AudioInput, VideoInput
-
 import torch
-
-
-from .models import lookup_model_spec
+from comfy_api.input import AudioInput, VideoInput
+from openai.types.chat import ChatCompletionMessageParam
 
 from .format import (
     audio_to_base64,
@@ -23,8 +20,8 @@ from .format import (
     image_tensor_to_png_bytes,
     video_to_base64,
 )
-
 from .log import pretty_printer
+from .models import lookup_model_spec
 
 
 class VLLMOmniClient:

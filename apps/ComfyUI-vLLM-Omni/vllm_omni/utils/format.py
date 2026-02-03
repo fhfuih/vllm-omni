@@ -5,17 +5,16 @@ Original source at https://github.com/dougbtv/comfyui-vllm-omni, distributed und
 """
 
 import base64
-from io import BytesIO
 import mimetypes
+from io import BytesIO
 
 import av
 import numpy as np
 import torch
-from PIL import Image
 import torchaudio
-
 from comfy_api.input import AudioInput, VideoInput
 from comfy_extras import nodes_audio
+from PIL import Image
 
 
 def base64_to_image_tensor(base64_str: str, mode: str = "RGB") -> torch.Tensor:

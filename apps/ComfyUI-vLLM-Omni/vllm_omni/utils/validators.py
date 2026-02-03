@@ -52,7 +52,9 @@ def add_sampling_parameters_to_stage(
     /,
     **params_to_add,
 ) -> dict | list[dict]:
-    """Given a model's name and the sampling parameter list to query this model, add arbitrary additional parameters to the sampling parameters of all stages of the given type."""
+    """
+    Given a model's name and the sampling parameter list to query this model, add arbitrary additional parameters to the sampling parameters of all stages of the given type.
+    """
     pipeline_spec, _ = lookup_model_spec(model_name)
     if not pipeline_spec:
         print(
