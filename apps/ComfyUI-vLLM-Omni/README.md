@@ -37,7 +37,8 @@ On the device and virtual environment you run vLLM-Omni, start a model service w
 vllm serve The_Model_ID_to_Serve --omni --port 8000
 ```
 
-Find the nodes in **ComfyUI's sidebar -> Node Library -> vLLM-Omni**.
+Check **ComfyUI's sidebar -> Node Library**. There should be a new folder named **vLLM-Omni**.
+If no, check your shell running the ComfyUI process. There may be some error messages before the line `Import times for custom nodes:` and the line `To see the GUI go to: http://127.0.0.1:8188`.
 
 ## Quickstart
 
@@ -56,8 +57,40 @@ To build a simple workflow,
 * Depending on your need, grab built-in multimedia file preview nodes, such as **image->Preview Image**, **image->video->Save Video**, **audio->Preview Audio**. For text output, you can install [ComfyUI-Custom-Scripts plugin](https://github.com/pythongosssss/ComfyUI-Custom-Scripts/) and grab its **utils->Show Text 🐍** node.
 * If you want to tune sampling parameters, grab corresponding nodes from **vLLM-Omni-> Sampling Params**.
     * For multi-stage models, you can connect multiple **AR Sampling Params** and **Diffusion Sampling Params** nodes to a **Multi-Stage Sampling Params List** node, and connect this node to the generation node.
-    * For some multi-stage models like BAGEL, only one stage's sampling parameters are exposed and tunable via vLLM-Omni's online serving API. Thus, these models are treated as single-stage ones. Please check the vLLM-Omni documentation on how to use correctly set each model's sampling parameters.
+    * For some multi-stage models like BAGEL, [only one stage's sampling parameters are exposed and tunable via vLLM-Omni's online serving API](https://docs.vllm.ai/projects/vllm-omni/en/latest/user_guide/examples/online_serving/bagel/). Thus, these models are treated as single-stage ones. Please check the vLLM-Omni documentation on how to use correctly set each model's sampling parameters.
+    * For multi-stage models where all stages are either autoregression or diffusion, you can also connect only a single Sampling Params node, indicating that this set of sampling parameters will be used for all stages.
+
 
 ## Develop
 
 Follow the [development convention and rules of vLLM-Omni](https://docs.vllm.ai/projects/vllm-omni/en/latest/contributing/).
+
+## Limitation and Non-Goals
+
+* Single server mode only. No automatic load balancing or failover.
+* Features set is bounded to vLLM-Omni's online service capability, including
+    * The types of models supported in online mode,
+    * The types of sampling parameters supported in the online mode,
+    * The ways to send files (primarily through full-length base64 in JSON payload),
+    * (The lack of) Authentication
+    * (The lack of) Progress indicator
+
+## Support
+
+If you are new to ComfyUI, please check out [its documentation](https://docs.comfy.org/) for usage instructions.
+
+If you are new to vLLM-Omni, please also check out [its documentation](https://docs.vllm.ai/projects/vllm-omni/en/latest/) for usage instructions.
+
+Whenever you find an issue or problem, please
+* First find out if this is an upstream limitation of vLLM-Omni's online serving mode, by [checking their documentation](https://docs.vllm.ai/projects/vllm-omni/en/latest/examples/).
+* [Open an issue](https://github.com/vllm-project/vllm-omni/issues) that clearly describes this ComfyUI or online service problem.
+
+## Acknowledgements
+
+Features
+* https://github.com/dougbtv/comfyui-vllm-omni/ The official reference implementation for ComfyUI integration with vLLM-Omni's DALL-E compatible image generation API.
+* https://github.com/Comfy-Org/ComfyUI/tree/master/comfy_extras ComfyUI's built-in node implementations.
+
+UI/UX design references
+* https://github.com/sgl-project/sglang/pull/15271 SGLang Diffusion's official ComfyUI integration for image and video generation.
+* https://github.com/SXQBW/ComfyUI-Qwen-Omni A third party ComfyUI integration for Qwen-Omni series.
