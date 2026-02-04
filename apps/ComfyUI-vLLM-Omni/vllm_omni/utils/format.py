@@ -11,7 +11,6 @@ from io import BytesIO
 import av
 import numpy as np
 import torch
-import torchaudio
 from comfy_api.input import AudioInput, VideoInput
 from comfy_extras import nodes_audio
 from PIL import Image
@@ -206,6 +205,20 @@ def audio_to_base64(
     return f"data:{mime_type};base64,{base64_str}"
 
 
+def bytes_to_audio(audio_bytes: bytes) -> AudioInput:
+    """
+    Convert audio bytes to ComfyUI audio tensor.
+
+    Args:
+        audio_bytes: Audio file bytes
+    Returns:
+        torch.Tensor with shape (B, C, T) in float32 range [-1, 1]
+    """
+    audio_buffer = BytesIO(audio_bytes)
+    waveform, sample_rate = nodes_audio.load(audio_buffer)  # type: ignore # Although expect string argument, it calls av.open underneath, which supports BytesIO (file-like)
+    return {"waveform": waveform.unsqueeze(0), "sample_rate": sample_rate}
+
+
 def base64_to_audio(base64_str: str) -> AudioInput:
     """
     Convert base64-encoded audio to ComfyUI audio tensor.
@@ -228,13 +241,4 @@ def base64_to_audio(base64_str: str) -> AudioInput:
         f.write(audio_bytes)
         print("wrote test-audio-output.wav for debugging")
 
-    audio_buffer = BytesIO(audio_bytes)
-    waveform, sample_rate = nodes_audio.load(audio_buffer)  # type: ignore # Although expect string argument, it calls av.open underneath, which supports BytesIO (file-like)
-    return {"waveform": waveform.unsqueeze(0), "sample_rate": sample_rate}
-    with av.open(audio_buffer) as af:
-        if not af.streams.audio:
-            raise RuntimeError("No audio stream found in the file.")
-    audio_tensor, _ = torchaudio.load_with_torchcodec(
-        audio_buffer, channels_first=True
-    )  # [C, T]
-    return audio_tensor.unsqueeze(0)
+    return bytes_to_audio(audio_bytes)

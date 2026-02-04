@@ -14,32 +14,39 @@ from .vllm_omni.nodes import (
     VLLMOmniARSampling,
     VLLMOmniComprehension,
     VLLMOmniDiffusionSampling,
-    VLLMOmniGenerateAudio,
     VLLMOmniGenerateImage,
-    VLLMOmniGenerateVideo,
+    VLLMOmniQwenTTSParams,
     VLLMOmniSamplingParamsList,
+    VLLMOmniTTS,
+    VLLMOmniVoiceClone,
 )
 
 # A dictionary that contains all nodes you want to export with their names
 NODE_CLASS_MAPPINGS = {
+    # === Generation ===
     "VLLMOmniGenerateImage": VLLMOmniGenerateImage,
     "VLLMOmniComprehension": VLLMOmniComprehension,
-    "VLLMOmniGenerateVideo": VLLMOmniGenerateVideo,
-    "VLLMOmniGenerateAudio": VLLMOmniGenerateAudio,
+    "VLLMOmniTTS": VLLMOmniTTS,
+    "VLLMOmniVoiceClone": VLLMOmniVoiceClone,
+    # === Params ===
     "VLLMOmniARSampling": VLLMOmniARSampling,
     "VLLMOmniDiffusionSampling": VLLMOmniDiffusionSampling,
     "VLLMOmniSamplingParamsList": VLLMOmniSamplingParamsList,
+    "VLLMOmniQwenTTSParams": VLLMOmniQwenTTSParams,
 }
 
 # A dictionary that contains the friendly/humanly readable titles for the nodes
 NODE_DISPLAY_NAME_MAPPINGS = {
+    # === Generation ===
     "VLLMOmniGenerateImage": "Generate Image",
     "VLLMOmniComprehension": "Multimodality Comprehension",
-    "VLLMOmniGenerateVideo": "Generate Video",
-    "VLLMOmniGenerateAudio": "Generate Audio",
+    "VLLMOmniTTS": "TTS (Text to Speech)",
+    "VLLMOmniVoiceClone": "TTS Voice Cloning",
+    # === Params ===
     "VLLMOmniARSampling": "AR Sampling Params",
     "VLLMOmniDiffusionSampling": "Diffusion Sampling Params",
     "VLLMOmniSamplingParamsList": "Multi-Stage Sampling Params List",
+    "VLLMOmniQwenTTSParams": "Qwen TTS Params",
 }
 
 WEB_DIRECTORY = "./web"

@@ -6,10 +6,16 @@ from comfy_api.input import AudioInput, VideoInput
 
 from .utils.api_client import VLLMOmniClient
 from .utils.models import lookup_model_spec
+from .utils.types import AudioFormat
 from .utils.validators import (
     add_sampling_parameters_to_stage,
     validate_model_and_sampling_params_types,
 )
+
+
+class ContainsAnyDict(dict):
+    def __contains__(self, key):
+        return True
 
 
 class _VLLMOmniGenerateBase:
@@ -298,62 +304,139 @@ class VLLMOmniGenerateVideo(_VLLMOmniGenerateBase):
         return (video_tensor, text_response)
 
 
-class VLLMOmniGenerateAudio(_VLLMOmniGenerateBase):
+class VLLMOmniTTS(_VLLMOmniGenerateBase):
     @classmethod
     def INPUT_TYPES(cls):
         return {
             "required": {
                 "url": ("STRING", {"default": "http://localhost:8000/v1"}),
-                "model": ("STRING", {"default": "stabilityai/stable-audio-open-1.0"}),
-                "prompt": ("STRING", {"multiline": True}),
-                "negative_prompt": ("STRING", {"multiline": True, "default": ""}),
-                "sampling_params": ("SAMPLING_PARAMS",),
+                "model": (
+                    "STRING",
+                    {"default": "Qwen/Qwen3-TTS-12Hz-1.7B-CustomVoice"},
+                ),
+                "input": ("STRING", {"multiline": True}),
+                "voice": ("STRING", {"default": "Vivian"}),
+                "response_format": (["mp3", "opus", "aac", "flac", "wav", "pcm"],),
+                "speed": (
+                    "FLOAT",
+                    {"default": 1.0, "min": 0.25, "max": 4.0, "step": 0.01},
+                ),
             },
             "optional": {
-                "image": ("IMAGE",),
-                "audio": ("AUDIO",),
-                "video": ("VIDEO",),
+                "model_specific_params": ("TTS_PARAMS",),
             },
         }
 
-    RETURN_TYPES = ("AUDIO", "STRING")
-    RETURN_NAMES = ("audio", "text_response")
+    RETURN_TYPES = ("AUDIO",)
+    RETURN_NAMES = ("audio",)
     FUNCTION = "generate"
 
-    def generate(
+    async def generate(
         self,
-        url,
-        model,
-        prompt,
-        negative_prompt,
-        sampling_params,
-        image=None,
-        audio=None,
-        video=None,
-    ):
-        raise NotImplementedError()
+        url: str,
+        model: str,
+        input: str,
+        voice: str,
+        response_format: AudioFormat,
+        speed: float,
+        model_specific_params: dict | None,
+        **kwargs,
+    ) -> tuple[AudioInput]:
+        print("!!!DEBUG Got extra kwargs in TTS", kwargs)
+
+        is_qwen_tts = "qwen3-tts" in model.lower()
+        extra_params_type = (
+            None if model_specific_params is None else model_specific_params["type"]
+        )
+        if not is_qwen_tts and extra_params_type == "qwen-tts":
+            raise ValueError(
+                "You have provided Qwen-specific TTS params."
+                "However, the model appears to not be a Qwen TTS model (no 'Qwen3-TTS' in model name)."
+            )
+
+        combined_params = {**kwargs, **(model_specific_params or {})}
+        combined_params.pop("type", None)  # Internal fields in model_specific_params
+
         client = VLLMOmniClient(url)
 
-        payload = self._validate_and_prepare_chat_completion_payload(
-            model,
-            prompt,
-            negative_prompt,
-            sampling_params,
-            image=image,
-            audio=audio,
-            video=video,
+        audio = await client.generate_speech(
+            model, input, voice, response_format, speed, **combined_params
         )
+        print("!!!DEBUG Generated audio:", audio)
+        return (audio,)
 
-        response = client.generate_audio(payload)
-        audio_data = response.get("audio", None)
-        text_response = response.get("text", "")
 
-        if audio_data is None:
-            raise RuntimeError("Failed to generate audio")
+class VLLMOmniVoiceClone(_VLLMOmniGenerateBase):
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "url": ("STRING", {"default": "http://localhost:8000/v1"}),
+                "model": ("STRING", {"default": "Qwen/Qwen3-TTS-12Hz-1.7B-Base"}),
+                "input": ("STRING", {"multiline": True}),
+                "voice": ("STRING", {"default": "Vivian"}),
+                "response_format": (["mp3", "opus", "aac", "flac", "wav", "pcm"],),
+                "speed": (
+                    "FLOAT",
+                    {"default": 1.0, "min": 0.25, "max": 4.0, "step": 0.01},
+                ),
+                "ref_audio": ("AUDIO",),
+                "ref_text": ("STRING", {"multiline": True}),
+                "x_vector_only_mode": ("BOOLEAN", {"default": False}),
+            },
+            "optional": {
+                "model_specific_params": ("TTS_PARAMS",),
+            },
+        }
 
-        # 转换为 ComfyUI 音频格式
-        audio_tensor = torch.from_numpy(np.array(audio_data).astype(np.float32))
-        return (audio_tensor, text_response)
+    RETURN_TYPES = ("AUDIO",)
+    RETURN_NAMES = ("audio",)
+    FUNCTION = "generate"
+
+    async def generate(
+        self,
+        url: str,
+        model: str,
+        input: str,
+        voice: str,
+        response_format: AudioFormat,
+        speed: float,
+        ref_audio: AudioInput,
+        ref_text: str,
+        x_vector_only_mode: bool,
+        model_specific_params: dict | None,
+        **kwargs,
+    ):
+        is_qwen_tts = "qwen3-tts" in model.lower()
+        extra_params_type = (
+            None if model_specific_params is None else model_specific_params["type"]
+        )
+        if not is_qwen_tts and extra_params_type == "qwen-tts":
+            raise ValueError(
+                "You have provided Qwen-specific TTS params."
+                "However, the model appears to not be a Qwen TTS model (no 'Qwen3-TTS' in model name)."
+            )
+
+        combined_params = {
+            "ref_audio": ref_audio,
+            "ref_text": ref_text,
+            "x_vector_only_mode": x_vector_only_mode,
+            **kwargs,
+            **(model_specific_params or {}),
+        }
+        combined_params.pop("type", None)  # Internal fields in model_specific_params
+
+        client = VLLMOmniClient(url)
+
+        audio = await client.generate_speech(
+            model,
+            input,
+            voice,
+            response_format,
+            speed,
+            **combined_params,
+        )
+        return (audio,)
 
 
 class VLLMOmniARSampling:
@@ -483,3 +566,30 @@ class VLLMOmniSamplingParamsList:
         if param3 is not None:
             params.append(param3)
         return (params,)
+
+
+class VLLMOmniQwenTTSParams:
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "task_type": (
+                    ["CustomVoice", "VoiceDesign", "Base"],
+                    {"default": "CustomVoice"},
+                ),
+                "language": (
+                    ["Auto", "Chinese", "English", "Japanese", "Korean"],
+                    {"default": "Auto"},
+                ),
+                "instructions": ("STRING", {"multiline": True}),
+                "max_new_tokens": ("INT", {"default": 2048, "min": 1}),
+            }
+        }
+
+    RETURN_TYPES = ("TTS_PARAMS",)
+    RETURN_NAMES = ("Qwen TTS params",)
+    FUNCTION = "get_params"
+    CATEGORY = "vLLM-Omni/TTS Params"
+
+    def get_params(self, **kwargs):
+        return ({"type": "qwen-tts", **kwargs},)

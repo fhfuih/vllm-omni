@@ -7,6 +7,7 @@ Original source at https://github.com/dougbtv/comfyui-vllm-omni, distributed und
 from typing import Any, Iterable, Literal, Optional
 
 import aiohttp
+import av.error
 import openai
 import torch
 from comfy_api.input import AudioInput, VideoInput
@@ -16,12 +17,14 @@ from .format import (
     audio_to_base64,
     base64_to_audio,
     base64_to_image_tensor,
+    bytes_to_audio,
     image_tensor_to_base64,
     image_tensor_to_png_bytes,
     video_to_base64,
 )
 from .log import pretty_printer
 from .models import lookup_model_spec
+from .types import AudioFormat
 
 
 class VLLMOmniClient:
@@ -302,29 +305,59 @@ class VLLMOmniClient:
         except Exception as e:
             raise RuntimeError(f"Failed to generate video: {str(e)}")
 
-    def generate_audio(
+    async def generate_speech(
         self,
         model: str,
-        messages: Iterable[ChatCompletionMessageParam],
-        modalities: Optional[list[Literal["text", "audio"]]] | openai.Omit = None,
-        extra_body: Optional[dict[str, Any]] = None,
-    ) -> dict[str, Any]:
+        prompt: str,
+        voice: str,
+        response_format: AudioFormat,
+        speed: float,
+        **extra_params,
+    ) -> AudioInput:
         if not self._check_model_exist(model):
             raise ValueError(f"Model {model} does not exist.")
 
-        try:
-            response = self.client.chat.completions.create(
-                model=model,
-                messages=messages,
-                modalities=modalities,
-                extra_body=extra_body,
-            )
-            return {
-                "audio": response.choices[0].message.audio,
-                "text": response.choices[0].message.content,
-            }
-        except Exception as e:
-            raise RuntimeError(f"Failed to generate audio: {str(e)}")
+        payload = {
+            "model": model,
+            "input": prompt,
+            "voice": voice,
+            "response_format": response_format,
+            "speed": speed,
+            **extra_params,
+        }
+
+        url = self.base_url + "/audio/speech"
+        async with aiohttp.ClientSession(timeout=self.timeout) as session:
+            try:
+                async with session.post(
+                    url,
+                    json=payload,
+                    headers={"Content-Type": "application/json"},
+                ) as response:
+                    if not response.ok:
+                        error_text = await response.text()
+                        raise (ValueError if response.status < 500 else RuntimeError)(
+                            f"vLLM-Omni API returned status {response.status}: {error_text}"
+                        )
+
+                    try:
+                        audio_bytes = await response.read()
+                    except aiohttp.ContentTypeError as e:
+                        raise RuntimeError(f"Invalid JSON response from vLLM-Omni: {e}")
+
+                    try:
+                        audio = bytes_to_audio(audio_bytes)
+                    except av.error.InvalidDataError as e:
+                        raise ValueError(
+                            f"Invalid audio data received from vLLM-Omni: {e}"
+                            "Check if you have input unsupported arguments (such as 'voice')"
+                        )
+                    return audio
+
+            except aiohttp.ClientError as e:
+                raise RuntimeError(
+                    f"Network error connecting to vLLM-Omni at {url}: {e}"
+                )
 
     async def _generate_base_chat_completion(
         self, model: str, payload: dict[str, Any]

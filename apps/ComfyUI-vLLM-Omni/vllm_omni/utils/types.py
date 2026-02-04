@@ -8,6 +8,8 @@ from typing import (
     TypedDict,
 )
 
+AudioFormat: TypeAlias = Literal["mp3", "opus", "aac", "flac", "wav", "pcm"]
+
 
 class ModelMode(Enum):
     IMAGE_GENERATION = auto()
