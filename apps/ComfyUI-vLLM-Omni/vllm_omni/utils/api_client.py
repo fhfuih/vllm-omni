@@ -317,6 +317,8 @@ class VLLMOmniClient:
         if not self._check_model_exist(model):
             raise ValueError(f"Model {model} does not exist.")
 
+        ref_audio: AudioInput | None = extra_params.pop("ref_audio", None)
+
         payload = {
             "model": model,
             "input": prompt,
@@ -325,6 +327,12 @@ class VLLMOmniClient:
             "speed": speed,
             **extra_params,
         }
+
+        if ref_audio is not None:
+            audio_base64 = audio_to_base64(ref_audio)
+            payload["ref_audio"] = audio_base64
+
+        print("!!!DEBUG: Omni TTS payload", pretty_printer.pformat(payload))
 
         url = self.base_url + "/audio/speech"
         async with aiohttp.ClientSession(timeout=self.timeout) as session:
