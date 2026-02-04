@@ -93,4 +93,5 @@ Features
 
 UI/UX design references
 * https://github.com/sgl-project/sglang/pull/15271 SGLang Diffusion's official ComfyUI integration for image and video generation.
-* https://github.com/SXQBW/ComfyUI-Qwen-Omni A third party ComfyUI integration for Qwen-Omni series.
+* https://github.com/SXQBW/ComfyUI-Qwen-Omni A third party ComfyUI integration for Qwen Omni series.
+* https://github.com/flybirdxx/ComfyUI-Qwen-TTS https://github.com/DarioFT/ComfyUI-Qwen3-TTS Tthird party ComfyUI integrations for Qwen TTS series.
