@@ -1,9 +1,10 @@
 # vLLM-Omni
 
-ComfyUI integration for vLLM-Omni
+vLLM-Omni offers a ComfyUI integration on top of its online serving API.
+It can send model inference requests to either a locally running vLLM-Omni service or a remote one.
 
 ## Requirement
-* Python 3.12
+* Python 3.12 or above
 * [ComfyUI installed](https://docs.comfy.org/installation/system_requirements)
 * [vLLM-Omni installed](https://docs.vllm.ai/projects/vllm-omni/en/latest/getting_started/installation/) on either the same device or another device discoverable via the internet.
 * No need to install additional packages apart from those already required by ComfyUI.
@@ -72,6 +73,7 @@ Follow the [development convention and rules of vLLM-Omni](https://docs.vllm.ai/
     * The types of models supported in online mode,
     * The types of sampling parameters supported in the online mode,
     * The ways to send files (primarily through full-length base64 in JSON payload),
+    * Figuring out errors in the payload (such as unsupported fields by a specific model) if the endpoint does explicitly return error,
     * (The lack of) Authentication
     * (The lack of) Progress indicator
 
