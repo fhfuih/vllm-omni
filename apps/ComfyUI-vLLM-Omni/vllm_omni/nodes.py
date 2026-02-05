@@ -393,14 +393,6 @@ class VLLMOmniARSampling:
     def INPUT_TYPES(cls):
         return {
             "required": {
-                "seed": (
-                    "INT",
-                    {
-                        "default": -1,
-                        "min": -1,
-                        "tooltip": "-1 means to not provide a seed.",
-                    },
-                ),
                 "max_tokens": ("INT", {"default": 100, "min": 1, "max": 10000}),
                 "temperature": (
                     "FLOAT",
@@ -414,25 +406,7 @@ class VLLMOmniARSampling:
                     "FLOAT",
                     {"default": 1.0, "min": 0.0, "max": 5.0, "step": 0.01},
                 ),
-            }
-        }
-
-    RETURN_TYPES = ("SAMPLING_PARAMS",)
-    RETURN_NAMES = ("AR sampling params",)
-    FUNCTION = "get_params"
-    CATEGORY = "vLLM-Omni/Sampling Params"
-
-    def get_params(self, seed, **kwargs):
-        return (
-            {"type": "autoregression", "seed": seed if seed >= 0 else None, **kwargs},
-        )
-
-
-class VLLMOmniDiffusionSampling:
-    @classmethod
-    def INPUT_TYPES(cls):
-        return {
-            "required": {
+                # === Put seed at last. Whenever a field named "seed" is present, ComfyUI adds another field called "control after generate" ===
                 "seed": (
                     "INT",
                     {
@@ -442,6 +416,29 @@ class VLLMOmniDiffusionSampling:
                         "tooltip": "-1 means to not provide a seed.",
                     },
                 ),
+            }
+        }
+
+    RETURN_TYPES = ("SAMPLING_PARAMS",)
+    RETURN_NAMES = ("AR sampling params",)
+    FUNCTION = "get_params"
+    CATEGORY = "vLLM-Omni/Sampling Params"
+
+    def get_params(self, seed, **kwargs):
+        params = {
+            "type": "autoregression",  # for internal use, removed before sending the request
+            **kwargs,
+        }
+        if seed >= 0:
+            params["seed"] = seed
+        return (params,)
+
+
+class VLLMOmniDiffusionSampling:
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
                 "n": (
                     "INT",
                     {
@@ -488,6 +485,16 @@ class VLLMOmniDiffusionSampling:
                         "tooltip": "Enable VAE slicing for reduced memory usage (slight quality trade-off)",
                     },
                 ),
+                # === Put seed at last. Whenever a field named "seed" is present, ComfyUI adds another field called "control after generate" ===
+                "seed": (
+                    "INT",
+                    {
+                        "default": -1,
+                        "min": -1,
+                        "step": 1,
+                        "tooltip": "-1 means to not provide a seed.",
+                    },
+                ),
             }
         }
 
@@ -497,7 +504,13 @@ class VLLMOmniDiffusionSampling:
     CATEGORY = "vLLM-Omni/Sampling Params"
 
     def get_params(self, seed, **kwargs):
-        return ({"type": "diffusion", "seed": seed if seed >= 0 else None, **kwargs},)
+        params = {
+            "type": "diffusion",  # for internal use, removed before sending the request
+            **kwargs,
+        }
+        if seed >= 0:
+            params["seed"] = seed
+        return (params,)
 
 
 class VLLMOmniSamplingParamsList:

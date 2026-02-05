@@ -63,10 +63,8 @@ class VLLMOmniClient:
                 "true_cfg_scale",
                 "vae_use_slicing",
             ):
-                if k in sampling_params:
+                if k in sampling_params and sampling_params[k] is not None:
                     payload[k] = sampling_params[k]
-            if sampling_params.get("seed", 0) != 0:
-                payload["seed"] = sampling_params["seed"]
         logger.debug("img gen payload: %s", payload)
 
         url = self.base_url + "/images/generations"
@@ -148,10 +146,8 @@ class VLLMOmniClient:
         if sampling_params is not None:
             # Only select specific sampling params
             for k in ("n", "num_inference_steps", "guidance_scale", "true_cfg_scale"):
-                if k in sampling_params:
+                if k in sampling_params and sampling_params[k] is not None:
                     form.add_field(k, str(sampling_params[k]))
-            if sampling_params.get("seed", 0) != 0:
-                form.add_field("seed", str(sampling_params["seed"]))
         if mask is not None:
             mask_filename = "mask.png"
             form.add_field(
