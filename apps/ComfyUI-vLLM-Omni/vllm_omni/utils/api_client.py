@@ -20,8 +20,7 @@ from .format import (
     image_tensor_to_png_bytes,
     video_to_base64,
 )
-from .logger import pretty_printer
-from .logger import get_logger
+from .logger import get_logger, pretty_printer
 from .models import lookup_model_spec
 from .types import AudioFormat
 
@@ -107,7 +106,9 @@ class VLLMOmniClient:
                         logger.debug("Image #%d has shape %s", idx, tensor.shape)
 
                     batch_tensor = torch.stack(image_tensors, dim=0)
-                    logger.debug("batch_tensor output has shape: %s", batch_tensor.shape)
+                    logger.debug(
+                        "batch_tensor output has shape: %s", batch_tensor.shape
+                    )
                     return batch_tensor
 
             except aiohttp.ClientError as e:
@@ -278,9 +279,9 @@ class VLLMOmniClient:
             audio = base64_to_audio(audio_base64)
             logger.debug(
                 "audio sample rate %d, audio shape %s, duration in second %f",
-                audio['sample_rate'],
-                audio['waveform'].shape,
-                audio['waveform'].shape[2] / audio['sample_rate']
+                audio["sample_rate"],
+                audio["waveform"].shape,
+                audio["waveform"].shape[2] / audio["sample_rate"],
             )
         else:
             audio = None
@@ -417,7 +418,6 @@ class VLLMOmniClient:
                 )
         try:
             model_list = data["data"]
-            logger.debug("model list: %s", model_list)
             model_found = next((True for m in model_list if m["id"] == model), False)
         except (KeyError, TypeError):
             raise RuntimeError(

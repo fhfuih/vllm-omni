@@ -1,43 +1,44 @@
 """Centralized logger configuration for vLLM-Omni ComfyUI."""
 
 import logging
-import sys
 import pprint
+import sys
 from typing import Any
+
 
 def get_logger(name: str) -> logging.Logger:
     """
     Get or create a logger with proper formatting.
-    
+
     Args:
         name: Logger name (typically __name__ of the calling module)
-    
+
     Returns:
         Configured logger instance
     """
     logger = logging.getLogger(name)
-    
+
     # Only configure if not already configured
     if not logger.handlers:
-        logger.setLevel(logging.INFO)
-        
+        logger.setLevel(logging.DEBUG)
+
         # Create console handler
         handler = logging.StreamHandler(sys.stdout)
         handler.setLevel(logging.INFO)
-        
+
         # Create formatter
         formatter = logging.Formatter(
-            fmt='[%(asctime)s] [%(name)s] [%(levelname)s] %(message)s',
-            datefmt='%Y-%m-%d %H:%M:%S'
+            fmt="(ComfyUI-vLLM-Omni) [%(levelname)s] %(asctime)s [%(filename)s:%(lineno)s] %(message)s",
+            datefmt="%Y-%m-%d %H:%M:%S",
         )
         handler.setFormatter(formatter)
-        
+
         # Add handler to logger
         logger.addHandler(handler)
-        
+
         # Prevent propagation to root logger
         logger.propagate = False
-    
+
     return logger
 
 

@@ -78,7 +78,7 @@ class VLLMOmniGenerateImage(_VLLMOmniGenerateBase):
         sampling_params: dict | list[dict] | None = None,
         **kwargs,
     ):
-        logger.debug("Uncaught kwargs: %s", kwargs)
+        logger.info("Uncaught kwargs: %s", kwargs)
         logger.debug("Got sampling params: %s", sampling_params)
         validate_model_and_sampling_params_types(model, sampling_params)
         if image is None and mask is not None:
@@ -94,7 +94,7 @@ class VLLMOmniGenerateImage(_VLLMOmniGenerateBase):
             sampling_params = cast(dict | None, sampling_params)
             if audio is None and image is None and video is None:
                 # No multimodal input --- use DALL-E image generation
-                logger.debug("Using DALL-E image generation endpoint")
+                logger.info("Using DALL-E image generation endpoint")
                 output = await client.generate_image(
                     model=model,
                     prompt=prompt,
@@ -106,7 +106,7 @@ class VLLMOmniGenerateImage(_VLLMOmniGenerateBase):
                 return (output,)
             elif image is not None and audio is None and video is None:
                 # Image and text input --- use DALL-E image edit
-                logger.debug("Using DALL-E image edit endpoint")
+                logger.info("Using DALL-E image edit endpoint")
                 output = await client.edit_image(
                     model=model,
                     prompt=prompt,
@@ -119,7 +119,7 @@ class VLLMOmniGenerateImage(_VLLMOmniGenerateBase):
                 )
                 return (output,)
 
-        logger.debug("Using chat completion endpoint")
+        logger.info("Using chat completion endpoint")
         sampling_params = add_sampling_parameters_to_stage(
             model, sampling_params, "diffusion", width=width, height=height
         )
@@ -183,7 +183,7 @@ class VLLMOmniComprehension(_VLLMOmniGenerateBase):
         use_audio_in_video: bool = True,
         **kwargs,
     ) -> tuple[str, AudioInput]:
-        logger.debug("Uncaught kwargs: %s", kwargs)
+        logger.info("Uncaught kwargs: %s", kwargs)
         logger.debug("Got sampling params: %s", sampling_params)
         validate_model_and_sampling_params_types(model, sampling_params)
 
@@ -287,7 +287,7 @@ class VLLMOmniTTS(_VLLMOmniGenerateBase):
         model_specific_params: dict | None,
         **kwargs,
     ) -> tuple[AudioInput]:
-        logger.debug("Got extra kwargs in TTS: %s", kwargs)
+        logger.info("Got extra kwargs in TTS: %s", kwargs)
 
         is_qwen_tts = "qwen3-tts" in model.lower()
         extra_params_type = (
@@ -312,7 +312,6 @@ class VLLMOmniTTS(_VLLMOmniGenerateBase):
             speed=speed,
             **combined_params,
         )
-        logger.debug("Generated audio: %s", audio)
         return (audio,)
 
 
@@ -523,7 +522,6 @@ class VLLMOmniSamplingParamsList:
         self, param1: dict, param2: dict | None = None, param3: dict | None = None
     ):
         for i, p in enumerate((param1, param2, param3)):
-            logger.debug("Param %d is %s", i, p)
             if isinstance(p, list):
                 raise ValueError(
                     f"Input {i} is a Multi-Stage Sampling Params List. Expected a single sampling parameters node (either AR or Diffusion)."

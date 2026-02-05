@@ -15,10 +15,9 @@ def validate_model_and_sampling_params_types(
     # Skip if no spec or no sampling params
     pipeline_spec, _ = lookup_model_spec(model_name)
     if pipeline_spec is None:
-        logger.debug("skipping sampling params check because spec is not found")
+        logger.info("skipping sampling params check because spec is not found")
         return
     if sampling_param_list is None:
-        logger.debug("skipping sampling params check because it is None")
         return
 
     # Check the number of stages and their data types
@@ -60,7 +59,7 @@ def add_sampling_parameters_to_stage(
     """
     pipeline_spec, _ = lookup_model_spec(model_name)
     if not pipeline_spec:
-        logger.info(
+        logger.warn(
             f"Since the model {model_name} is not in our list, we cannot ensure if the fields ({tuple(params_to_add.keys())}) are added to the correct stage's sampling params. We will do it heuristiclly."
         )
         pipeline_spec = {"stages": ["diffusion"]}

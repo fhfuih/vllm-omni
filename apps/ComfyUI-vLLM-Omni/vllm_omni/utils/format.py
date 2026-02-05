@@ -241,8 +241,4 @@ def base64_to_audio(base64_str: str) -> AudioInput:
     except Exception as e:
         raise ValueError(f"Invalid base64 string: {e}")
 
-    with open("test-audio-output.wav", "wb") as f:
-        f.write(audio_bytes)
-        logger.debug("wrote test-audio-output.wav for debugging")
-
     return bytes_to_audio(audio_bytes)
