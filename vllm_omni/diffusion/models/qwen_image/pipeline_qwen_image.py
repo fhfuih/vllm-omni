@@ -534,51 +534,68 @@ class QwenImagePipeline(nn.Module, QwenImageCFGParallelMixin):
     def interrupt(self):
         return self._interrupt
 
-    def forward(
-        self,
-        req: OmniDiffusionRequest,
-        prompt: str | list[str] | None = None,
-        negative_prompt: str | list[str] | None = None,
-        true_cfg_scale: float = 4.0,
-        height: int | None = None,
-        width: int | None = None,
-        num_inference_steps: int = 50,
-        sigmas: list[float] | None = None,
-        guidance_scale: float = 1.0,
-        num_images_per_prompt: int = 1,
-        generator: torch.Generator | list[torch.Generator] | None = None,
-        latents: torch.Tensor | None = None,
-        prompt_embeds: torch.Tensor | None = None,
-        prompt_embeds_mask: torch.Tensor | None = None,
-        negative_prompt_embeds: torch.Tensor | None = None,
-        negative_prompt_embeds_mask: torch.Tensor | None = None,
-        output_type: str | None = "pil",
-        attention_kwargs: dict[str, Any] | None = None,
-        callback_on_step_end_tensor_inputs: list[str] = ["latents"],
-        max_sequence_length: int = 512,
-    ) -> DiffusionOutput:
+    def forward(self, req: OmniDiffusionRequest) -> DiffusionOutput:
         # TODO: In online mode, sometimes it receives [{"negative_prompt": None}, {...}], so cannot use .get("...", "")
         # TODO: May be some data formatting operations on the API side. Hack for now.
-        prompt = [p if isinstance(p, str) else (p.get("prompt") or "") for p in req.prompts] or prompt
+        prompt = [p if isinstance(p, str) else (p.get("prompt") or "") for p in req.prompts]
         if all(isinstance(p, str) or p.get("negative_prompt") is None for p in req.prompts):
             negative_prompt = None
         elif req.prompts:
             negative_prompt = ["" if isinstance(p, str) else (p.get("negative_prompt") or "") for p in req.prompts]
 
+        req_prompt_embeds = [p.get("prompt_embeds") if not isinstance(p, str) else None for p in req.prompts]
+        if any(p is not None for p in req_prompt_embeds):
+            try:
+                prompt_embeds = torch.stack(req_prompt_embeds)  # type: ignore # intentionally expect TypeError
+            except TypeError:
+                raise ValueError(
+                    "If you provide `prompt_embeds` for at least one prompt, you have to provide `prompt_embeds` for"
+                    " all prompts so the pipeline can stack them together."
+                )
+        else:
+            prompt_embeds = None
+
+        req_negative_prompt_embeds = [
+            p.get("negative_prompt_embeds") if not isinstance(p, str) else None for p in req.prompts
+        ]
+        if any(p is not None for p in req_negative_prompt_embeds):
+            try:
+                negative_prompt_embeds = torch.stack(req_negative_prompt_embeds)  # type: ignore # intentionally expect TypeError
+            except TypeError:
+                raise ValueError(
+                    "If you provide `negative_prompt_embeds` for at least one prompt, "
+                    "you have to provide `negative_prompt_embeds` for all prompts "
+                    "so the pipeline can stack them together."
+                )
+        else:
+            negative_prompt_embeds = None
+
         height = req.sampling_params.height or self.default_sample_size * self.vae_scale_factor
         width = req.sampling_params.width or self.default_sample_size * self.vae_scale_factor
-        num_inference_steps = req.sampling_params.num_inference_steps or num_inference_steps
-        sigmas = req.sampling_params.sigmas or sigmas
-        max_sequence_length = req.sampling_params.max_sequence_length or max_sequence_length
-        generator = req.sampling_params.generator or generator
-        true_cfg_scale = req.sampling_params.true_cfg_scale or true_cfg_scale
+        num_inference_steps = req.sampling_params.num_inference_steps or 50
+        sigmas = req.sampling_params.sigmas
+        max_sequence_length = req.sampling_params.max_sequence_length or 512
+        generator = req.sampling_params.generator
+        true_cfg_scale = req.sampling_params.true_cfg_scale or 4.0
         if req.sampling_params.guidance_scale_provided:
             guidance_scale = req.sampling_params.guidance_scale
+        else:
+            guidance_scale = 1.0
         num_images_per_prompt = (
-            req.sampling_params.num_outputs_per_prompt
-            if req.sampling_params.num_outputs_per_prompt > 0
-            else num_images_per_prompt
+            req.sampling_params.num_outputs_per_prompt if req.sampling_params.num_outputs_per_prompt > 0 else 1
         )
+        latents = req.sampling_params.latents
+
+        prompt_embeds_mask: torch.Tensor | None = req.sampling_params.extra_args.get("prompt_embeds_mask", None)
+        negative_prompt_embeds_mask: torch.Tensor | None = req.sampling_params.extra_args.get(
+            "negative_prompt_embeds_mask", None
+        )
+        output_type: str = req.sampling_params.extra_args.get("output_type", "pil")
+        attention_kwargs: dict[str, Any] | None = req.sampling_params.extra_args.get("attention_kwargs", None)
+        callback_on_step_end_tensor_inputs: list[str] = req.sampling_params.extra_args.get(
+            "callback_on_step_end_tensor_inputs", ["latents"]
+        )
+
         # 1. check inputs
         # 2. encode prompts
         # 3. prepare latents and timesteps

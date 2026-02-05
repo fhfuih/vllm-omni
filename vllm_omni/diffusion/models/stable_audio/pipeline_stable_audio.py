@@ -349,39 +349,21 @@ class StableAudioPipeline(nn.Module, SupportAudioOutput):
         latents = latents * self.scheduler.init_noise_sigma
         return latents
 
-    def forward(
-        self,
-        req: OmniDiffusionRequest,
-        prompt: str | list[str] | None = None,
-        negative_prompt: str | list[str] | None = None,
-        audio_end_in_s: float | None = None,
-        audio_start_in_s: float = 0.0,
-        num_inference_steps: int = 100,
-        guidance_scale: float = 7.0,
-        num_waveforms_per_prompt: int = 1,
-        generator: torch.Generator | list[torch.Generator] | None = None,
-        latents: torch.Tensor | None = None,
-        prompt_embeds: torch.Tensor | None = None,
-        negative_prompt_embeds: torch.Tensor | None = None,
-        output_type: str = "np",
-    ) -> DiffusionOutput:
+    def forward(self, req: OmniDiffusionRequest) -> DiffusionOutput:
         """
         Generate audio from text prompt.
 
         Args:
-            req: OmniDiffusionRequest containing generation parameters
-            prompt: Text prompt for audio generation
-            negative_prompt: Negative prompt for CFG
-            audio_end_in_s: Audio end time in seconds (max ~47s for stable-audio-open-1.0)
-            audio_start_in_s: Audio start time in seconds
-            num_inference_steps: Number of denoising steps
-            guidance_scale: CFG scale
-            num_waveforms_per_prompt: Number of audio outputs per prompt
-            generator: Random generator for reproducibility
-            latents: Pre-generated latents
-            prompt_embeds: Pre-computed prompt embeddings
-            negative_prompt_embeds: Pre-computed negative prompt embeddings
-            output_type: Output format ("np", "pt", or "latent")
+            req: OmniDiffusionRequest containing generation parameters.
+                The `req.sampling_params.extra_args` can include the following keys:
+                - audio_start_in_s (`float`, *optional*, defaults to 0.0):
+                    Start time of the audio in seconds.
+                - audio_end_in_s (`float`, *optional*):
+                    End time of the audio in seconds.
+                - num_waveforms_per_prompt (`int`, *optional*, defaults to 1):
+                    Number of audio outputs per prompt.
+                - output_type (`str`, *optional*, defaults to "np"):
+                    Output format ("np", "pt", or "latent").
 
         Returns:
             DiffusionOutput containing generated audio
@@ -389,24 +371,55 @@ class StableAudioPipeline(nn.Module, SupportAudioOutput):
         # Extract from request
         # TODO: In online mode, sometimes it receives [{"negative_prompt": None}, {...}], so cannot use .get("...", "")
         # TODO: May be some data formatting operations on the API side. Hack for now.
-        prompt = [p if isinstance(p, str) else (p.get("prompt") or "") for p in req.prompts] or prompt
+        prompt = [p if isinstance(p, str) else (p.get("prompt") or "") for p in req.prompts]
         if all(isinstance(p, str) or p.get("negative_prompt") is None for p in req.prompts):
             negative_prompt = None
         elif req.prompts:
             negative_prompt = ["" if isinstance(p, str) else (p.get("negative_prompt") or "") for p in req.prompts]
 
-        num_inference_steps = req.sampling_params.num_inference_steps or num_inference_steps
+        req_prompt_embeds = [p.get("prompt_embeds") if not isinstance(p, str) else None for p in req.prompts]
+        if any(p is not None for p in req_prompt_embeds):
+            try:
+                prompt_embeds = torch.stack(req_prompt_embeds)  # type: ignore # intentionally expect TypeError
+            except TypeError:
+                raise ValueError(
+                    "If you provide `prompt_embeds` for at least one prompt, you have to provide `prompt_embeds` for"
+                    " all prompts so the pipeline can stack them together."
+                )
+        else:
+            prompt_embeds = None
+
+        req_negative_prompt_embeds = [
+            p.get("negative_prompt_embeds") if not isinstance(p, str) else None for p in req.prompts
+        ]
+        if any(p is not None for p in req_negative_prompt_embeds):
+            try:
+                negative_prompt_embeds = torch.stack(req_negative_prompt_embeds)  # type: ignore # intentionally expect TypeError
+            except TypeError:
+                raise ValueError(
+                    "If you provide `negative_prompt_embeds` for at least one prompt, "
+                    "you have to provide `negative_prompt_embeds` for all prompts "
+                    "so the pipeline can stack them together."
+                )
+        else:
+            negative_prompt_embeds = None
+
+        num_inference_steps = req.sampling_params.num_inference_steps or 100
         if req.sampling_params.guidance_scale_provided:
             guidance_scale = req.sampling_params.guidance_scale
+        else:
+            guidance_scale = 7.0
 
-        if generator is None:
-            generator = req.sampling_params.generator
+        generator = req.sampling_params.generator
         if generator is None and req.sampling_params.seed is not None:
             generator = torch.Generator(device=self.device).manual_seed(req.sampling_params.seed)
+        latents = req.sampling_params.latents
 
         # Get audio duration from request extra params or defaults
-        audio_start_in_s = req.sampling_params.extra_args.get("audio_start_in_s", audio_start_in_s)
-        audio_end_in_s = req.sampling_params.extra_args.get("audio_end_in_s", audio_end_in_s)
+        audio_start_in_s: float = req.sampling_params.extra_args.get("audio_start_in_s", 0.0)
+        audio_end_in_s: float | None = req.sampling_params.extra_args.get("audio_end_in_s", None)
+        num_waveforms_per_prompt: int = req.sampling_params.extra_args.get("num_waveforms_per_prompt", 1)
+        output_type: str = req.sampling_params.extra_args.get("output_type", "np")
 
         # Calculate audio length
         downsample_ratio = self.vae.hop_length

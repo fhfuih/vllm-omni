@@ -113,14 +113,7 @@ Call `self.diffuse` in your pipeline's forward function:
 ```python
 import torch.nn as nn
 class YourModelPipeline(nn.Module, CFGParallelMixin):
-    def forward(
-        self,
-        prompt: str,
-        negative_prompt: str | None = None,
-        guidance_scale: float = 3.5,
-        num_inference_steps: int = 50,
-        **kwargs,
-    ):
+    def forward(self, req: OmniDiffusionRequest):
         # Encode prompts, Initialize latents, Get timesteps
         ...
         # Run diffusion loop (calls the mixin's diffuse method)

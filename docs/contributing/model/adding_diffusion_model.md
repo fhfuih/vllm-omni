@@ -337,6 +337,27 @@ See some parameters in `OmniDiffusionSamplingParams` as follows:
 
 **Extract parameters from request:**
 
+The `OmniDiffusionRequest` object primarily contains two parts.
+
+1. **`prompt`**: a list of pure-string or multimodal prompt. It matches the [data structure of vLLM](https://docs.vllm.ai/en/stable/features/multimodal_inputs/#image-inputs). Each prompt in the list can be a string or a TypedDict. The dict version allows image input at `["multi_modal_data"]["images"]` and negative prompt at `["negative_prompt"]`.
+    - If your model requires a preprocess function, then the intermediate preprocessed values can be stored at the `["additional_information"]` field of a TypedDict prompt.
+    - If your model does not support batched input request, you can check the length of `req.prompts` and complain about the input to the user. In this case, the user is encouraged to request the prompts one-by-one.
+    - For example, an image editing model may expect the `prompt` to be something like this:
+    ```python
+    [
+        {
+            "prompt": "turn this cat to a dog",
+            "multi_modal_data": {"image": input_image}
+        },
+    ]
+    ```
+
+2. **`sampling_params`**: a collection of common sampling parameters. Check the definition of [`OmniDiffusionSamplingParams`](https://docs.vllm.ai/projects/vllm-omni/en/latest/api/vllm_omni/inputs/data/#vllm_omni.inputs.data.OmniDiffusionSamplingParams) dataclass for their default values.
+    - If your model requires a less-common sampling parameter, you can read it from the `["extra_args"]` field of the dataclass. To ensure user experience, you may want to document the list of extra args that your pipeline honors.
+    - If you believe a sampling parameter is common enough to be included in the `OmniDiffusionSamplingParams` dataclass, feel free to open an issue or clarify it in your PR that adds your model.
+
+Below is an example way to extract the prompt strings and sampling parameters from the `OmniDiffusionRequest`.
+
 ```python
 from vllm_omni.diffusion.request import OmniDiffusionRequest
 from vllm_omni.diffusion.data import DiffusionOutput
@@ -364,14 +385,6 @@ def forward(
         input_images = req.multi_modal_data.get('image', [])
 
     # ... rest of generation logic
-```
-
-For an image editing model, an example `OmniDiffusionRequest` is like:
-```python
-{
-    "prompt": "turn this cat to a dog",
-    "multi_modal_data": {"image": input_image}
-},
 ```
 
 **Wrap output:**

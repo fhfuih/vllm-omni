@@ -583,54 +583,76 @@ class FluxPipeline(nn.Module, CFGParallelMixin):
             return False
         return True
 
-    def forward(
-        self,
-        req: OmniDiffusionRequest,
-        prompt: str | list[str] | None = None,
-        prompt_2: str | list[str] | None = None,
-        negative_prompt: str | list[str] | None = None,
-        negative_prompt_2: str | list[str] | None = None,
-        true_cfg_scale: float = 1.0,
-        height: int | None = None,
-        width: int | None = None,
-        num_inference_steps: int = 28,
-        sigmas: list[float] | None = None,
-        guidance_scale: float = 3.5,
-        num_images_per_prompt: int = 1,
-        generator: torch.Generator | list[torch.Generator] | None = None,
-        latents: torch.FloatTensor | None = None,
-        prompt_embeds: torch.FloatTensor | None = None,
-        pooled_prompt_embeds: torch.FloatTensor | None = None,
-        negative_prompt_embeds: torch.FloatTensor | None = None,
-        negative_pooled_prompt_embeds: torch.FloatTensor | None = None,
-        output_type: str | None = "pil",
-        return_dict: bool = True,
-        joint_attention_kwargs: dict[str, Any] | None = None,
-        callback_on_step_end_tensor_inputs: list[str] = ["latents"],
-        max_sequence_length: int = 512,
-    ):
+    def forward(self, req: OmniDiffusionRequest):
         """Forward pass for flux."""
         # TODO: In online mode, sometimes it receives [{"negative_prompt": None}, {...}], so cannot use .get("...", "")
         # TODO: May be some data formatting operations on the API side. Hack for now.
-        prompt = [p if isinstance(p, str) else (p.get("prompt") or "") for p in req.prompts] or prompt
+        prompt = [p if isinstance(p, str) else (p.get("prompt") or "") for p in req.prompts]
+
+        # For negative prompt, make it None if ALL are None---making it falsy and skipping CFG
+        # If only some of them are not None, only set those to empty strings---because we cannot skip CFG anyway.
         if all(isinstance(p, str) or p.get("negative_prompt") is None for p in req.prompts):
             negative_prompt = None
         elif req.prompts:
             negative_prompt = ["" if isinstance(p, str) else (p.get("negative_prompt") or "") for p in req.prompts]
 
+        req_prompt_embeds = [p.get("prompt_embeds") if not isinstance(p, str) else None for p in req.prompts]
+        if any(p is not None for p in req_prompt_embeds):
+            try:
+                prompt_embeds = torch.stack(req_prompt_embeds)  # type: ignore # intentionally expect TypeError
+            except TypeError:
+                raise ValueError(
+                    "If you provide `prompt_embeds` for at least one prompt, you have to provide `prompt_embeds` for"
+                    " all prompts so the pipeline can stack them together."
+                )
+        else:
+            prompt_embeds = None
+
+        req_negative_prompt_embeds = [
+            p.get("negative_prompt_embeds") if not isinstance(p, str) else None for p in req.prompts
+        ]
+        if any(p is not None for p in req_negative_prompt_embeds):
+            try:
+                negative_prompt_embeds = torch.stack(req_negative_prompt_embeds)  # type: ignore # intentionally expect TypeError
+            except TypeError:
+                raise ValueError(
+                    "If you provide `negative_prompt_embeds` for at least one prompt, "
+                    "you have to provide `negative_prompt_embeds` for all prompts "
+                    "so the pipeline can stack them together."
+                )
+        else:
+            negative_prompt_embeds = None
+
         height = req.sampling_params.height or self.default_sample_size * self.vae_scale_factor
         width = req.sampling_params.width or self.default_sample_size * self.vae_scale_factor
-        num_inference_steps = req.sampling_params.num_inference_steps or num_inference_steps
-        sigmas = req.sampling_params.sigmas or sigmas
-        guidance_scale = (
-            req.sampling_params.guidance_scale if req.sampling_params.guidance_scale is not None else guidance_scale
-        )
-        generator = req.sampling_params.generator or generator
-        true_cfg_scale = req.sampling_params.true_cfg_scale or true_cfg_scale
+        num_inference_steps = req.sampling_params.num_inference_steps or 28
+        sigmas = req.sampling_params.sigmas
+        if req.sampling_params.guidance_scale_provided:
+            guidance_scale = req.sampling_params.guidance_scale
+        else:
+            guidance_scale = 3.5
+        generator = req.sampling_params.generator
+        true_cfg_scale = req.sampling_params.true_cfg_scale or 1.0
+        max_sequence_length = req.sampling_params.max_sequence_length or 512
         num_images_per_prompt = (
-            req.sampling_params.num_outputs_per_prompt
-            if req.sampling_params.num_outputs_per_prompt > 0
-            else num_images_per_prompt
+            req.sampling_params.num_outputs_per_prompt if req.sampling_params.num_outputs_per_prompt > 0 else 1
+        )
+        latents = req.sampling_params.latents
+
+        prompt_2: str | list[str] | None = req.sampling_params.extra_args.get("prompt_2", None)
+        negative_prompt_2: str | list[str] | None = req.sampling_params.extra_args.get("negative_prompt_2", None)
+        pooled_prompt_embeds: torch.FloatTensor | None = req.sampling_params.extra_args.get(
+            "pooled_prompt_embeds", None
+        )
+        negative_pooled_prompt_embeds: torch.FloatTensor | None = req.sampling_params.extra_args.get(
+            "negative_pooled_prompt_embeds", None
+        )
+        output_type: str = req.sampling_params.extra_args.get("output_type", "pil")
+        joint_attention_kwargs: dict[str, Any] | None = req.sampling_params.extra_args.get(
+            "joint_attention_kwargs", None
+        )
+        callback_on_step_end_tensor_inputs: list[str] = req.sampling_params.extra_args.get(
+            "callback_on_step_end_tensor_inputs", ["latents"]
         )
 
         # 1. Check inputs. Raise error if not correct
