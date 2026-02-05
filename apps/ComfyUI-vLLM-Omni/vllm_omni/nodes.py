@@ -4,12 +4,15 @@ import torch
 from comfy_api.input import AudioInput, VideoInput
 
 from .utils.api_client import VLLMOmniClient
+from .utils.logger import get_logger
 from .utils.models import lookup_model_spec
 from .utils.types import AudioFormat
 from .utils.validators import (
     add_sampling_parameters_to_stage,
     validate_model_and_sampling_params_types,
 )
+
+logger = get_logger(__name__)
 
 
 class ContainsAnyDict(dict):
@@ -75,8 +78,8 @@ class VLLMOmniGenerateImage(_VLLMOmniGenerateBase):
         sampling_params: dict | list[dict] | None = None,
         **kwargs,
     ):
-        print("DEBUG: Uncaught kwargs:", kwargs)
-        print("DEBUG: Got sampling params", sampling_params)
+        logger.debug("Uncaught kwargs: %s", kwargs)
+        logger.debug("Got sampling params: %s", sampling_params)
         validate_model_and_sampling_params_types(model, sampling_params)
         if image is None and mask is not None:
             raise ValueError("Mask input provided without an image input.")
@@ -91,7 +94,7 @@ class VLLMOmniGenerateImage(_VLLMOmniGenerateBase):
             sampling_params = cast(dict | None, sampling_params)
             if audio is None and image is None and video is None:
                 # No multimodal input --- use DALL-E image generation
-                print("DEBUG: Using DALL-E image generation endpoint")
+                logger.debug("Using DALL-E image generation endpoint")
                 output = await client.generate_image(
                     model=model,
                     prompt=prompt,
@@ -103,7 +106,7 @@ class VLLMOmniGenerateImage(_VLLMOmniGenerateBase):
                 return (output,)
             elif image is not None and audio is None and video is None:
                 # Image and text input --- use DALL-E image edit
-                print("DEBUG: Using DALL-E image edit endpoint")
+                logger.debug("Using DALL-E image edit endpoint")
                 output = await client.edit_image(
                     model=model,
                     prompt=prompt,
@@ -116,11 +119,11 @@ class VLLMOmniGenerateImage(_VLLMOmniGenerateBase):
                 )
                 return (output,)
 
-        print("DEBUG: Using chat completion endpoint")
+        logger.debug("Using chat completion endpoint")
         sampling_params = add_sampling_parameters_to_stage(
             model, sampling_params, "diffusion", width=width, height=height
         )
-        print("DEBUG: Edited sampling params", sampling_params)
+        logger.debug("Edited sampling params: %s", sampling_params)
 
         output = await client.generate_image_chat_completion(
             model=model,
@@ -180,8 +183,8 @@ class VLLMOmniComprehension(_VLLMOmniGenerateBase):
         use_audio_in_video: bool = True,
         **kwargs,
     ) -> tuple[str, AudioInput]:
-        print("DEBUG: Uncaught kwargs:", kwargs)
-        print("DEBUG: Got sampling params", sampling_params)
+        logger.debug("Uncaught kwargs: %s", kwargs)
+        logger.debug("Got sampling params: %s", sampling_params)
         validate_model_and_sampling_params_types(model, sampling_params)
 
         client = VLLMOmniClient(url)
@@ -284,7 +287,7 @@ class VLLMOmniTTS(_VLLMOmniGenerateBase):
         model_specific_params: dict | None,
         **kwargs,
     ) -> tuple[AudioInput]:
-        print("!!!DEBUG Got extra kwargs in TTS", kwargs)
+        logger.debug("Got extra kwargs in TTS: %s", kwargs)
 
         is_qwen_tts = "qwen3-tts" in model.lower()
         extra_params_type = (
@@ -309,7 +312,7 @@ class VLLMOmniTTS(_VLLMOmniGenerateBase):
             speed=speed,
             **combined_params,
         )
-        print("!!!DEBUG Generated audio:", audio)
+        logger.debug("Generated audio: %s", audio)
         return (audio,)
 
 
@@ -520,7 +523,7 @@ class VLLMOmniSamplingParamsList:
         self, param1: dict, param2: dict | None = None, param3: dict | None = None
     ):
         for i, p in enumerate((param1, param2, param3)):
-            print(f"Param {i} is {p}")
+            logger.debug("Param %d is %s", i, p)
             if isinstance(p, list):
                 raise ValueError(
                     f"Input {i} is a Multi-Stage Sampling Params List. Expected a single sampling parameters node (either AR or Diffusion)."

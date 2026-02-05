@@ -15,6 +15,10 @@ from comfy_api.input import AudioInput, VideoInput
 from comfy_extras import nodes_audio
 from PIL import Image
 
+from .logger import get_logger
+
+logger = get_logger(__name__)
+
 
 def base64_to_image_tensor(base64_str: str, mode: str = "RGB") -> torch.Tensor:
     """
@@ -239,6 +243,6 @@ def base64_to_audio(base64_str: str) -> AudioInput:
 
     with open("test-audio-output.wav", "wb") as f:
         f.write(audio_bytes)
-        print("wrote test-audio-output.wav for debugging")
+        logger.debug("wrote test-audio-output.wav for debugging")
 
     return bytes_to_audio(audio_bytes)

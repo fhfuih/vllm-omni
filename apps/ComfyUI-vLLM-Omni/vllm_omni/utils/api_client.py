@@ -20,9 +20,12 @@ from .format import (
     image_tensor_to_png_bytes,
     video_to_base64,
 )
-from .log import pretty_printer
+from .logger import pretty_printer
+from .logger import get_logger
 from .models import lookup_model_spec
 from .types import AudioFormat
+
+logger = get_logger(__name__)
 
 
 class VLLMOmniClient:
@@ -65,7 +68,7 @@ class VLLMOmniClient:
                     payload[k] = sampling_params[k]
             if sampling_params.get("seed", 0) != 0:
                 payload["seed"] = sampling_params["seed"]
-        print("DEBUG: img gen payload", payload)
+        logger.debug("img gen payload: %s", payload)
 
         url = self.base_url + "/images/generations"
         async with aiohttp.ClientSession(timeout=self.timeout) as session:
@@ -101,13 +104,10 @@ class VLLMOmniClient:
                         base64_str = img["b64_json"]
                         tensor = base64_to_image_tensor(base64_str)
                         image_tensors.append(tensor)
-                        print(f"DEBUG: Image #{idx} has shape {tensor.shape}")
-                        # from torchvision.utils import save_image
-
-                        # save_image(tensor, f"~/{idx}.png")
+                        logger.debug("Image #%d has shape %s", idx, tensor.shape)
 
                     batch_tensor = torch.stack(image_tensors, dim=0)
-                    print("DEBUG: batch_tensor output has shape", {batch_tensor.shape})
+                    logger.debug("batch_tensor output has shape: %s", batch_tensor.shape)
                     return batch_tensor
 
             except aiohttp.ClientError as e:
@@ -276,8 +276,11 @@ class VLLMOmniClient:
             )
         if audio_base64 is not None:
             audio = base64_to_audio(audio_base64)
-            print(
-                f"!!!DEBUG: audio sample rate {audio['sample_rate']}, audio shape {audio['waveform'].shape}, duration in second {audio['waveform'].shape[2] / audio['sample_rate']}"
+            logger.debug(
+                "audio sample rate %d, audio shape %s, duration in second %f",
+                audio['sample_rate'],
+                audio['waveform'].shape,
+                audio['waveform'].shape[2] / audio['sample_rate']
             )
         else:
             audio = None
@@ -310,7 +313,7 @@ class VLLMOmniClient:
             audio_base64 = audio_to_base64(ref_audio)
             payload["ref_audio"] = audio_base64
 
-        print("!!!DEBUG: Omni TTS payload", pretty_printer.pformat(payload))
+        logger.debug("Omni TTS payload: %s", pretty_printer.pformat(payload))
 
         url = self.base_url + "/audio/speech"
         async with aiohttp.ClientSession(timeout=self.timeout) as session:
@@ -348,7 +351,7 @@ class VLLMOmniClient:
     async def _generate_base_chat_completion(
         self, model: str, payload: dict[str, Any]
     ) -> list[dict[str, Any]]:
-        print("!!!DEBUG: Omni payload", pretty_printer.pformat(payload))
+        logger.debug("Omni payload: %s", pretty_printer.pformat(payload))
         await self._check_model_exist(model)
 
         url = self.base_url + "/chat/completions"
@@ -370,8 +373,8 @@ class VLLMOmniClient:
                     except aiohttp.ContentTypeError as e:
                         raise RuntimeError(f"Invalid JSON response from vLLM-Omni: {e}")
 
-                    print(
-                        "!!!DEBUG: chat completion response",
+                    logger.debug(
+                        "chat completion response: %s",
                         pretty_printer.pformat(data),
                     )
 
@@ -414,7 +417,7 @@ class VLLMOmniClient:
                 )
         try:
             model_list = data["data"]
-            print("DEBUG: model list", model_list)
+            logger.debug("model list: %s", model_list)
             model_found = next((True for m in model_list if m["id"] == model), False)
         except (KeyError, TypeError):
             raise RuntimeError(
