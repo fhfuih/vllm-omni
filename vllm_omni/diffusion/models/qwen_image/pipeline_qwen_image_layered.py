@@ -578,27 +578,10 @@ the image\n<|vision_start|><|image_pad|><|vision_end|><|im_end|>\n<|im_start|>as
     def forward(
         self,
         req: OmniDiffusionRequest,
-        image: PIL.Image.Image | torch.Tensor | None = None,
-        prompt: str | list[str] | None = None,
-        negative_prompt: str | list[str] | None = None,
-        true_cfg_scale: float = 4.0,
-        layers: int | None = 4,
-        num_inference_steps: int = 50,
-        sigmas: list[float] | None = None,
-        guidance_scale: float | None = None,
-        num_images_per_prompt: int = 1,
-        generator: torch.Generator | list[torch.Generator] | None = None,
-        latents: torch.Tensor | None = None,
-        prompt_embeds: torch.Tensor | None = None,
         prompt_embeds_mask: torch.Tensor | None = None,
-        negative_prompt_embeds: torch.Tensor | None = None,
         negative_prompt_embeds_mask: torch.Tensor | None = None,
         output_type: str | None = "pil",
         attention_kwargs: dict[str, Any] | None = None,
-        max_sequence_length: int = 512,
-        resolution: int = 640,
-        cfg_normalize: bool = False,
-        use_en_prompt: bool = False,
     ) -> DiffusionOutput:
         """Forward pass for image layered."""
 
@@ -614,27 +597,26 @@ the image\n<|vision_start|><|image_pad|><|vision_end|><|im_end|>\n<|im_start|>as
         first_prompt = req.prompts[0]
         prompt = first_prompt if isinstance(first_prompt, str) else (first_prompt.get("prompt") or "")
         negative_prompt = None if isinstance(first_prompt, str) else first_prompt.get("negative_prompt")
+        prompt_embeds = None if isinstance(first_prompt, str) else first_prompt.get("prompt_embeds")
+        negative_prompt_embeds = None if isinstance(first_prompt, str) else first_prompt.get("negative_prompt_embeds")
 
-        layers = req.sampling_params.layers if req.sampling_params.layers is not None else layers
-        resolution = req.sampling_params.resolution if req.sampling_params.resolution is not None else resolution
-        max_sequence_length = req.sampling_params.max_sequence_length or max_sequence_length
-        cfg_normalize = (
-            req.sampling_params.cfg_normalize if req.sampling_params.cfg_normalize is not None else cfg_normalize
-        )
-        use_en_prompt = (
-            req.sampling_params.use_en_prompt if req.sampling_params.use_en_prompt is not None else use_en_prompt
-        )
-        num_inference_steps = req.sampling_params.num_inference_steps or num_inference_steps
-        sigmas = req.sampling_params.sigmas or sigmas
-        generator = req.sampling_params.generator or generator
-        true_cfg_scale = req.sampling_params.true_cfg_scale or true_cfg_scale
+        layers = req.sampling_params.layers or 4
+        resolution = req.sampling_params.resolution or 640
+        max_sequence_length = req.sampling_params.max_sequence_length or 512
+        cfg_normalize = req.sampling_params.cfg_normalize
+        use_en_prompt = req.sampling_params.use_en_prompt
+        num_inference_steps = req.sampling_params.num_inference_steps or 50
+        sigmas = req.sampling_params.sigmas
+        generator = req.sampling_params.generator
+        true_cfg_scale = req.sampling_params.true_cfg_scale or 4.0
         if req.sampling_params.guidance_scale_provided:
             guidance_scale = req.sampling_params.guidance_scale
+        else:
+            guidance_scale = 1.0
         num_images_per_prompt = (
-            req.sampling_params.num_outputs_per_prompt
-            if req.sampling_params.num_outputs_per_prompt > 0
-            else num_images_per_prompt
+            req.sampling_params.num_outputs_per_prompt if req.sampling_params.num_outputs_per_prompt > 0 else 1
         )
+        latents = req.sampling_params.latents
 
         if not isinstance(first_prompt, str) and "preprocessed_image" in (
             additional_information := first_prompt.get("additional_information", {})
@@ -648,6 +630,17 @@ the image\n<|vision_start|><|image_pad|><|vision_end|><|im_end|>\n<|im_start|>as
             width = req.sampling_params.width
         else:
             # fallback to run pre-processing in pipeline (debug only)
+            if (
+                raw_image := None
+                if isinstance(first_prompt, str)
+                else first_prompt.get("multi_modal_data", {}).get("image")
+            ) is None:
+                image = None
+            elif isinstance(raw_image, list):
+                image = [PIL.Image.open(im) if isinstance(im, str) else cast(PIL.Image.Image, im) for im in raw_image]
+            else:
+                image = PIL.Image.open(raw_image) if isinstance(raw_image, str) else cast(PIL.Image.Image, raw_image)
+
             image_size = image[0].size if isinstance(image, list) else image.size
             assert resolution in [640, 1024], f"resolution must be either 640 or 1024, but got {resolution}"
             calculated_width, calculated_height = calculate_dimensions(

@@ -522,17 +522,6 @@ class LongCatImageEditPipeline(nn.Module, CFGParallelMixin, SupportImageInput):
     def forward(
         self,
         req: OmniDiffusionRequest,
-        image: PIL.Image.Image | torch.Tensor | None = None,
-        prompt: str | list[str] | None = None,
-        negative_prompt: str | list[str] | None = None,
-        num_inference_steps: int = 50,
-        sigmas: list[float] | None = None,
-        guidance_scale: float = 3.5,
-        num_images_per_prompt: int | None = 1,
-        generator: torch.Generator | list[torch.Generator] | None = None,
-        latents: torch.FloatTensor | None = None,
-        prompt_embeds: torch.Tensor | None = None,
-        negative_prompt_embeds: torch.Tensor | None = None,
         output_type: str | None = "pil",
         return_dict: bool = True,
         joint_attention_kwargs: dict[str, Any] | None = None,
@@ -548,21 +537,18 @@ class LongCatImageEditPipeline(nn.Module, CFGParallelMixin, SupportImageInput):
         prompt = first_prompt if isinstance(first_prompt, str) else (first_prompt.get("prompt") or "")
         negative_prompt = None if isinstance(first_prompt, str) else first_prompt.get("negative_prompt")
         prompt_embeds = None if isinstance(first_prompt, str) else first_prompt.get("prompt_embeds")
-        negative_prompt_embeds = None if isinstance(first_prompt, str) else first_prompt.get("negative_prompt_embeds")  # type: ignore # Why it is list[torch.Tensor] in OmniTokenInputs or OmniEmbedsPrompt? Doesn't make sense
+        negative_prompt_embeds = None if isinstance(first_prompt, str) else first_prompt.get("negative_prompt_embeds")
 
-        sigmas = req.sampling_params.sigmas or sigmas
-        guidance_scale = (
-            req.sampling_params.guidance_scale if req.sampling_params.guidance_scale is not None else guidance_scale
-        )
-        num_inference_steps = req.sampling_params.num_inference_steps or num_inference_steps
+        sigmas = req.sampling_params.sigmas
+        guidance_scale = req.sampling_params.guidance_scale or 3.5
+        num_inference_steps = req.sampling_params.num_inference_steps or 50
         num_images_per_prompt = (
-            req.sampling_params.num_outputs_per_prompt
-            if req.sampling_params.num_outputs_per_prompt is not None
-            else num_images_per_prompt
+            req.sampling_params.num_outputs_per_prompt if req.sampling_params.num_outputs_per_prompt > 0 else 1
         )
-        generator = req.sampling_params.generator or generator
+        generator = req.sampling_params.generator
         height = req.sampling_params.height or self.default_sample_size * self.vae_scale_factor
         width = req.sampling_params.width or self.default_sample_size * self.vae_scale_factor
+        latents = req.sampling_params.latents
 
         if prompt is not None:
             batch_size = 1 if isinstance(prompt, str) else len(prompt)
@@ -572,11 +558,24 @@ class LongCatImageEditPipeline(nn.Module, CFGParallelMixin, SupportImageInput):
         if not isinstance(first_prompt, str) and "preprocessed_image" in (
             additional_information := first_prompt.get("additional_information", {})
         ):
+            # Using preprocessed image
             prompt_image = additional_information.get("prompt_image")
             image = additional_information.get("preprocessed_image")
             calculated_height = additional_information.get("calculated_height", height)
             calculated_width = additional_information.get("calculated_width", width)
         else:
+            # Using original image
+            if (
+                raw_image := None
+                if isinstance(first_prompt, str)
+                else first_prompt.get("multi_modal_data", {}).get("image")
+            ) is None:
+                image = None
+            elif isinstance(raw_image, list):
+                image = [PIL.Image.open(im) if isinstance(im, str) else cast(PIL.Image.Image, im) for im in raw_image]
+            else:
+                image = PIL.Image.open(raw_image) if isinstance(raw_image, str) else cast(PIL.Image.Image, raw_image)
+
             image_size = image[0].size if isinstance(image, list) else image.size
             calculated_width, calculated_height = calculate_dimensions(1024 * 1024, image_size[0] * 1.0 / image_size[1])
 

@@ -220,18 +220,7 @@ class Wan22TI2VPipeline(nn.Module, SupportImageInput, CFGParallelMixin):
     def forward(
         self,
         req: OmniDiffusionRequest,
-        prompt: str | None = None,
-        negative_prompt: str | None = None,
-        image: PIL.Image.Image | torch.Tensor | None = None,
-        height: int = 704,
-        width: int = 1280,
-        num_inference_steps: int = 40,
-        guidance_scale: float = 5.0,
-        frame_num: int = 81,
         output_type: str | None = "np",
-        generator: torch.Generator | list[torch.Generator] | None = None,
-        prompt_embeds: torch.Tensor | None = None,
-        negative_prompt_embeds: torch.Tensor | None = None,
         attention_kwargs: dict | None = None,
         **kwargs,
     ) -> DiffusionOutput:
@@ -242,40 +231,44 @@ class Wan22TI2VPipeline(nn.Module, SupportImageInput, CFGParallelMixin):
                 """Please pass in a single prompt object or string, or a single-item list.""",
             )
         if len(req.prompts) == 1:  # If req.prompt is empty, default to prompt & neg_prompt in param list
-            prompt = req.prompts[0] if isinstance(req.prompts[0], str) else req.prompts[0].get("prompt")
-            negative_prompt = None if isinstance(req.prompts[0], str) else req.prompts[0].get("negative_prompt")
+            first_prompt = req.prompts[0]
+            prompt = first_prompt if isinstance(first_prompt, str) else (first_prompt.get("prompt") or "")
+            negative_prompt = None if isinstance(first_prompt, str) else first_prompt.get("negative_prompt")
+            prompt_embeds = None if isinstance(first_prompt, str) else first_prompt.get("prompt_embeds")
+            negative_prompt_embeds = (
+                None if isinstance(first_prompt, str) else first_prompt.get("negative_prompt_embeds")
+            )
         if prompt is None and prompt_embeds is None:
             raise ValueError("Prompt or prompt_embeds is required for Wan2.2 generation.")
 
         # Get image from request (optional for TI2V)
-        if image is None:
-            multi_modal_data = (
-                req.prompts[0].get("multi_modal_data", {}) if not isinstance(req.prompts[0], str) else None
-            )
-            raw_image = multi_modal_data.get("image", None) if multi_modal_data is not None else None
-            if isinstance(raw_image, list):
-                if len(raw_image) > 1:
-                    logger.warning(
-                        """Received a list of image. Only a single image is supported by this model."""
-                        """Taking only the first image for now."""
-                    )
-                raw_image = raw_image[0]
-            if raw_image is None:
-                image = None
-            elif isinstance(raw_image, str):
-                image = PIL.Image.open(raw_image)
-            else:
-                image = cast(PIL.Image.Image | torch.Tensor, raw_image)
+        multi_modal_data = req.prompts[0].get("multi_modal_data", {}) if not isinstance(req.prompts[0], str) else None
+        raw_image = multi_modal_data.get("image", None) if multi_modal_data is not None else None
+        if isinstance(raw_image, list):
+            if len(raw_image) > 1:
+                logger.warning(
+                    """Received a list of image. Only a single image is supported by this model."""
+                    """Taking only the first image for now."""
+                )
+            raw_image = raw_image[0]
+        if raw_image is None:
+            image = None
+        elif isinstance(raw_image, str):
+            image = PIL.Image.open(raw_image)
+        else:
+            image = cast(PIL.Image.Image | torch.Tensor, raw_image)
 
         # Default dimensions for TI2V-5B (720P)
-        height = req.sampling_params.height or height
-        width = req.sampling_params.width or width
-        num_frames = req.sampling_params.num_frames if req.sampling_params.num_frames else frame_num
-        num_steps = req.sampling_params.num_inference_steps or num_inference_steps
+        height = req.sampling_params.height or 704
+        width = req.sampling_params.width or 1280
+        num_frames = req.sampling_params.num_frames or 81
+        num_steps = req.sampling_params.num_inference_steps or 40
 
         # Respect per-request guidance_scale when explicitly provided.
         if req.sampling_params.guidance_scale_provided:
             guidance_scale = req.sampling_params.guidance_scale
+        else:
+            guidance_scale = 5.0
 
         self._guidance_scale = guidance_scale
 
@@ -299,8 +292,7 @@ class Wan22TI2VPipeline(nn.Module, SupportImageInput, CFGParallelMixin):
         dtype = self.transformer.dtype
 
         # Generator setup
-        if generator is None:
-            generator = req.sampling_params.generator
+        generator = req.sampling_params.generator
         if generator is None and req.sampling_params.seed is not None:
             generator = torch.Generator(device=device).manual_seed(req.sampling_params.seed)
 
