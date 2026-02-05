@@ -14,7 +14,6 @@ app.registerExtension({
         if (!nodeData.name.startsWith("VLLMOmni")) {
             return
         }
-        // console.debug("this(app)", app)
 
         let eventHandlers = eventHandlerRegistry[nodeData.name] || {}
 

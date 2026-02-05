@@ -4,14 +4,12 @@ The image generation part is derived from dougbtv/comfyui-vllm-omni by Doug (@do
 Original source at https://github.com/dougbtv/comfyui-vllm-omni, distributed under the MIT License.
 """
 
-from typing import Any, Iterable, Literal, Optional
+from typing import Any
 
 import aiohttp
 import av.error
-import openai
 import torch
 from comfy_api.input import AudioInput, VideoInput
-from openai.types.chat import ChatCompletionMessageParam
 
 from .format import (
     audio_to_base64,
@@ -31,10 +29,10 @@ class VLLMOmniClient:
     def __init__(self, base_url: str, timeout: float = 300.0):
         self.base_url = base_url
         self.timeout = aiohttp.ClientTimeout(total=timeout)
-        self.client = openai.OpenAI(base_url=base_url, api_key="fake-key")
 
     async def generate_image(
         self,
+        *,
         model: str,
         prompt: str,
         width: int,
@@ -43,10 +41,11 @@ class VLLMOmniClient:
         sampling_params: dict | None = None,
     ) -> torch.Tensor:
         """Run text-to-image generatation via DALLE API"""
-        if not self._check_model_exist(model):
-            raise ValueError(f"Model {model} does not exist.")
+        await self._check_model_exist(model)
+
         size = f"{width}x{height}"
         payload = {
+            "model": model,
             "prompt": prompt,
             "size": size,
             "response_format": "b64_json",
@@ -118,6 +117,7 @@ class VLLMOmniClient:
 
     async def edit_image(
         self,
+        *,
         model: str,
         prompt: str,
         image: torch.Tensor,
@@ -128,8 +128,8 @@ class VLLMOmniClient:
         sampling_params: dict | None = None,
     ) -> torch.Tensor:
         """Run image editing via DALLE API"""
-        if not self._check_model_exist(model):
-            raise ValueError(f"Model {model} does not exist.")
+        await self._check_model_exist(model)
+
         size = f"{width}x{height}"
         image_filename = "image.png"  # Required for multipart form
         form = aiohttp.FormData()
@@ -201,6 +201,7 @@ class VLLMOmniClient:
 
     async def generate_image_chat_completion(
         self,
+        *,
         model: str,
         prompt: str,
         negative_prompt: str | None = None,
@@ -210,14 +211,14 @@ class VLLMOmniClient:
         sampling_params: dict | list[dict] | None = None,
     ) -> torch.Tensor:
         payload = VLLMOmniClient._prepare_chat_completion_messages(
-            model,
-            prompt,
-            negative_prompt,
-            image,
-            audio,
-            video,
-            sampling_params,
-            ["image"],
+            model=model,
+            prompt=prompt,
+            negative_prompt=negative_prompt,
+            image=image,
+            audio=audio,
+            video=video,
+            sampling_params=sampling_params,
+            modalities=["image"],
         )
         choices = await self._generate_base_chat_completion(model, payload)
 
@@ -233,6 +234,7 @@ class VLLMOmniClient:
 
     async def generate_comprehension_chat_completion(
         self,
+        *,
         model: str,
         prompt: str,
         image: torch.Tensor | None = None,
@@ -244,14 +246,14 @@ class VLLMOmniClient:
     ) -> tuple[str | None, AudioInput | None]:
         # Response may contain two choices: one with text, one with audio
         payload = VLLMOmniClient._prepare_chat_completion_messages(
-            model,
-            prompt,
-            None,
-            image,
-            audio,
-            video,
-            sampling_params,
-            modalities,
+            model=model,
+            prompt=prompt,
+            negative_prompt=None,
+            image=image,
+            audio=audio,
+            video=video,
+            sampling_params=sampling_params,
+            modalities=modalities,
             **extra_body,
         )
 
@@ -281,32 +283,9 @@ class VLLMOmniClient:
             audio = None
         return text_response, audio
 
-    def generate_video(
-        self,
-        model: str,
-        messages: Iterable[ChatCompletionMessageParam],
-        modalities: Optional[list[Literal["text", "audio"]]] | openai.Omit = None,
-        extra_body: Optional[dict[str, Any]] = None,
-    ) -> dict[str, Any]:
-        if not self._check_model_exist(model):
-            raise ValueError(f"Model {model} does not exist.")
-
-        try:
-            response = self.client.chat.completions.create(
-                model=model,
-                messages=messages,
-                modalities=modalities,
-                extra_body=extra_body,
-            )
-            return {
-                "video": response.choices[0].message.content,
-                "text": response.choices[0].message.content,
-            }
-        except Exception as e:
-            raise RuntimeError(f"Failed to generate video: {str(e)}")
-
     async def generate_speech(
         self,
+        *,
         model: str,
         prompt: str,
         voice: str,
@@ -314,8 +293,7 @@ class VLLMOmniClient:
         speed: float,
         **extra_params,
     ) -> AudioInput:
-        if not self._check_model_exist(model):
-            raise ValueError(f"Model {model} does not exist.")
+        await self._check_model_exist(model)
 
         ref_audio: AudioInput | None = extra_params.pop("ref_audio", None)
 
@@ -371,9 +349,7 @@ class VLLMOmniClient:
         self, model: str, payload: dict[str, Any]
     ) -> list[dict[str, Any]]:
         print("!!!DEBUG: Omni payload", pretty_printer.pformat(payload))
-
-        if not self._check_model_exist(model):
-            raise ValueError(f"Model {model} does not exist.")
+        await self._check_model_exist(model)
 
         url = self.base_url + "/chat/completions"
         async with aiohttp.ClientSession(timeout=self.timeout) as session:
@@ -411,13 +387,46 @@ class VLLMOmniClient:
                     f"Network error connecting to vLLM-Omni at {self.base_url}: {e}"
                 )
 
-    def _check_model_exist(self, model: str):
-        model_list = self.client.models.list().data
-        print("!!!", model_list)
-        return next((True for m in model_list if m.id == model), False)
+    async def _check_model_exist(self, model: str):
+        url = self.base_url + "/models"
+        async with aiohttp.ClientSession(timeout=self.timeout) as session:
+            try:
+                async with session.get(
+                    url,
+                    headers={"Content-Type": "application/json"},
+                ) as response:
+                    if not response.ok:
+                        error_text = await response.text()
+                        raise (ValueError if response.status < 500 else RuntimeError)(
+                            f"vLLM-Omni API returned status {response.status} when getting hosted model list: {error_text}"
+                        )
+
+                    try:
+                        data = await response.json()
+                    except aiohttp.ContentTypeError as e:
+                        raise RuntimeError(
+                            f"Invalid JSON response when getting hosted model list from vLLM-Omni: {e}"
+                        )
+
+            except aiohttp.ClientError as e:
+                raise RuntimeError(
+                    f"Network error connecting to vLLM-Omni at {self.base_url}: {e}"
+                )
+        try:
+            model_list = data["data"]
+            print("DEBUG: model list", model_list)
+            model_found = next((True for m in model_list if m["id"] == model), False)
+        except (KeyError, TypeError):
+            raise RuntimeError(
+                f"Invalid JSON response of the hosted model list: {data}"
+            )
+
+        if not model_found:
+            raise ValueError(f"Model {model} not served at {self.base_url}.")
 
     @staticmethod
     def _prepare_chat_completion_messages(
+        *,
         model: str,
         prompt: str,
         negative_prompt: str | None,
@@ -494,7 +503,7 @@ class VLLMOmniClient:
         if extra_body:
             combined_extra_body.update(extra_body)
 
-        payload: dict[str, Any] = {"messages": messages}
+        payload: dict[str, Any] = {"messages": messages, "model": model}
         if combined_extra_body:
             payload["extra_body"] = combined_extra_body
         if modalities:

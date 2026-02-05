@@ -1,6 +1,5 @@
 from typing import cast
 
-import numpy as np
 import torch
 from comfy_api.input import AudioInput, VideoInput
 
@@ -94,21 +93,26 @@ class VLLMOmniGenerateImage(_VLLMOmniGenerateBase):
                 # No multimodal input --- use DALL-E image generation
                 print("DEBUG: Using DALL-E image generation endpoint")
                 output = await client.generate_image(
-                    model, prompt, width, height, negative_prompt, sampling_params
+                    model=model,
+                    prompt=prompt,
+                    width=width,
+                    height=height,
+                    negative_prompt=negative_prompt,
+                    sampling_params=sampling_params,
                 )
                 return (output,)
             elif image is not None and audio is None and video is None:
                 # Image and text input --- use DALL-E image edit
                 print("DEBUG: Using DALL-E image edit endpoint")
                 output = await client.edit_image(
-                    model,
-                    prompt,
-                    image,
-                    width,
-                    height,
-                    negative_prompt,
-                    mask,
-                    sampling_params,
+                    model=model,
+                    prompt=prompt,
+                    image=image,
+                    width=width,
+                    height=height,
+                    negative_prompt=negative_prompt,
+                    mask=mask,
+                    sampling_params=sampling_params,
                 )
                 return (output,)
 
@@ -119,7 +123,13 @@ class VLLMOmniGenerateImage(_VLLMOmniGenerateBase):
         print("DEBUG: Edited sampling params", sampling_params)
 
         output = await client.generate_image_chat_completion(
-            model, prompt, negative_prompt, image, audio, video, sampling_params
+            model=model,
+            prompt=prompt,
+            negative_prompt=negative_prompt,
+            image=image,
+            audio=audio,
+            video=video,
+            sampling_params=sampling_params,
         )
 
         return (output,)
@@ -188,13 +198,13 @@ class VLLMOmniComprehension(_VLLMOmniGenerateBase):
                 text_response,
                 _,
             ) = await client.generate_comprehension_chat_completion(
-                model,
-                prompt,
-                image,
-                None,
-                None,
-                sampling_params,
-                ["text"],
+                model=model,
+                prompt=prompt,
+                image=image,
+                audio=None,
+                video=None,
+                sampling_params=sampling_params,
+                modalities=["text"],
             )
         else:
             modalities = []
@@ -212,13 +222,14 @@ class VLLMOmniComprehension(_VLLMOmniGenerateBase):
                 text_response,
                 audio,
             ) = await client.generate_comprehension_chat_completion(
-                model,
-                prompt,
-                image,
-                audio,
-                video,
-                sampling_params,
-                modalities,
+                model=model,
+                prompt=prompt,
+                image=image,
+                audio=audio,
+                video=video,
+                sampling_params=sampling_params,
+                modalities=modalities,
+                # == extra kwargs ==
                 mm_processor_kwargs={"use_audio_in_video": use_audio_in_video},
             )
 
@@ -233,75 +244,6 @@ class VLLMOmniComprehension(_VLLMOmniGenerateBase):
             audio = {"waveform": waveform, "sample_rate": sample_rate}
 
         return (text_response, audio)
-
-
-class VLLMOmniGenerateVideo(_VLLMOmniGenerateBase):
-    @classmethod
-    def INPUT_TYPES(cls):
-        return {
-            "required": {
-                "url": ("STRING", {"default": "http://localhost:8000/v1"}),
-                "model": ("STRING", {"default": "Wan-AI/Wan2.2-T2V-A14B-Diffusers"}),
-                "prompt": ("STRING", {"multiline": True}),
-                "negative_prompt": ("STRING", {"multiline": True, "default": ""}),
-                "width": ("INT", {"default": 512, "min": 64, "max": 2048}),
-                "height": ("INT", {"default": 512, "min": 64, "max": 2048}),
-                "num_frames": ("INT", {"default": 16, "min": 1, "max": 100}),
-                "fps": ("INT", {"default": 15, "min": 1, "max": 60}),
-                "sampling_params": ("SAMPLING_PARAMS",),
-            },
-            "optional": {
-                "image": ("IMAGE",),
-                "audio": ("AUDIO",),
-            },
-        }
-
-    RETURN_TYPES = ("VIDEO", "STRING")
-    RETURN_NAMES = ("video", "text_response")
-    FUNCTION = "generate"
-
-    def generate(
-        self,
-        url,
-        model,
-        prompt,
-        negative_prompt,
-        width,
-        height,
-        num_frames,
-        fps,
-        sampling_params,
-        image=None,
-        audio=None,
-    ):
-        raise NotImplementedError()
-        client = VLLMOmniClient(url)
-
-        payload = self._validate_and_prepare_chat_completion_payload(
-            model,
-            prompt,
-            negative_prompt,
-            sampling_params,
-            image=image,
-            audio=audio,
-            width=width,
-            height=height,
-            num_frames=num_frames,
-            fps=fps,
-        )
-
-        response = client.generate_video(payload)
-        video_data = response.get("video", None)
-        text_response = response.get("text", "")
-
-        if video_data is None:
-            raise RuntimeError("Failed to generate video")
-
-        # 转换为 ComfyUI 视频格式
-        video_tensor = torch.from_numpy(
-            np.array(video_data).astype(np.float32) / 255.0
-        ).unsqueeze(0)
-        return (video_tensor, text_response)
 
 
 class VLLMOmniTTS(_VLLMOmniGenerateBase):
@@ -360,7 +302,12 @@ class VLLMOmniTTS(_VLLMOmniGenerateBase):
         client = VLLMOmniClient(url)
 
         audio = await client.generate_speech(
-            model, input, voice, response_format, speed, **combined_params
+            model=model,
+            input=input,
+            voice=voice,
+            response_format=response_format,
+            speed=speed,
+            **combined_params,
         )
         print("!!!DEBUG Generated audio:", audio)
         return (audio,)
@@ -429,11 +376,11 @@ class VLLMOmniVoiceClone(_VLLMOmniGenerateBase):
         client = VLLMOmniClient(url)
 
         audio = await client.generate_speech(
-            model,
-            input,
-            voice,
-            response_format,
-            speed,
+            model=model,
+            input=input,
+            voice=voice,
+            response_format=response_format,
+            speed=speed,
             **combined_params,
         )
         return (audio,)
@@ -444,6 +391,14 @@ class VLLMOmniARSampling:
     def INPUT_TYPES(cls):
         return {
             "required": {
+                "seed": (
+                    "INT",
+                    {
+                        "default": -1,
+                        "min": -1,
+                        "tooltip": "-1 means to not provide a seed.",
+                    },
+                ),
                 "max_tokens": ("INT", {"default": 100, "min": 1, "max": 10000}),
                 "temperature": (
                     "FLOAT",
@@ -465,8 +420,10 @@ class VLLMOmniARSampling:
     FUNCTION = "get_params"
     CATEGORY = "vLLM-Omni/Sampling Params"
 
-    def get_params(self, **kwargs):
-        return ({"type": "autoregression", **kwargs},)
+    def get_params(self, seed, **kwargs):
+        return (
+            {"type": "autoregression", "seed": seed if seed >= 0 else None, **kwargs},
+        )
 
 
 class VLLMOmniDiffusionSampling:
@@ -474,6 +431,15 @@ class VLLMOmniDiffusionSampling:
     def INPUT_TYPES(cls):
         return {
             "required": {
+                "seed": (
+                    "INT",
+                    {
+                        "default": -1,
+                        "min": -1,
+                        "step": 1,
+                        "tooltip": "-1 means to not provide a seed.",
+                    },
+                ),
                 "n": (
                     "INT",
                     {
@@ -528,8 +494,8 @@ class VLLMOmniDiffusionSampling:
     FUNCTION = "get_params"
     CATEGORY = "vLLM-Omni/Sampling Params"
 
-    def get_params(self, **kwargs):
-        return ({"type": "diffusion", **kwargs},)
+    def get_params(self, seed, **kwargs):
+        return ({"type": "diffusion", "seed": seed if seed >= 0 else None, **kwargs},)
 
 
 class VLLMOmniSamplingParamsList:
