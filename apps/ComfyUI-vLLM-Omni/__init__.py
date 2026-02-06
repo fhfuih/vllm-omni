@@ -1,4 +1,4 @@
-"""Top-level package for vllm_omni."""
+"""Top-level package for comfyui_vllm_omni."""
 
 __all__ = [
     "NODE_CLASS_MAPPINGS",
@@ -10,7 +10,7 @@ __author__ = """Zeyu Huang"""
 __email__ = "11222265+fhfuih@users.noreply.github.com"
 __version__ = "0.0.1"
 
-from .vllm_omni.nodes import (
+from .comfyui_vllm_omni.nodes import (
     VLLMOmniARSampling,
     VLLMOmniComprehension,
     VLLMOmniDiffusionSampling,
