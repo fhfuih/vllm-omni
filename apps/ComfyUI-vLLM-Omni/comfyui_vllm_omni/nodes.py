@@ -163,7 +163,7 @@ class VLLMOmniComprehension(_VLLMOmniGenerateBase):
     FUNCTION = "generate"
 
     @classmethod
-    def VALIDATE_INPUTS(cls, url, model, output_text, output_audio) -> str | Literal[True]: # type: ignore[reportIncompatibleMethodOverride]
+    def VALIDATE_INPUTS(cls, url, model, output_text, output_audio) -> str | Literal[True]:  # type: ignore[reportIncompatibleMethodOverride]
         super_validation = super().VALIDATE_INPUTS(url, model)
         if isinstance(super_validation, str):
             return super_validation
@@ -292,9 +292,7 @@ class VLLMOmniTTS(_VLLMOmniGenerateBase):
         logger.info("Got extra kwargs in TTS: %s", kwargs)
 
         is_qwen_tts = "qwen3-tts" in model.lower()
-        extra_params_type = (
-            None if model_specific_params is None else model_specific_params["type"]
-        )
+        extra_params_type = None if model_specific_params is None else model_specific_params["type"]
         if not is_qwen_tts and extra_params_type == "qwen-tts":
             raise ValueError(
                 "You have provided Qwen-specific TTS params."
@@ -359,9 +357,7 @@ class VLLMOmniVoiceClone(_VLLMOmniGenerateBase):
         **kwargs,
     ):
         is_qwen_tts = "qwen3-tts" in model.lower()
-        extra_params_type = (
-            None if model_specific_params is None else model_specific_params["type"]
-        )
+        extra_params_type = None if model_specific_params is None else model_specific_params["type"]
         if not is_qwen_tts and extra_params_type == "qwen-tts":
             raise ValueError(
                 "You have provided Qwen-specific TTS params."
@@ -535,9 +531,7 @@ class VLLMOmniSamplingParamsList:
     FUNCTION = "aggregate"
     CATEGORY = "vLLM-Omni/Sampling Params"
 
-    def aggregate(
-        self, param1: dict, param2: dict | None = None, param3: dict | None = None
-    ):
+    def aggregate(self, param1: dict, param2: dict | None = None, param3: dict | None = None):
         for i, p in enumerate((param1, param2, param3)):
             if isinstance(p, list):
                 raise ValueError(
