@@ -1,4 +1,6 @@
-"""Image/tensor format helpers.
+"""
+An high-level API client adapter that forwards ComfyUI inputs to vLLM-Omni's REST API,
+and transforms the API responses back to ComfyUI formats.
 
 The image generation part is derived from dougbtv/comfyui-vllm-omni by Doug (@dougbtv).
 Original source at https://github.com/dougbtv/comfyui-vllm-omni, distributed under the MIT License.
@@ -42,7 +44,7 @@ class VLLMOmniClient:
         negative_prompt: str | None = None,
         sampling_params: dict | None = None,
     ) -> torch.Tensor:
-        """Run text-to-image generatation via DALLE API"""
+        """Run text-to-image generation via DALLE API"""
         await self._check_model_exist(model)
 
         size = f"{width}x{height}"
@@ -247,10 +249,12 @@ class VLLMOmniClient:
             try:
                 text_response = choice["message"]["content"]
             except (KeyError, TypeError):
+                # Either this case (text response) or the audio response case will be hit. Checking None's later.
                 pass
             try:
                 audio_base64 = choice["message"]["audio"]["data"]
             except (KeyError, TypeError):
+                # Either this case (text response) or the audio response case will be hit. Checking None's later.
                 pass
         if audio_base64 is None and text_response is None:
             raise RuntimeError(
@@ -376,7 +380,7 @@ class VLLMOmniClient:
                     if not response.ok:
                         error_text = await response.text()
                         raise (ValueError if response.status < 500 else RuntimeError)(
-                            f"vLLM-Omni API returned status {response.status}"
+                            f"vLLM-Omni API returned status {response.status} "
                             f"when getting hosted model list: {error_text}"
                         )
 

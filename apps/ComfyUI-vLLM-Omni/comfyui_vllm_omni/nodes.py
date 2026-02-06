@@ -15,11 +15,6 @@ from .utils.validators import (
 logger = get_logger(__name__)
 
 
-class ContainsAnyDict(dict):
-    def __contains__(self, key):
-        return True
-
-
 class _VLLMOmniGenerateBase:
     """Base class for vLLM-Omni generation nodes with shared functionality."""
 
@@ -535,7 +530,7 @@ class VLLMOmniSamplingParamsList:
         for i, p in enumerate((param1, param2, param3)):
             if isinstance(p, list):
                 raise ValueError(
-                    f"Input {i} is a Multi-Stage Sampling Params List."
+                    f"Input {i} is a Multi-Stage Sampling Params List. "
                     f"Expected a single sampling parameters node (either AR or Diffusion)."
                 )
 

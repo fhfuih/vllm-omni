@@ -3,7 +3,7 @@
  * based on widget (in-node form fields) and input (connection link) values and changes.
  * However, this functionality is currently disabled/commented out.
  * Because it introduces too much complexity,
- * and it may even conflict with the current backend (Python) validation for unknown reasons (pending ConfyUI upstream fixes).
+ * and it may even conflict with the current backend (Python) validation for unknown reasons (pending ComfyUI upstream fixes).
  */
 
 import { app } from "../../scripts/app.js";

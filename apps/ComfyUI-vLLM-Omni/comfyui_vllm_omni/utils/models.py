@@ -1,5 +1,4 @@
 import re
-from re import Pattern
 
 from .types import Modality, ModelMode, Spec
 
@@ -75,14 +74,17 @@ _MODEL_PIPELINE_SPECS: dict[str, Spec] = {
     },
 }
 # Convert dict keys to regex patterns
-MODEL_PIPELINE_SPECS: dict[Pattern, Spec] = {}
+MODEL_PIPELINE_SPECS: dict[re.Pattern, Spec] = {}
 for k, v in _MODEL_PIPELINE_SPECS.items():
     MODEL_PIPELINE_SPECS[re.compile(k)] = v
 del _MODEL_PIPELINE_SPECS
 
 
 def lookup_model_spec(model: str) -> tuple[Spec | None, str | None]:
-    last_component = model.rstrip("/").rsplit("/", 1)[1]
+    try:
+        last_component = model.rstrip("/").rsplit("/", 1)[-1]
+    except IndexError:
+        last_component = model
     for pattern, spec in MODEL_PIPELINE_SPECS.items():
         if pattern.search(last_component):
             return spec, pattern.pattern

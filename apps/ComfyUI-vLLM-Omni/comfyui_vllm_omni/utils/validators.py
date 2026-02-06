@@ -8,7 +8,7 @@ def validate_model_and_sampling_params_types(
     model_name: str,
     sampling_param_list: dict | list[dict] | None = None,
 ):
-    # Check mode exist
+    # Check if model name exists
     if not model_name:
         raise ValueError("Model name must not be empty.")
 
@@ -26,7 +26,7 @@ def validate_model_and_sampling_params_types(
         # Check that the lengths match
         if len(stages) != len(sampling_param_list):
             raise ValueError(
-                f"Sampling parameter list length {len(sampling_param_list)} does not match"
+                f"Sampling parameter list length {len(sampling_param_list)} does not match "
                 f"number of stages {len(stages)} for model {model_name}."
             )
         # Check that each stage's type match
@@ -35,7 +35,7 @@ def validate_model_and_sampling_params_types(
                 raise RuntimeError("Internal error: unknown sampling parameter type")
             if sp["type"] != stages[i]:
                 raise ValueError(
-                    f"Sampling parameter type ({sp['type']}) does not match"
+                    f"Sampling parameter type ({sp['type']}) does not match "
                     f"stage type ({stages[i]}) at index {i} for model {model_name}."
                 )
     elif isinstance(sampling_param_list, dict):
@@ -44,9 +44,9 @@ def validate_model_and_sampling_params_types(
         # Check that the provided single sampling param matches all stages
         elif any(stage != sampling_param_list["type"] for stage in stages):
             raise ValueError(
-                f"When passing a single sampling parameter node, all stages of the model must match"
-                f"the provided sampling parameter's type."
-                f"However, the stages of model {model_name} are: {stages}."
+                f"When passing a single sampling parameter node, all stages of the model must match "
+                f"the provided sampling parameter's type. "
+                f"However, the stages of model {model_name} are: {stages}. "
                 f"The provided sampling parameter is {sampling_param_list['type']}"
             )
 
@@ -65,9 +65,9 @@ def add_sampling_parameters_to_stage(
     pipeline_spec, _ = lookup_model_spec(model_name)
     if not pipeline_spec:
         logger.warning(
-            f"Since the model {model_name} is not in our list, we cannot ensure if"
-            f"the fields ({tuple(params_to_add.keys())}) are added to the correct stage's sampling params."
-            f"We will do it heuristiclly."
+            f"Since the model {model_name} is not in our list, we cannot ensure if "
+            f"the fields ({tuple(params_to_add.keys())}) are added to the correct stage's sampling params. "
+            f"We will do it heuristically."
         )
         pipeline_spec = {"stages": ["diffusion"]}
 
