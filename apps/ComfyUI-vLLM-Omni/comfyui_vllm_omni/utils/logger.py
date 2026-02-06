@@ -90,7 +90,10 @@ if __name__ == "__main__":
         "messages": [
             {
                 "role": "system",
-                "content": "You are Qwen, a virtual human developed by the Qwen Team, Alibaba Group, capable of perceiving auditory and visual inputs, as well as generating text and speech.",
+                "content": (
+                    "You are Qwen, a virtual human developed by the Qwen Team, Alibaba Group,"
+                    "capable of perceiving auditory and visual inputs, as well as generating text and speech."
+                ),
             },
             {
                 "role": "user",

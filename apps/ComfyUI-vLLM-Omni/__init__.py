@@ -1,4 +1,4 @@
-"""Top-level package for comfyui_vllm_omni."""
+"""Top-level package for comfyui_vllm_omni."""  # noqa: N999  # This is not a python library intended to be imported
 
 __all__ = [
     "NODE_CLASS_MAPPINGS",

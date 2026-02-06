@@ -398,7 +398,8 @@ class VLLMOmniClient:
                     if not response.ok:
                         error_text = await response.text()
                         raise (ValueError if response.status < 500 else RuntimeError)(
-                            f"vLLM-Omni API returned status {response.status} when getting hosted model list: {error_text}"
+                            f"vLLM-Omni API returned status {response.status}"
+                            f"when getting hosted model list: {error_text}"
                         )
 
                     try:

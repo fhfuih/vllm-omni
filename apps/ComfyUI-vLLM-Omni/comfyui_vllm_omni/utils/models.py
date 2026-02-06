@@ -21,7 +21,10 @@ def _qwen25_payload_preprocessor(payload: dict) -> dict:
         payload["messages"] = [
             {
                 "role": "system",
-                "content": "You are Qwen, a virtual human developed by the Qwen Team, Alibaba Group, capable of perceiving auditory and visual inputs, as well as generating text and speech.",
+                "content": (
+                    "You are Qwen, a virtual human developed by the Qwen Team, Alibaba Group,"
+                    "capable of perceiving auditory and visual inputs, as well as generating text and speech."
+                ),
             },
             *payload["messages"],
         ]

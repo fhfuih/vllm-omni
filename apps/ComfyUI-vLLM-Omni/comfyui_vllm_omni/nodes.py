@@ -408,7 +408,8 @@ class VLLMOmniARSampling:
                     "FLOAT",
                     {"default": 1.0, "min": 0.0, "max": 5.0, "step": 0.01},
                 ),
-                # === Put seed at last. Whenever a field named "seed" is present, ComfyUI adds another field called "control after generate" ===
+                # === Put seed at last. ===
+                # Whenever a field named "seed" is present, ComfyUI adds another field called "control after generate"
                 "seed": (
                     "INT",
                     {
@@ -487,7 +488,8 @@ class VLLMOmniDiffusionSampling:
                         "tooltip": "Enable VAE slicing for reduced memory usage (slight quality trade-off)",
                     },
                 ),
-                # === Put seed at last. Whenever a field named "seed" is present, ComfyUI adds another field called "control after generate" ===
+                # === Put seed at last. ===
+                # Whenever a field named "seed" is present, ComfyUI adds another field called "control after generate"
                 "seed": (
                     "INT",
                     {
@@ -539,7 +541,8 @@ class VLLMOmniSamplingParamsList:
         for i, p in enumerate((param1, param2, param3)):
             if isinstance(p, list):
                 raise ValueError(
-                    f"Input {i} is a Multi-Stage Sampling Params List. Expected a single sampling parameters node (either AR or Diffusion)."
+                    f"Input {i} is a Multi-Stage Sampling Params List."
+                    f"Expected a single sampling parameters node (either AR or Diffusion)."
                 )
 
         params = [param1]
