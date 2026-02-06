@@ -61,6 +61,15 @@ To build a simple workflow,
     * For some multi-stage models like BAGEL, [only one stage's sampling parameters are exposed and tunable via vLLM-Omni's online serving API](https://docs.vllm.ai/projects/vllm-omni/en/latest/user_guide/examples/online_serving/bagel/). Thus, these models are treated as single-stage ones. Please check the vLLM-Omni documentation on how to use correctly set each model's sampling parameters.
     * For multi-stage models where all stages are either autoregression or diffusion, you can also connect only a single Sampling Params node, indicating that this set of sampling parameters will be used for all stages.
 
+**The following features are tested**:
+- Single-node workflows for
+    - Multimodal Comprehension (e.g., Qwen Omni, BAGEL)
+    - Text-to-Image Generation (e.g., Qwen-Image)
+    - Image-to-Image Generation (e.g., Qwen-Image-Edit)
+    - TTS (e.g., Qwen TTS, including VoiceDesign, VoiceClone, CustomVoice)
+
+**The following features are not currently**. They may work or break. You are welcomed to test it out and offer comments.
+- Multi-node workflow that connects multiple model services together.
 
 ## Develop
 
