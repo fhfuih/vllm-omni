@@ -575,7 +575,7 @@ class OvisImagePipeline(nn.Module, CFGParallelMixin):
 
         req_prompt_embeds = [p.get("prompt_embeds") if not isinstance(p, str) else None for p in req.prompts]
         if any(p is not None for p in req_prompt_embeds):
-            # If at list one prompt is provided as an embedding,
+            # If at least one prompt is provided as an embedding,
             # Then assume that the user wants to provide embeddings for all prompts, and enter this if block
             # If the user in fact provides mixed input format, req_prompt_embeds will have some None's
             # And `torch.stack` automatically raises an exception for us

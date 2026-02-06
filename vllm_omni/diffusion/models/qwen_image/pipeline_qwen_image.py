@@ -555,7 +555,7 @@ class QwenImagePipeline(nn.Module, QwenImageCFGParallelMixin):
 
         req_prompt_embeds = [p.get("prompt_embeds") if not isinstance(p, str) else None for p in req.prompts]
         if any(p is not None for p in req_prompt_embeds):
-            # If at list one prompt is provided as an embedding,
+            # If at least one prompt is provided as an embedding,
             # Then assume that the user wants to provide embeddings for all prompts, and enter this if block
             # If the user in fact provides mixed input format, req_prompt_embeds will have some None's
             # And `torch.stack` automatically raises an exception for us
@@ -569,7 +569,7 @@ class QwenImagePipeline(nn.Module, QwenImageCFGParallelMixin):
 
         height = req.sampling_params.height or self.default_sample_size * self.vae_scale_factor
         width = req.sampling_params.width or self.default_sample_size * self.vae_scale_factor
-        num_inference_steps = req.sampling_params.num_inference_steps or 512
+        num_inference_steps = req.sampling_params.num_inference_steps or 50
         sigmas = req.sampling_params.sigmas
         max_sequence_length = req.sampling_params.max_sequence_length or 512
         generator = req.sampling_params.generator
