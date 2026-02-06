@@ -4,10 +4,11 @@ vLLM-Omni offers a ComfyUI integration on top of its online serving API.
 It can send model inference requests to either a locally running vLLM-Omni service or a remote one.
 
 ## Requirement
-* Python 3.12 or above
-* [ComfyUI installed](https://docs.comfy.org/installation/system_requirements)
-* [vLLM-Omni installed](https://docs.vllm.ai/projects/vllm-omni/en/latest/getting_started/installation/) on either the same device or another device discoverable via the internet.
-* No need to install additional packages apart from those already required by ComfyUI.
+
+- Python 3.12 or above
+- [ComfyUI installed](https://docs.comfy.org/installation/system_requirements)
+- [vLLM-Omni installed](https://docs.vllm.ai/projects/vllm-omni/en/latest/getting_started/installation/) on either the same device or another device discoverable via the internet.
+- No need to install additional packages apart from those already required by ComfyUI.
 
 > [!TIP]
 > If you run both ComfyUI and vLLM-Omni on the same device, you can create separate virtual environments and use different Python versions for them.
@@ -44,9 +45,10 @@ If no, check your shell running the ComfyUI process. There may be some error mes
 ## Quickstart
 
 This extension offers the following nodes based on the output modalities (at **ComfyUI sidebar -> Node Library**):
-* **Generate Image** for text-to-image and image-to-image tasks
-* **Multimodality Comprehension** for multimodality-to-text and multimodality-to-audio tasks
-* **Generate Audio** for text-to-audio tasks
+
+- **Generate Image** for text-to-image and image-to-image tasks
+- **Multimodality Comprehension** for multimodality-to-text and multimodality-to-audio tasks
+- **TTS** and **TTS Voice Clone** for TTS tasks
 
 This extension also offers example workflows (at **ComfyUI sidebar -> Templates -> vLLM-Omni**)
 
@@ -54,15 +56,17 @@ This extension also offers example workflows (at **ComfyUI sidebar -> Templates 
 > The node UI and feature designs are intended to match vLLM-Omni online serving interfaces. It cannot offer more than what the interfaces support.
 
 To build a simple workflow yourself,
-* Drag a generation node onto the canvas.
-* Depending on your need, grab built-in multimedia file loader nodes, such as **image->Load Image**, **image->video->Load Video**, **audio->Load Audio**
-* Depending on your need, grab built-in multimedia file preview nodes, such as **image->Preview Image**, **image->video->Save Video**, **audio->Preview Audio**. For text output, you can install [ComfyUI-Custom-Scripts plugin](https://github.com/pythongosssss/ComfyUI-Custom-Scripts/) and grab its **utils->Show Text 🐍** node.
-* If you want to tune sampling parameters, grab corresponding nodes from **vLLM-Omni-> Sampling Params**.
-    * For multi-stage models, you can connect multiple **AR Sampling Params** and **Diffusion Sampling Params** nodes to a **Multi-Stage Sampling Params List** node, and connect this node to the generation node.
-    * For some multi-stage models like BAGEL, [only one stage's sampling parameters are exposed and tunable via vLLM-Omni's online serving API](https://docs.vllm.ai/projects/vllm-omni/en/latest/user_guide/examples/online_serving/bagel/). Thus, these models are treated as single-stage ones. Please check the vLLM-Omni documentation on how to use correctly set each model's sampling parameters.
-    * For multi-stage models where all stages are either autoregression or diffusion, you can also connect only a single Sampling Params node, indicating that this set of sampling parameters will be used for all stages.
+
+- Drag a generation node onto the canvas.
+- Depending on your need, grab built-in multimedia file loader nodes, such as **image->Load Image**, **image->video->Load Video**, **audio->Load Audio**
+- Depending on your need, grab built-in multimedia file preview nodes, such as **image->Preview Image**, **image->video->Save Video**, **audio->Preview Audio**. For text output, you can install [ComfyUI-Custom-Scripts plugin](https://github.com/pythongosssss/ComfyUI-Custom-Scripts/) and grab its **utils->Show Text 🐍** node.
+- If you want to tune sampling parameters, grab corresponding nodes from **vLLM-Omni-> Sampling Params**.
+    - For multi-stage models, you can connect multiple **AR Sampling Params** and **Diffusion Sampling Params** nodes to a **Multi-Stage Sampling Params List** node, and connect this node to the generation node.
+    - For some multi-stage models like BAGEL, [only one stage's sampling parameters are exposed and tunable via vLLM-Omni's online serving API](https://docs.vllm.ai/projects/vllm-omni/en/latest/user_guide/examples/online_serving/bagel/). Thus, these models are treated as single-stage ones. Please check the vLLM-Omni documentation on how to use correctly set each model's sampling parameters.
+    - For multi-stage models where all stages are either autoregression or diffusion, you can also connect only a single Sampling Params node, indicating that this set of sampling parameters will be used for all stages.
 
 **The following features are tested**:
+
 - Single-node workflows for
     - Multimodal Comprehension (e.g., Qwen Omni, BAGEL)
     - Text-to-Image Generation (e.g., Qwen-Image)
@@ -70,6 +74,7 @@ To build a simple workflow yourself,
     - TTS (e.g., Qwen TTS, including VoiceDesign, VoiceClone, CustomVoice)
 
 **The following features are not currently tested**. They may work or break. You are welcomed to test it out and offer comments.
+
 - Multi-node workflow that connects multiple model services together.
 
 ## Screenshots and Examples
@@ -131,14 +136,14 @@ Follow the [development convention and rules of vLLM-Omni](https://docs.vllm.ai/
 
 ## Limitation and Non-Goals
 
-* Single server mode only. No automatic load balancing or failover.
-* Features set is bounded to vLLM-Omni's online service capability, including
-    * The types of models supported in online mode,
-    * The types of sampling parameters supported in the online mode,
-    * The ways to send files (primarily through full-length base64 in JSON payload),
-    * Figuring out errors in the payload (such as unsupported fields by a specific model) if the endpoint does explicitly return error,
-    * (The lack of) Authentication
-    * (The lack of) Progress indicator
+- Single server mode only. No automatic load balancing or failover.
+- Features set is bounded to vLLM-Omni's online service capability, including
+    - The types of models supported in online mode,
+    - The types of sampling parameters supported in the online mode,
+    - The ways to send files (primarily through full-length base64 in JSON payload),
+    - Figuring out errors in the payload (such as unsupported fields by a specific model) if the endpoint does explicitly return error,
+    - (The lack of) Authentication
+    - (The lack of) Progress indicator
 
 ## Support
 
@@ -147,16 +152,19 @@ If you are new to ComfyUI, please check out [its documentation](https://docs.com
 If you are new to vLLM-Omni, please also check out [its documentation](https://docs.vllm.ai/projects/vllm-omni/en/latest/) for usage instructions.
 
 Whenever you find an issue or problem, please
-* First find out if this is an upstream limitation of vLLM-Omni's online serving mode, by [checking their documentation](https://docs.vllm.ai/projects/vllm-omni/en/latest/examples/).
-* [Open an issue](https://github.com/vllm-project/vllm-omni/issues) that clearly describes this ComfyUI or online service problem.
+
+- First find out if this is an upstream limitation of vLLM-Omni's online serving mode, by [checking their documentation](https://docs.vllm.ai/projects/vllm-omni/en/latest/examples/).
+- [Open an issue](https://github.com/vllm-project/vllm-omni/issues) that clearly describes this ComfyUI or online service problem.
 
 ## Acknowledgements
 
 Features
-* https://github.com/dougbtv/comfyui-vllm-omni/ The official reference implementation for ComfyUI integration with vLLM-Omni's DALL-E compatible image generation API.
-* https://github.com/Comfy-Org/ComfyUI/tree/master/comfy_extras ComfyUI's built-in node implementations.
+
+- https://github.com/dougbtv/comfyui-vllm-omni/ The official reference implementation for ComfyUI integration with vLLM-Omni's DALL-E compatible image generation API.
+- https://github.com/Comfy-Org/ComfyUI/tree/master/comfy_extras ComfyUI's built-in node implementations.
 
 UI/UX design references
-* https://github.com/sgl-project/sglang/pull/15271 SGLang Diffusion's official ComfyUI integration for image and video generation.
-* https://github.com/SXQBW/ComfyUI-Qwen-Omni A third party ComfyUI integration for Qwen Omni series.
-* https://github.com/flybirdxx/ComfyUI-Qwen-TTS https://github.com/DarioFT/ComfyUI-Qwen3-TTS Third  party ComfyUI integrations for Qwen TTS series.
+
+- https://github.com/sgl-project/sglang/pull/15271 SGLang Diffusion's official ComfyUI integration for image and video generation.
+- https://github.com/SXQBW/ComfyUI-Qwen-Omni A third party ComfyUI integration for Qwen Omni series.
+- https://github.com/flybirdxx/ComfyUI-Qwen-TTS https://github.com/DarioFT/ComfyUI-Qwen3-TTS Third  party ComfyUI integrations for Qwen TTS series.
