@@ -30,7 +30,7 @@ cd ComfyUI
 python main.py
 
 # If you are mainly using this node, launch it faster with
-python main --cpu
+python main.py --cpu
 ```
 
 On the device and virtual environment you run vLLM-Omni, start a model service with

@@ -1,4 +1,4 @@
-from typing import cast
+from typing import Literal, cast
 
 import torch
 from comfy_api.input import AudioInput, VideoInput
@@ -26,7 +26,7 @@ class _VLLMOmniGenerateBase:
     CATEGORY = "vLLM-Omni"
 
     @classmethod
-    def VALIDATE_INPUTS(cls, url, model):
+    def VALIDATE_INPUTS(cls, url, model) -> str | Literal[True]:
         """
         Can only validate this model's own input. Cannot check inputs from other nodes.
         See: https://docs.comfy.org/custom-nodes/backend/server_overview#validate_inputs
@@ -163,8 +163,10 @@ class VLLMOmniComprehension(_VLLMOmniGenerateBase):
     FUNCTION = "generate"
 
     @classmethod
-    def VALIDATE_INPUTS(cls, url, model, output_text, output_audio):
-        super().VALIDATE_INPUTS(url, model)
+    def VALIDATE_INPUTS(cls, url, model, output_text, output_audio) -> str | Literal[True]: # type: ignore[reportIncompatibleMethodOverride]
+        super_validation = super().VALIDATE_INPUTS(url, model)
+        if isinstance(super_validation, str):
+            return super_validation
         if not output_text and not output_audio:
             return "At least one of output_text or output_audio must be True."
         return True

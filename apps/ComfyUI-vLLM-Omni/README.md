@@ -30,7 +30,7 @@ cd ComfyUI
 python main.py
 
 # If you are mainly using this node, launch it faster with
-python main --cpu
+python main.py --cpu
 ```
 
 On the device and virtual environment you run vLLM-Omni, start a model service with
@@ -69,7 +69,7 @@ To build a simple workflow yourself,
     - Image-to-Image Generation (e.g., Qwen-Image-Edit)
     - TTS (e.g., Qwen TTS, including VoiceDesign, VoiceClone, CustomVoice)
 
-**The following features are not currently**. They may work or break. You are welcomed to test it out and offer comments.
+**The following features are not currently tested**. They may work or break. You are welcomed to test it out and offer comments.
 - Multi-node workflow that connects multiple model services together.
 
 ## Screenshots and Examples
@@ -103,8 +103,8 @@ You can configure per-stage sampling parameters for multi-stage models.
 
 <p align="center">
   <picture>
-    <source media="(prefers-color-scheme: dark)" src="https://raw.githubusercontent.com/vllm-project/vllm-omni/refs/heads/main/apps/ComfyUI-vLLM-Omni/docs/images/comfyui-image-generatoin.jpg">
-    <img alt="vLLM-Omni Main Architecture" src="https://raw.githubusercontent.com/vllm-project/vllm-omni/refs/heads/main/apps/ComfyUI-vLLM-Omni/docs/images/comfyui-image-generatoin.jpg" width=55%>
+    <source media="(prefers-color-scheme: dark)" src="https://raw.githubusercontent.com/vllm-project/vllm-omni/refs/heads/main/apps/ComfyUI-vLLM-Omni/docs/images/comfyui-image-generation.jpg">
+    <img alt="vLLM-Omni Main Architecture" src="https://raw.githubusercontent.com/vllm-project/vllm-omni/refs/heads/main/apps/ComfyUI-vLLM-Omni/docs/images/comfyui-image-generation.jpg" width=55%>
   </picture>
 </p>
 
@@ -159,4 +159,4 @@ Features
 UI/UX design references
 * https://github.com/sgl-project/sglang/pull/15271 SGLang Diffusion's official ComfyUI integration for image and video generation.
 * https://github.com/SXQBW/ComfyUI-Qwen-Omni A third party ComfyUI integration for Qwen Omni series.
-* https://github.com/flybirdxx/ComfyUI-Qwen-TTS https://github.com/DarioFT/ComfyUI-Qwen3-TTS Tthird party ComfyUI integrations for Qwen TTS series.
+* https://github.com/flybirdxx/ComfyUI-Qwen-TTS https://github.com/DarioFT/ComfyUI-Qwen3-TTS Third  party ComfyUI integrations for Qwen TTS series.
