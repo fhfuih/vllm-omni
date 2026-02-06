@@ -1,7 +1,7 @@
+from collections.abc import Callable
 from enum import Enum, auto
 from typing import (
     Any,
-    Callable,
     Literal,
     NotRequired,
     TypeAlias,

@@ -1,8 +1,5 @@
 import re
 from re import Pattern
-from typing import (
-    Optional,
-)
 
 from .types import Modality, ModelMode, Spec
 
@@ -81,7 +78,7 @@ for k, v in _MODEL_PIPELINE_SPECS.items():
 del _MODEL_PIPELINE_SPECS
 
 
-def lookup_model_spec(model: str) -> tuple[Optional[Spec], Optional[str]]:
+def lookup_model_spec(model: str) -> tuple[Spec | None, str | None]:
     last_component = model.rstrip("/").rsplit("/", 1)[1]
     for pattern, spec in MODEL_PIPELINE_SPECS.items():
         if pattern.search(last_component):
