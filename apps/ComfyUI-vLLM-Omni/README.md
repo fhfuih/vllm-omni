@@ -43,16 +43,17 @@ If no, check your shell running the ComfyUI process. There may be some error mes
 
 ## Quickstart
 
-This extension offers the following nodes based on the output modalities:
+This extension offers the following nodes based on the output modalities (at **ComfyUI sidebar -> Node Library**):
 * **Generate Image** for text-to-image and image-to-image tasks
 * **Multimodality Comprehension** for multimodality-to-text and multimodality-to-audio tasks
 * **Generate Audio** for text-to-audio tasks
-* **Generate Video** ~~for text-to-video and image-to-video tasks~~ (Not yet implemented)
+
+This extension also offers example workflows (at **ComfyUI sidebar -> Templates -> vLLM-Omni**)
 
 > [!INFO]
 > The node UI and feature designs are intended to match vLLM-Omni online serving interfaces. It cannot offer more than what the interfaces support.
 
-To build a simple workflow,
+To build a simple workflow yourself,
 * Drag a generation node onto the canvas.
 * Depending on your need, grab built-in multimedia file loader nodes, such as **image->Load Image**, **image->video->Load Video**, **audio->Load Audio**
 * Depending on your need, grab built-in multimedia file preview nodes, such as **image->Preview Image**, **image->video->Save Video**, **audio->Preview Audio**. For text output, you can install [ComfyUI-Custom-Scripts plugin](https://github.com/pythongosssss/ComfyUI-Custom-Scripts/) and grab its **utils->Show Text 🐍** node.
@@ -70,6 +71,59 @@ To build a simple workflow,
 
 **The following features are not currently**. They may work or break. You are welcomed to test it out and offer comments.
 - Multi-node workflow that connects multiple model services together.
+
+## Screenshots and Examples
+
+### Multimodal comprehension (e.g., Qwen Omni series, BAGEL)
+
+(Also available at **ComfyUI sidebar->Template->vLLM-Omni->vLLM-Omni Annotated Example**)
+
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" src="https://raw.githubusercontent.com/vllm-project/vllm-omni/refs/heads/main/apps/ComfyUI-vLLM-Omni/docs/images/comfyui-comprehension.jpg">
+    <img alt="vLLM-Omni Main Architecture" src="https://raw.githubusercontent.com/vllm-project/vllm-omni/refs/heads/main/apps/ComfyUI-vLLM-Omni/docs/images/comfyui-comprehension.jpg" width=55%>
+  </picture>
+</p>
+
+> [!TIP]
+> Although this node enables all-modality input, you should check whether the specific model you host and request for supports the modalities you connect to the node.
+
+You can configure per-stage sampling parameters for multi-stage models.
+
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" src="https://raw.githubusercontent.com/vllm-project/vllm-omni/refs/heads/main/apps/ComfyUI-vLLM-Omni/docs/images/comfyui-multi-stage.jpg">
+    <img alt="vLLM-Omni Main Architecture" src="https://raw.githubusercontent.com/vllm-project/vllm-omni/refs/heads/main/apps/ComfyUI-vLLM-Omni/docs/images/comfyui-multi-stage.jpg" width=55%>
+  </picture>
+</p>
+
+### Text-to-image and image-to-image generation (e.g., Z-Image-Turbo, Qwen-Image-Edit, BAGEL)
+
+(Also available at **ComfyUI sidebar->Template->vLLM-Omni->vLLM-Omni Image Generation**)
+
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" src="https://raw.githubusercontent.com/vllm-project/vllm-omni/refs/heads/main/apps/ComfyUI-vLLM-Omni/docs/images/comfyui-image-generatoin.jpg">
+    <img alt="vLLM-Omni Main Architecture" src="https://raw.githubusercontent.com/vllm-project/vllm-omni/refs/heads/main/apps/ComfyUI-vLLM-Omni/docs/images/comfyui-image-generatoin.jpg" width=55%>
+  </picture>
+</p>
+
+> [!TIP]
+> The node automatically choose text-to-image or image-to-image API endpoints depending on whether you connect an image input or not.
+
+### TTS (e.g., Qwen TTS series)
+
+(Also available at **ComfyUI sidebar->Template->vLLM-Omni->vLLM-Omni TTS**)
+
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" src="https://raw.githubusercontent.com/vllm-project/vllm-omni/refs/heads/main/apps/ComfyUI-vLLM-Omni/docs/images/comfyui-tts.jpg">
+    <img alt="vLLM-Omni Main Architecture" src="https://raw.githubusercontent.com/vllm-project/vllm-omni/refs/heads/main/apps/ComfyUI-vLLM-Omni/docs/images/comfyui-tts.jpg" width=55%>
+  </picture>
+</p>
+
+> [!TIP]
+> There is a dedicated node for VoiceClone tasks with reference audio input. Other simple text-to-speech tasks should use the regular TTS node.
 
 ## Develop
 
