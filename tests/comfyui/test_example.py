@@ -3,7 +3,7 @@
 """Tests for `scaffold_plugin` package."""
 
 import pytest
-from vllm_omni.nodes import VLLMOmniSamplingParamsList
+from comfyui_vllm_omni.nodes import VLLMOmniSamplingParamsList
 
 
 @pytest.fixture
