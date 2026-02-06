@@ -369,7 +369,7 @@ class ZImagePipeline(nn.Module):
 
         # For negative prompt, make it None if ALL are None---making it falsy and skipping CFG
         # If only some of them are not None, only set those to empty strings---because we cannot skip CFG anyway.
-        if all(isinstance(p, str) or p.get("negative_prompt") is None for p in req.prompts) or not req.prompts:
+        if all(isinstance(p, str) or p.get("negative_prompt") is None for p in req.prompts):
             negative_prompt: list[str] | None = None
         else:
             negative_prompt = ["" if isinstance(p, str) else (p.get("negative_prompt") or "") for p in req.prompts]
