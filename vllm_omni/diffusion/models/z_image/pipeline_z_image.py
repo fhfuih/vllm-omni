@@ -330,9 +330,8 @@ class ZImagePipeline(nn.Module):
         Function invoked when calling the pipeline for generation.
 
         Args:
-            prompt (`str` or `list[str]`, *optional*):
-                The prompt or prompts to guide the image generation. If not defined, one has to pass `prompt_embeds`.
-                instead.
+            req (`OmniDiffusionRequest`):
+                The request object containing the prompts and sampling parameters.
             cfg_normalization (`bool`, *optional*, defaults to False):
                 Whether to apply configuration normalization.
             cfg_truncation (`float`, *optional*, defaults to 1.0):

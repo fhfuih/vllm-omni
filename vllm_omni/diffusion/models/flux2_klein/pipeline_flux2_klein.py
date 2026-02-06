@@ -659,6 +659,8 @@ class Flux2KleinPipeline(nn.Module, CFGParallelMixin, SupportImageInput):
         Function invoked when calling the pipeline for generation.
 
         Args:
+            req (`OmniDiffusionRequest`):
+                The request object containing the prompts and sampling parameters.
             output_type (`str`, *optional*, defaults to `"pil"`):
                 The output format of the generate image. Choose between
                 [PIL](https://pillow.readthedocs.io/en/stable/): `PIL.Image.Image` or `np.array`.
