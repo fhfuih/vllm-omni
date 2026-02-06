@@ -287,7 +287,7 @@ class VLLMOmniClient:
         self,
         *,
         model: str,
-        prompt: str,
+        input: str,
         voice: str,
         response_format: AudioFormat,
         speed: float,
@@ -299,7 +299,7 @@ class VLLMOmniClient:
 
         payload = {
             "model": model,
-            "input": prompt,
+            "input": input,
             "voice": voice,
             "response_format": response_format,
             "speed": speed,
