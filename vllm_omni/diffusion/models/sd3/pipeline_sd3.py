@@ -566,16 +566,7 @@ class StableDiffusion3Pipeline(nn.Module, CFGParallelMixin):
 
         return latents
 
-    def forward(
-        self,
-        req: OmniDiffusionRequest,
-        prompt_2: str | list[str] = "",
-        prompt_3: str | list[str] = "",
-        negative_prompt_2: str | list[str] = "",
-        negative_prompt_3: str | list[str] = "",
-        pooled_prompt_embeds: torch.Tensor | None = None,
-        negative_pooled_prompt_embeds: torch.Tensor | None = None,
-    ) -> DiffusionOutput:
+    def forward(self, req: OmniDiffusionRequest) -> DiffusionOutput:
         # TODO: In online mode, sometimes it receives [{"negative_prompt": None}, {...}], so cannot use .get("...", "")
         # TODO: May be some data formatting operations on the API side. Hack for now.
         prompt = [p if isinstance(p, str) else (p.get("prompt") or "") for p in req.prompts]
@@ -605,6 +596,16 @@ class StableDiffusion3Pipeline(nn.Module, CFGParallelMixin):
             req.sampling_params.num_outputs_per_prompt if req.sampling_params.num_outputs_per_prompt > 0 else 1
         )
         latents = req.sampling_params.latents
+
+        prompt_2: str | list[str] = req.sampling_params.extra_args.get("prompt_2", "")
+        prompt_3: str | list[str] = req.sampling_params.extra_args.get("prompt_3", "")
+        negative_prompt_2: str | list[str] = req.sampling_params.extra_args.get("negative_prompt_2", "")
+        negative_prompt_3: str | list[str] = req.sampling_params.extra_args.get("negative_prompt_3", "")
+        pooled_prompt_embeds: torch.Tensor | None = req.sampling_params.extra_args.get("pooled_prompt_embeds", None)
+        negative_pooled_prompt_embeds: torch.Tensor | None = req.sampling_params.extra_args.get(
+            "negative_pooled_prompt_embeds", None
+        )
+
         # 1. check inputs
         # 2. encode prompts
         # 3. prepare latents and timesteps

@@ -645,42 +645,33 @@ class Flux2KleinPipeline(nn.Module, CFGParallelMixin, SupportImageInput):
     def interrupt(self):
         return self._interrupt
 
-    def forward(
-        self,
-        req: OmniDiffusionRequest,
-        output_type: str | None = "pil",
-        return_dict: bool = True,
-        attention_kwargs: dict[str, Any] | None = None,
-        callback_on_step_end: Callable[[int, int, dict], None] | None = None,
-        callback_on_step_end_tensor_inputs: list[str] = ["latents"],
-        text_encoder_out_layers: tuple[int, ...] = (9, 18, 27),
-    ) -> DiffusionOutput:
+    def forward(self, req: OmniDiffusionRequest) -> DiffusionOutput:
         r"""
         Function invoked when calling the pipeline for generation.
 
         Args:
             req (`OmniDiffusionRequest`):
                 The request object containing the prompts and sampling parameters.
-            output_type (`str`, *optional*, defaults to `"pil"`):
-                The output format of the generate image. Choose between
-                [PIL](https://pillow.readthedocs.io/en/stable/): `PIL.Image.Image` or `np.array`.
-            return_dict (`bool`, *optional*, defaults to `True`):
-                Whether or not to return a [`~pipelines.qwenimage.QwenImagePipelineOutput`] instead of a plain tuple.
-            attention_kwargs (`dict`, *optional*):
-                A kwargs dictionary that if specified is passed along to the `AttentionProcessor` as defined under
-                `self.processor` in
-                [diffusers.models.attention_processor](https://github.com/huggingface/diffusers/blob/main/src/diffusers/models/attention_processor.py).
-            callback_on_step_end (`Callable`, *optional*):
-                A function that calls at the end of each denoising steps during the inference. The function is called
-                with the following arguments: `callback_on_step_end(self: DiffusionPipeline, step: int, timestep: int,
-                callback_kwargs: Dict)`. `callback_kwargs` will include a list of all tensors as specified by
-                `callback_on_step_end_tensor_inputs`.
-            callback_on_step_end_tensor_inputs (`List`, *optional*):
-                The list of tensor inputs for the `callback_on_step_end` function. The tensors specified in the list
-                will be passed as `callback_kwargs` argument. You will only be able to include variables listed in the
-                `._callback_tensor_inputs` attribute of your pipeline class.
-            text_encoder_out_layers (`Tuple[int]`):
-                Layer indices to use in the `text_encoder` to derive the final prompt embeddings.
+                The `req.sampling_params.extra_args` can include the following keys:
+                - output_type (`str`, *optional*, defaults to `"pil"`):
+                    The output format of the generate image. Choose between
+                    [PIL](https://pillow.readthedocs.io/en/stable/): `PIL.Image.Image` or `np.array`.
+                - attention_kwargs (`dict`, *optional*):
+                    A kwargs dictionary that if specified is passed along to the `AttentionProcessor` as defined under
+                    `self.processor` in
+                    [diffusers.models.attention_processor](https://github.com/huggingface/diffusers/blob/main/src/diffusers/models/attention_processor.py).
+                - callback_on_step_end (`Callable`, *optional*):
+                    A function that calls at the end of each denoising steps during the inference. The function is
+                    called with the following arguments:
+                    `callback_on_step_end(self: DiffusionPipeline, step: int, timestep: int, callback_kwargs: Dict)`.
+                    `callback_kwargs` will include a list of all tensors as specified by
+                    `callback_on_step_end_tensor_inputs`.
+                - callback_on_step_end_tensor_inputs (`List`, *optional*):
+                    The list of tensor inputs for the `callback_on_step_end` function. The tensors specified in the list
+                    will be passed as `callback_kwargs` argument. You will only be able to include variables listed in
+                    the `._callback_tensor_inputs` attribute of your pipeline class.
+                - text_encoder_out_layers (`Tuple[int]`):
+                    Layer indices to use in the `text_encoder` to derive the final prompt embeddings.
 
         Examples:
 
@@ -721,8 +712,19 @@ class Flux2KleinPipeline(nn.Module, CFGParallelMixin, SupportImageInput):
             req.sampling_params.num_outputs_per_prompt if req.sampling_params.num_outputs_per_prompt > 0 else 1
         )
         max_sequence_length = req.sampling_params.max_sequence_length or 512
-        text_encoder_out_layers = req.sampling_params.extra_args.get("text_encoder_out_layers", text_encoder_out_layers)
         latents = req.sampling_params.latents
+
+        output_type: str = req.sampling_params.extra_args.get("output_type", "pil")
+        attention_kwargs: dict[str, Any] | None = req.sampling_params.extra_args.get("attention_kwargs", None)
+        callback_on_step_end: Callable[[int, int, dict], None] | None = req.sampling_params.extra_args.get(
+            "callback_on_step_end", None
+        )
+        callback_on_step_end_tensor_inputs: list[str] = req.sampling_params.extra_args.get(
+            "callback_on_step_end_tensor_inputs", ["latents"]
+        )
+        text_encoder_out_layers: tuple[int, ...] = req.sampling_params.extra_args.get(
+            "text_encoder_out_layers", (9, 18, 27)
+        )
 
         # 1. Check inputs. Raise error if not correct
         self.check_inputs(

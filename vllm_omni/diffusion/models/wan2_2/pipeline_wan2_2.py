@@ -324,13 +324,7 @@ class Wan22Pipeline(nn.Module, CFGParallelMixin):
     def current_timestep(self):
         return self._current_timestep
 
-    def forward(
-        self,
-        req: OmniDiffusionRequest,
-        output_type: str | None = "np",
-        attention_kwargs: dict | None = None,
-        **kwargs,
-    ) -> DiffusionOutput:
+    def forward(self, req: OmniDiffusionRequest) -> DiffusionOutput:
         # Get parameters from request or arguments
         if len(req.prompts) > 1:
             raise ValueError(
@@ -377,6 +371,9 @@ class Wan22Pipeline(nn.Module, CFGParallelMixin):
                 else guidance_low
             )
         )
+
+        output_type: str = req.sampling_params.extra_args.get("output_type", "np")
+        attention_kwargs: dict | None = req.sampling_params.extra_args.get("attention_kwargs", None)
 
         # record guidance for properties
         self._guidance_scale = guidance_low

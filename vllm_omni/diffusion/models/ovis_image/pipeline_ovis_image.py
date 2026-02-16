@@ -18,7 +18,7 @@
 import inspect
 import json
 import os
-from collections.abc import Callable, Iterable
+from collections.abc import Iterable
 from typing import Any
 
 import numpy as np
@@ -524,39 +524,25 @@ class OvisImagePipeline(nn.Module, CFGParallelMixin):
     def interrupt(self):
         return self._interrupt
 
-    def forward(
-        self,
-        req: OmniDiffusionRequest,
-        output_type: str | None = "pil",
-        return_dict: bool = True,
-        joint_attention_kwargs: dict[str, Any] | None = None,
-        callback_on_step_end: Callable[[int, int, dict], None] | None = None,
-        callback_on_step_end_tensor_inputs: list[str] = ["latents"],
-    ) -> DiffusionOutput:
+    def forward(self, req: OmniDiffusionRequest) -> DiffusionOutput:
         r"""
         Function invoked when calling the pipeline for generation.
 
         Args:
             req (`OmniDiffusionRequest`):
                 The request object containing the prompts and sampling parameters.
-            output_type (`str`, *optional*, defaults to `"pil"`):
-                The output format of the generate image. Choose between
-                [PIL](https://pillow.readthedocs.io/en/stable/): `PIL.Image.Image` or `np.array`.
-            return_dict (`bool`, *optional*, defaults to `True`):
-                Whether or not to return a [`~pipelines.flux.FluxPipelineOutput`] instead of a plain tuple.
-            joint_attention_kwargs (`dict`, *optional*):
-                A kwargs dictionary that if specified is passed along to the `AttentionProcessor` as defined under
-                `self.processor` in
-                [diffusers.models.attention_processor](https://github.com/huggingface/diffusers/blob/main/src/diffusers/models/attention_processor.py).
-            callback_on_step_end (`Callable`, *optional*):
-                A function that calls at the end of each denoising steps during the inference. The function is called
-                with the following arguments: `callback_on_step_end(self: DiffusionPipeline, step: int, timestep: int,
-                callback_kwargs: dict)`. `callback_kwargs` will include a list of all tensors as specified by
-                `callback_on_step_end_tensor_inputs`.
-            callback_on_step_end_tensor_inputs (`list`, *optional*):
-                The list of tensor inputs for the `callback_on_step_end` function. The tensors specified in the list
-                will be passed as `callback_kwargs` argument. You will only be able to include variables listed in the
-                `._callback_tensor_inputs` attribute of your pipeline class.
+                The `req.sampling_params.extra_args` can include the following keys:
+                - output_type (`str`, *optional*, defaults to `"pil"`):
+                    The output format of the generate image. Choose between
+                    [PIL](https://pillow.readthedocs.io/en/stable/): `PIL.Image.Image` or `np.array`.
+                - joint_attention_kwargs (`dict`, *optional*):
+                    A kwargs dictionary that if specified is passed along to the `AttentionProcessor` as defined under
+                    `self.processor` in
+                    [diffusers.models.attention_processor](https://github.com/huggingface/diffusers/blob/main/src/diffusers/models/attention_processor.py).
+                - callback_on_step_end_tensor_inputs (`list`, *optional*):
+                    The list of tensor inputs for the `callback_on_step_end` function. The tensors specified in the list
+                    will be passed as `callback_kwargs` argument. You will only be able to include variables listed in
+                    the `._callback_tensor_inputs` attribute of your pipeline class.
 
         Examples:
 
@@ -598,6 +584,14 @@ class OvisImagePipeline(nn.Module, CFGParallelMixin):
         )
         latents = req.sampling_params.latents
         max_sequence_length = req.sampling_params.max_sequence_length or 256
+
+        output_type: str = req.sampling_params.extra_args.get("output_type", "pil")
+        joint_attention_kwargs: dict[str, Any] | None = req.sampling_params.extra_args.get(
+            "joint_attention_kwargs", None
+        )
+        callback_on_step_end_tensor_inputs: list[str] = req.sampling_params.extra_args.get(
+            "callback_on_step_end_tensor_inputs", ["latents"]
+        )
 
         # Steps:
         # 1. Check Inputs

@@ -6,7 +6,7 @@ import math
 import os
 import re
 from collections.abc import Iterable
-from typing import Any, cast
+from typing import cast
 
 import numpy as np
 import PIL.Image
@@ -519,13 +519,7 @@ class LongCatImageEditPipeline(nn.Module, CFGParallelMixin, SupportImageInput):
                 f" {negative_prompt_embeds}. Please make sure to only forward one of the two."
             )
 
-    def forward(
-        self,
-        req: OmniDiffusionRequest,
-        output_type: str | None = "pil",
-        return_dict: bool = True,
-        joint_attention_kwargs: dict[str, Any] | None = None,
-    ):
+    def forward(self, req: OmniDiffusionRequest):
         # TODO: In online mode, sometimes it receives [{"negative_prompt": None}, {...}], so cannot use .get("...", "")
         # TODO: May be some data formatting operations on the API side. Hack for now.
         if len(req.prompts) > 1:
@@ -549,6 +543,8 @@ class LongCatImageEditPipeline(nn.Module, CFGParallelMixin, SupportImageInput):
         height = req.sampling_params.height or self.default_sample_size * self.vae_scale_factor
         width = req.sampling_params.width or self.default_sample_size * self.vae_scale_factor
         latents = req.sampling_params.latents
+
+        output_type: str = req.sampling_params.extra_args.get("output_type", "pil")
 
         if prompt is not None:
             batch_size = 1 if isinstance(prompt, str) else len(prompt)

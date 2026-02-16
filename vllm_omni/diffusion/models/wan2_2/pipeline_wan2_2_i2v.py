@@ -278,15 +278,7 @@ class Wan22I2VPipeline(nn.Module, SupportImageInput, CFGParallelMixin):
         image_embeds = self.image_encoder(pixel_values, output_hidden_states=True)
         return image_embeds.hidden_states[-2]
 
-    def forward(
-        self,
-        req: OmniDiffusionRequest,
-        output_type: str | None = "np",
-        image_embeds: torch.Tensor | None = None,
-        last_image: PIL.Image.Image | torch.Tensor | None = None,
-        attention_kwargs: dict | None = None,
-        **kwargs,
-    ) -> DiffusionOutput:
+    def forward(self, req: OmniDiffusionRequest) -> DiffusionOutput:
         # Get parameters from request or arguments
         if len(req.prompts) > 1:
             raise ValueError(
@@ -343,6 +335,11 @@ class Wan22I2VPipeline(nn.Module, SupportImageInput, CFGParallelMixin):
                 else guidance_low
             )
         )
+
+        output_type: str = req.sampling_params.extra_args.get("output_type", "np")
+        image_embeds: torch.Tensor | None = req.sampling_params.extra_args.get("image_embeds", None)
+        last_image: PIL.Image.Image | torch.Tensor | None = req.sampling_params.extra_args.get("last_image", None)
+        attention_kwargs: dict | None = req.sampling_params.extra_args.get("attention_kwargs", None)
 
         self._guidance_scale = guidance_low
         self._guidance_scale_2 = guidance_high

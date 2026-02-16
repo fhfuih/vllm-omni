@@ -217,13 +217,7 @@ class Wan22TI2VPipeline(nn.Module, SupportImageInput, CFGParallelMixin):
     def current_timestep(self):
         return self._current_timestep
 
-    def forward(
-        self,
-        req: OmniDiffusionRequest,
-        output_type: str | None = "np",
-        attention_kwargs: dict | None = None,
-        **kwargs,
-    ) -> DiffusionOutput:
+    def forward(self, req: OmniDiffusionRequest) -> DiffusionOutput:
         # Get parameters from request or arguments
         if len(req.prompts) > 1:
             raise ValueError(
@@ -269,6 +263,9 @@ class Wan22TI2VPipeline(nn.Module, SupportImageInput, CFGParallelMixin):
             guidance_scale = req.sampling_params.guidance_scale
         else:
             guidance_scale = 5.0
+
+        output_type: str = req.sampling_params.extra_args.get("output_type", "np")
+        attention_kwargs: dict | None = req.sampling_params.extra_args.get("attention_kwargs", None)
 
         self._guidance_scale = guidance_scale
 

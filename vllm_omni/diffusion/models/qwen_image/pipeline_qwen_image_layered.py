@@ -575,14 +575,7 @@ the image\n<|vision_start|><|image_pad|><|vision_end|><|im_end|>\n<|im_start|>as
     def interrupt(self):
         return self._interrupt
 
-    def forward(
-        self,
-        req: OmniDiffusionRequest,
-        prompt_embeds_mask: torch.Tensor | None = None,
-        negative_prompt_embeds_mask: torch.Tensor | None = None,
-        output_type: str | None = "pil",
-        attention_kwargs: dict[str, Any] | None = None,
-    ) -> DiffusionOutput:
+    def forward(self, req: OmniDiffusionRequest) -> DiffusionOutput:
         """Forward pass for image layered."""
 
         # 1. Get preprocessed image from request (pre-processing is done in DiffusionEngine)
@@ -617,6 +610,13 @@ the image\n<|vision_start|><|image_pad|><|vision_end|><|im_end|>\n<|im_start|>as
             req.sampling_params.num_outputs_per_prompt if req.sampling_params.num_outputs_per_prompt > 0 else 1
         )
         latents = req.sampling_params.latents
+
+        prompt_embeds_mask: torch.Tensor | None = req.sampling_params.extra_args.get("prompt_embeds_mask", None)
+        negative_prompt_embeds_mask: torch.Tensor | None = req.sampling_params.extra_args.get(
+            "negative_prompt_embeds_mask", None
+        )
+        output_type: str = req.sampling_params.extra_args.get("output_type", "pil")
+        attention_kwargs: dict[str, Any] | None = req.sampling_params.extra_args.get("attention_kwargs", None)
 
         if not isinstance(first_prompt, str) and "preprocessed_image" in (
             additional_information := first_prompt.get("additional_information", {})

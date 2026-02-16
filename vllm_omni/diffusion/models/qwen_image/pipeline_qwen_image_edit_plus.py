@@ -528,15 +528,7 @@ class QwenImageEditPlusPipeline(nn.Module, SupportImageInput, QwenImageCFGParall
     def interrupt(self):
         return self._interrupt
 
-    def forward(
-        self,
-        req: OmniDiffusionRequest,
-        prompt_embeds_mask: torch.Tensor | None = None,
-        negative_prompt_embeds_mask: torch.Tensor | None = None,
-        output_type: str | None = "pil",
-        attention_kwargs: dict[str, Any] | None = None,
-        callback_on_step_end_tensor_inputs: list[str] = ["latents"],
-    ) -> DiffusionOutput:
+    def forward(self, req: OmniDiffusionRequest) -> DiffusionOutput:
         """Forward pass for image editing with support for multiple images."""
         # TODO: In online mode, sometimes it receives [{"negative_prompt": None}, {...}], so cannot use .get("...", "")
         # TODO: May be some data formatting operations on the API side. Hack for now.
@@ -623,6 +615,16 @@ class QwenImageEditPlusPipeline(nn.Module, SupportImageInput, QwenImageCFGParall
             req.sampling_params.num_outputs_per_prompt if req.sampling_params.num_outputs_per_prompt > 0 else 1
         )
         latents = req.sampling_params.latents
+
+        prompt_embeds_mask: torch.Tensor | None = req.sampling_params.extra_args.get("prompt_embeds_mask", None)
+        negative_prompt_embeds_mask: torch.Tensor | None = req.sampling_params.extra_args.get(
+            "negative_prompt_embeds_mask", None
+        )
+        output_type: str = req.sampling_params.extra_args.get("output_type", "pil")
+        attention_kwargs: dict[str, Any] | None = req.sampling_params.extra_args.get("attention_kwargs", None)
+        callback_on_step_end_tensor_inputs: list[str] = req.sampling_params.extra_args.get(
+            "callback_on_step_end_tensor_inputs", ["latents"]
+        )
 
         # 1. check inputs
         # 2. encode prompts

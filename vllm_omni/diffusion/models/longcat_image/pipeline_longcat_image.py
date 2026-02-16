@@ -470,16 +470,7 @@ class LongCatImagePipeline(nn.Module, CFGParallelMixin):
         noise_pred = comb_pred * scale
         return noise_pred
 
-    def forward(
-        self,
-        req: OmniDiffusionRequest,
-        output_type: str | None = "pil",
-        return_dict: bool = True,
-        joint_attention_kwargs: dict[str, Any] | None = None,
-        enable_cfg_renorm: bool | None = True,
-        cfg_renorm_min: float | None = 0.0,
-        enable_prompt_rewrite: bool | None = True,
-    ) -> DiffusionOutput:
+    def forward(self, req: OmniDiffusionRequest) -> DiffusionOutput:
         # TODO: In online mode, sometimes it receives [{"negative_prompt": None}, {...}], so cannot use .get("...", "")
         # TODO: May be some data formatting operations on the API side. Hack for now.
         prompt = [p if isinstance(p, str) else (p.get("prompt") or "") for p in req.prompts]
@@ -512,9 +503,13 @@ class LongCatImagePipeline(nn.Module, CFGParallelMixin):
             req.sampling_params.num_outputs_per_prompt if req.sampling_params.num_outputs_per_prompt > 0 else 1
         )
         latents = req.sampling_params.latents
-        enable_prompt_rewrite = req.sampling_params.extra_args.get("enable_prompt_rewrite", enable_prompt_rewrite)
-        enable_cfg_renorm = req.sampling_params.extra_args.get("enable_cfg_renorm", enable_cfg_renorm)
-        cfg_renorm_min = req.sampling_params.extra_args.get("cfg_renorm_min", cfg_renorm_min)
+        enable_prompt_rewrite: bool = req.sampling_params.extra_args.get("enable_prompt_rewrite", True)
+        enable_cfg_renorm: bool = req.sampling_params.extra_args.get("enable_cfg_renorm", True)
+        cfg_renorm_min: float = req.sampling_params.extra_args.get("cfg_renorm_min", 0.0)
+        output_type: str = req.sampling_params.extra_args.get("output_type", "pil")
+        joint_attention_kwargs: dict[str, Any] | None = req.sampling_params.extra_args.get(
+            "joint_attention_kwargs", None
+        )
 
         self.check_inputs(
             prompt,

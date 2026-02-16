@@ -347,19 +347,21 @@ class StableAudioPipeline(nn.Module, SupportAudioOutput):
         latents = latents * self.scheduler.init_noise_sigma
         return latents
 
-    def forward(
-        self,
-        req: OmniDiffusionRequest,
-        num_waveforms_per_prompt: int = 1,
-        output_type: str = "np",
-    ) -> DiffusionOutput:
+    def forward(self, req: OmniDiffusionRequest) -> DiffusionOutput:
         """
         Generate audio from text prompt.
 
         Args:
-            req: OmniDiffusionRequest containing generation parameters
-            num_waveforms_per_prompt: Number of audio outputs per prompt
-            output_type: Output format ("np", "pt", or "latent")
+            req: OmniDiffusionRequest containing generation parameters.
+                The `req.sampling_params.extra_args` can include the following keys:
+                - audio_start_in_s (`float`, *optional*, defaults to 0.0):
+                    Start time of the audio in seconds.
+                - audio_end_in_s (`float`, *optional*):
+                    End time of the audio in seconds.
+                - num_waveforms_per_prompt (`int`, *optional*, defaults to 1):
+                    Number of audio outputs per prompt.
+                - output_type (`str`, *optional*, defaults to "np"):
+                    Output format ("np", "pt", or "latent").
 
         Returns:
             DiffusionOutput containing generated audio
@@ -399,8 +401,10 @@ class StableAudioPipeline(nn.Module, SupportAudioOutput):
         latents = req.sampling_params.latents
 
         # Get audio duration from request extra params or defaults
-        audio_start_in_s = req.sampling_params.extra_args.get("audio_start_in_s", 0.0)
-        audio_end_in_s = req.sampling_params.extra_args.get("audio_end_in_s", None)
+        audio_start_in_s: float = req.sampling_params.extra_args.get("audio_start_in_s", 0.0)
+        audio_end_in_s: float | None = req.sampling_params.extra_args.get("audio_end_in_s", None)
+        num_waveforms_per_prompt: int = req.sampling_params.extra_args.get("num_waveforms_per_prompt", 1)
+        output_type: str = req.sampling_params.extra_args.get("output_type", "np")
 
         # Calculate audio length
         downsample_ratio = self.vae.hop_length

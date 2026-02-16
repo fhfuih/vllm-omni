@@ -581,18 +581,7 @@ class FluxPipeline(nn.Module, CFGParallelMixin):
             return False
         return True
 
-    def forward(
-        self,
-        req: OmniDiffusionRequest,
-        prompt_2: str | list[str] | None = None,
-        negative_prompt_2: str | list[str] | None = None,
-        pooled_prompt_embeds: torch.FloatTensor | None = None,
-        negative_pooled_prompt_embeds: torch.FloatTensor | None = None,
-        output_type: str | None = "pil",
-        return_dict: bool = True,
-        joint_attention_kwargs: dict[str, Any] | None = None,
-        callback_on_step_end_tensor_inputs: list[str] = ["latents"],
-    ):
+    def forward(self, req: OmniDiffusionRequest):
         """Forward pass for flux."""
         # TODO: In online mode, sometimes it receives [{"negative_prompt": None}, {...}], so cannot use .get("...", "")
         # TODO: May be some data formatting operations on the API side. Hack for now.
@@ -631,6 +620,22 @@ class FluxPipeline(nn.Module, CFGParallelMixin):
             req.sampling_params.num_outputs_per_prompt if req.sampling_params.num_outputs_per_prompt > 0 else 1
         )
         latents = req.sampling_params.latents
+
+        prompt_2: str | list[str] | None = req.sampling_params.extra_args.get("prompt_2", None)
+        negative_prompt_2: str | list[str] | None = req.sampling_params.extra_args.get("negative_prompt_2", None)
+        pooled_prompt_embeds: torch.FloatTensor | None = req.sampling_params.extra_args.get(
+            "pooled_prompt_embeds", None
+        )
+        negative_pooled_prompt_embeds: torch.FloatTensor | None = req.sampling_params.extra_args.get(
+            "negative_pooled_prompt_embeds", None
+        )
+        output_type: str = req.sampling_params.extra_args.get("output_type", "pil")
+        joint_attention_kwargs: dict[str, Any] | None = req.sampling_params.extra_args.get(
+            "joint_attention_kwargs", None
+        )
+        callback_on_step_end_tensor_inputs: list[str] = req.sampling_params.extra_args.get(
+            "callback_on_step_end_tensor_inputs", ["latents"]
+        )
 
         # 1. Check inputs. Raise error if not correct
         self.check_inputs(
