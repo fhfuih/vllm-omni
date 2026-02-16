@@ -979,29 +979,22 @@ class HunyuanImage3Pipeline(HunyuanImage3PreTrainedModel, GenerationMixin):
 
         return output
 
-    def forward(
-        self,
-        req: OmniDiffusionRequest,
-        prompt: str | list[str] = "",
-        image_size="auto",
-        height: int = 1024,
-        width: int = 1024,
-        num_inference_steps: int = 50,
-        guidance_scale: float = 5.0,
-        system_prompt: str | None = None,
-        generator: torch.Generator | list[torch.Generator] | None = None,
-        **kwargs,
-    ) -> DiffusionOutput:
-        prompt = [p if isinstance(p, str) else (p.get("prompt") or "") for p in req.prompts] or prompt
-        generator = req.sampling_params.generator or generator
-        height = req.sampling_params.height or height
-        width = req.sampling_params.width or width
-        num_inference_steps = req.sampling_params.num_inference_steps or num_inference_steps
+    def forward(self, req: OmniDiffusionRequest) -> DiffusionOutput:
+        prompt = [p if isinstance(p, str) else (p.get("prompt") or "") for p in req.prompts]
+        generator = req.sampling_params.generator
+        height = req.sampling_params.height or 1024
+        width = req.sampling_params.width or 1024
+        num_inference_steps = req.sampling_params.num_inference_steps or 50
         if req.sampling_params.guidance_scale_provided:
             guidance_scale = req.sampling_params.guidance_scale
+        else:
+            guidance_scale = 5.0
         if guidance_scale <= 1.0:
             logger.warning("HunyuanImage3.0 does not support guidance_scale <= 1.0, will set it to 1.0 + epsilon.")
             guidance_scale = 1.0 + np.finfo(float).eps
+
+        system_prompt: str | None = req.sampling_params.extra_args.get("system_prompt")
+
         image_size = (height, width)
         model_inputs = self.prepare_model_inputs(
             prompt=prompt,
@@ -1013,5 +1006,5 @@ class HunyuanImage3Pipeline(HunyuanImage3PreTrainedModel, GenerationMixin):
             num_inference_steps=num_inference_steps,
             guidance_scale=guidance_scale,
         )
-        outputs = self._generate(**model_inputs, **kwargs)
+        outputs = self._generate(**model_inputs)
         return DiffusionOutput(output=outputs[0])
