@@ -16,6 +16,7 @@ from .comfyui_vllm_omni.nodes import (
     VLLMOmniGenerateImage,
     VLLMOmniGenerateVideo,
     VLLMOmniQwenTTSParams,
+    VLLMOmniRemoteLoRA,
     VLLMOmniSamplingParamsList,
     VLLMOmniTTS,
     VLLMOmniUnderstanding,
@@ -35,6 +36,7 @@ NODE_CLASS_MAPPINGS = {
     "VLLMOmniARSampling": VLLMOmniARSampling,
     "VLLMOmniDiffusionSampling": VLLMOmniDiffusionSampling,
     "VLLMOmniSamplingParamsList": VLLMOmniSamplingParamsList,
+    "VLLMOmniRemoteLoRA": VLLMOmniRemoteLoRA,
     "VLLMOmniQwenTTSParams": VLLMOmniQwenTTSParams,
     "VLLMOmniWanParams": VLLMOmniWanParams,
 }
@@ -51,6 +53,7 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "VLLMOmniARSampling": "AR Sampling Params",
     "VLLMOmniDiffusionSampling": "Diffusion Sampling Params",
     "VLLMOmniSamplingParamsList": "Multi-Stage Sampling Params List",
+    "VLLMOmniRemoteLoRA": "LoRA",
     "VLLMOmniQwenTTSParams": "Qwen TTS Params",
     "VLLMOmniWanParams": "Wan Video Params",
 }
