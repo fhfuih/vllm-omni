@@ -14,17 +14,20 @@ from .comfyui_vllm_omni.nodes import (
     VLLMOmniARSampling,
     VLLMOmniDiffusionSampling,
     VLLMOmniGenerateImage,
+    VLLMOmniGenerateVideo,
     VLLMOmniQwenTTSParams,
     VLLMOmniSamplingParamsList,
     VLLMOmniTTS,
     VLLMOmniUnderstanding,
     VLLMOmniVoiceClone,
+    VLLMOmniWanParams,
 )
 
 # A dictionary that contains all nodes you want to export with their names
 NODE_CLASS_MAPPINGS = {
     # === Generation ===
     "VLLMOmniGenerateImage": VLLMOmniGenerateImage,
+    "VLLMOmniGenerateVideo": VLLMOmniGenerateVideo,
     "VLLMOmniUnderstanding": VLLMOmniUnderstanding,
     "VLLMOmniTTS": VLLMOmniTTS,
     "VLLMOmniVoiceClone": VLLMOmniVoiceClone,
@@ -33,12 +36,14 @@ NODE_CLASS_MAPPINGS = {
     "VLLMOmniDiffusionSampling": VLLMOmniDiffusionSampling,
     "VLLMOmniSamplingParamsList": VLLMOmniSamplingParamsList,
     "VLLMOmniQwenTTSParams": VLLMOmniQwenTTSParams,
+    "VLLMOmniWanParams": VLLMOmniWanParams,
 }
 
 # A dictionary that contains the friendly/humanly readable titles for the nodes
 NODE_DISPLAY_NAME_MAPPINGS = {
     # === Generation ===
     "VLLMOmniGenerateImage": "Generate Image",
+    "VLLMOmniGenerateVideo": "Generate Video",
     "VLLMOmniUnderstanding": "Multimodality Understanding",
     "VLLMOmniTTS": "TTS (Text to Speech)",
     "VLLMOmniVoiceClone": "TTS Voice Cloning",
@@ -47,6 +52,7 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "VLLMOmniDiffusionSampling": "Diffusion Sampling Params",
     "VLLMOmniSamplingParamsList": "Multi-Stage Sampling Params List",
     "VLLMOmniQwenTTSParams": "Qwen TTS Params",
+    "VLLMOmniWanParams": "Wan Video Params",
 }
 
 WEB_DIRECTORY = "./web"

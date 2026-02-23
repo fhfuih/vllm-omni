@@ -11,6 +11,7 @@ from .utils.types import (
     AutoregressionSamplingParams,
     DiffusionSamplingParams,
     QwenTTSModelSpecificParams,
+    WanModelSpecificParams,
 )
 from .utils.validators import (
     add_sampling_parameters_to_stage,
@@ -138,6 +139,81 @@ class VLLMOmniGenerateImage(_VLLMOmniGenerateBase):
             sampling_params=sampling_params,
         )
 
+        return (output,)
+
+
+class VLLMOmniGenerateVideo(_VLLMOmniGenerateBase):
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "url": ("STRING", {"default": "http://localhost:8000/v1"}),
+                "model": ("STRING", {"default": "Wan-AI/Wan2.2-T2V-A14B-Diffusers"}),
+                "prompt": ("STRING", {"multiline": True}),
+                "negative_prompt": ("STRING", {"multiline": True, "default": ""}),
+                "width": ("INT", {"default": 832, "min": 1}),
+                "height": ("INT", {"default": 480, "min": 1}),
+                "fps": ("INT", {"default": 16, "min": 1}),
+                "num_frames": ("INT", {"default": 41, "min": 1}),
+            },
+            "optional": {
+                "image": ("IMAGE",),
+                "sampling_params": ("SAMPLING_PARAMS",),
+                "model_params": ("VIDEO_PARAMS",),
+            },
+        }
+
+    RETURN_TYPES = ("VIDEO",)
+    RETURN_NAMES = ("video",)
+    FUNCTION = "generate"
+
+    async def generate(
+        self,
+        url: str,
+        model: str,
+        prompt: str,
+        width: int,
+        height: int,
+        fps: int,
+        num_frames: int,
+        negative_prompt: str | None = None,
+        image: torch.Tensor | None = None,
+        sampling_params: dict | list[dict] | None = None,
+        model_params: dict | None = None,
+        **kwargs,
+    ):
+        logger.info("Uncaught kwargs: %s", kwargs)
+        logger.debug("Got sampling params: %s", sampling_params)
+        logger.debug("Got model params: %s", model_params)
+        validate_model_and_sampling_params_types(model, sampling_params)
+
+        # Currently, all video generation models are single-stage diffusion models
+        if isinstance(sampling_params, list):
+            if len(sampling_params) != 1:
+                raise ValueError(
+                    "Video generation expects a single sampling params group. "
+                    "Please provide one Diffusion sampling node."
+                )
+            sampling_params = sampling_params[0]
+
+        if sampling_params is not None:
+            sampling_params.pop("type", None)  # internal fields
+        if model_params is not None:
+            model_params.pop("type", None)  # internal fields
+
+        client = VLLMOmniClient(url)
+        output = await client.generate_video(
+            model=model,
+            prompt=prompt,
+            image=image,  # image present => i2v, absent => t2v
+            width=width,
+            height=height,
+            num_frames=num_frames,
+            fps=fps,
+            negative_prompt=negative_prompt,
+            sampling_params=sampling_params,
+            model_params=model_params,
+        )
         return (output,)
 
 
@@ -572,3 +648,32 @@ class VLLMOmniQwenTTSParams:
 
     def get_params(self, **kwargs):
         return (QwenTTSModelSpecificParams(kwargs),)
+
+
+class VLLMOmniWanParams:
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "guidance_scale_2": (
+                    "FLOAT",
+                    {"default": 4.0, "min": 0.0, "max": 20.0, "step": 0.1},
+                ),
+                "boundary_ratio": (
+                    "FLOAT",
+                    {"default": 0.875, "min": 0.0, "max": 1.0, "step": 0.001},
+                ),
+                "flow_shift": (
+                    "FLOAT",
+                    {"default": 5.0, "min": 0.0, "max": 100.0, "step": 0.1},
+                ),
+            }
+        }
+
+    RETURN_TYPES = ("VIDEO_PARAMS",)
+    RETURN_NAMES = ("Wan video params",)
+    FUNCTION = "get_params"
+    CATEGORY = "vLLM-Omni/Video Params"
+
+    def get_params(self, **kwargs):
+        return (WanModelSpecificParams(kwargs),)
