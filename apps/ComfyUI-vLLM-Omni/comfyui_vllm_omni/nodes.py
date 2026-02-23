@@ -51,6 +51,7 @@ class VLLMOmniGenerateImage(_VLLMOmniGenerateBase):
                 # "video": ("VIDEO",),
                 # "audio": ("AUDIO",),
                 "sampling_params": ("SAMPLING_PARAMS",),
+                "lora": ("REMOTE_LORA",),
             },
         }
 
@@ -71,6 +72,7 @@ class VLLMOmniGenerateImage(_VLLMOmniGenerateBase):
         audio: AudioInput | None = None,  # Hidden & unused
         video: VideoInput | None = None,  # Hidden & unused
         sampling_params: dict | list[dict] | None = None,
+        lora: dict | None = None,
         **kwargs,
     ):
         logger.info("Uncaught kwargs: %s", kwargs)
@@ -100,6 +102,7 @@ class VLLMOmniGenerateImage(_VLLMOmniGenerateBase):
                     height=height,
                     negative_prompt=negative_prompt,
                     sampling_params=sampling_params,
+                    lora=lora,
                 )
                 return (output,)
             elif image is not None and audio is None and video is None:
@@ -114,6 +117,7 @@ class VLLMOmniGenerateImage(_VLLMOmniGenerateBase):
                     negative_prompt=negative_prompt,
                     mask=mask,
                     sampling_params=sampling_params,
+                    lora=lora,
                 )
                 return (output,)
 
@@ -131,6 +135,7 @@ class VLLMOmniGenerateImage(_VLLMOmniGenerateBase):
             audio=audio,
             video=video,
             sampling_params=sampling_params,
+            lora=lora,
         )
 
         return (output,)
@@ -577,3 +582,49 @@ class VLLMOmniQwenTTSParams:
 
     def get_params(self, **kwargs):
         return ({"type": "qwen-tts", **kwargs},)
+
+
+class VLLMOmniRemoteLoRA:
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "local_path": ("STRING", {"default": ""}),
+                "name": ("STRING", {"default": ""}),
+                "scale": (
+                    "FLOAT",
+                    {"default": 0.0, "step": 0.1},
+                ),
+                "int_id": (
+                    "INT",
+                    {
+                        "default": 0,
+                        "min": 0,
+                        "step": 1,
+                        "tooltip": "0 means it is not set and the server can derive it.",
+                    },
+                ),
+            }
+        }
+
+    RETURN_TYPES = ("REMOTE_LORA",)
+    RETURN_NAMES = ("lora",)
+    FUNCTION = "get_lora"
+    CATEGORY = "vLLM-Omni/LoRA"
+
+    @classmethod
+    def VALIDATE_INPUTS(cls, local_path, name) -> str | Literal[True]:
+        if not local_path.strip() and not name.strip():
+            return "Either local_path or name must be provided."
+        return True
+
+    def get_lora(self, local_path: str, name: str, scale: float, int_id: int):
+        local_path = local_path.strip()
+        name = name.strip()
+        lora = {
+            "local_path": local_path or None,
+            "name": name or None,
+            "scale": float(scale),
+            "int_id": int(int_id) if int_id > 0 else None,
+        }
+        return (lora,)

@@ -6,6 +6,7 @@ The image generation part is derived from dougbtv/comfyui-vllm-omni by Doug (@do
 Original source at https://github.com/dougbtv/comfyui-vllm-omni, distributed under the MIT License.
 """
 
+import json
 from typing import Any
 
 import aiohttp
@@ -43,6 +44,7 @@ class VLLMOmniClient:
         height: int,
         negative_prompt: str | None = None,
         sampling_params: dict | None = None,
+        lora: dict | None = None,
     ) -> torch.Tensor:
         """Run text-to-image generation via DALLE API"""
         await self._check_model_exist(model)
@@ -52,7 +54,7 @@ class VLLMOmniClient:
             sampling_params = {k: v for k, v in sampling_params.items() if k != "type"}
 
         size = f"{width}x{height}"
-        payload = {
+        payload: dict[str, Any] = {
             "model": model,
             "prompt": prompt,
             "size": size,
@@ -62,6 +64,8 @@ class VLLMOmniClient:
             payload["negative_prompt"] = negative_prompt
         if sampling_params is not None:
             payload.update(sampling_params)
+        if lora is not None:
+            payload["lora"] = lora
         logger.debug("img gen payload: %s", payload)
 
         url = self.base_url + "/images/generations"
@@ -114,6 +118,7 @@ class VLLMOmniClient:
         negative_prompt: str | None = None,
         mask: torch.Tensor | None = None,
         sampling_params: dict | None = None,
+        lora: dict | None = None,
     ) -> torch.Tensor:
         """Run image editing via DALLE API"""
         await self._check_model_exist(model)
@@ -139,6 +144,8 @@ class VLLMOmniClient:
         if sampling_params is not None:
             for k, v in sampling_params.items():
                 form.add_field(k, str(v))
+        if lora is not None:
+            form.add_field("lora", json.dumps(lora, ensure_ascii=False))
         if mask is not None:
             mask_filename = "mask.png"
             form.add_field(
@@ -191,6 +198,7 @@ class VLLMOmniClient:
         audio: AudioInput | None = None,
         video: VideoInput | None = None,
         sampling_params: dict | list[dict] | None = None,
+        lora: dict | None = None,
     ) -> torch.Tensor:
         payload = VLLMOmniClient._prepare_chat_completion_messages(
             model=model,
@@ -201,6 +209,8 @@ class VLLMOmniClient:
             video=video,
             sampling_params=sampling_params,
             modalities=["image"],
+            # === below are additional `extra_body` fields, handled by **kwargs ===
+            lora=lora,
         )
         choices = await self._generate_base_chat_completion(model, payload)
 

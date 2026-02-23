@@ -15,6 +15,7 @@ from .comfyui_vllm_omni.nodes import (
     VLLMOmniDiffusionSampling,
     VLLMOmniGenerateImage,
     VLLMOmniQwenTTSParams,
+    VLLMOmniRemoteLoRA,
     VLLMOmniSamplingParamsList,
     VLLMOmniTTS,
     VLLMOmniUnderstanding,
@@ -33,6 +34,7 @@ NODE_CLASS_MAPPINGS = {
     "VLLMOmniDiffusionSampling": VLLMOmniDiffusionSampling,
     "VLLMOmniSamplingParamsList": VLLMOmniSamplingParamsList,
     "VLLMOmniQwenTTSParams": VLLMOmniQwenTTSParams,
+    "VLLMOmniRemoteLoRA": VLLMOmniRemoteLoRA,
 }
 
 # A dictionary that contains the friendly/humanly readable titles for the nodes
@@ -47,6 +49,7 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "VLLMOmniDiffusionSampling": "Diffusion Sampling Params",
     "VLLMOmniSamplingParamsList": "Multi-Stage Sampling Params List",
     "VLLMOmniQwenTTSParams": "Qwen TTS Params",
+    "VLLMOmniRemoteLoRA": "LoRA",
 }
 
 WEB_DIRECTORY = "./web"
