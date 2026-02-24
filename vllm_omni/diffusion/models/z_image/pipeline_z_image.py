@@ -383,7 +383,10 @@ class ZImagePipeline(nn.Module):
         generator = req.sampling_params.generator
         sigmas = req.sampling_params.sigmas
         max_sequence_length = req.sampling_params.max_sequence_length or 512
-        guidance_scale = req.sampling_params.guidance_scale if req.sampling_params.guidance_rescale is not None else 5.0
+        if req.sampling_params.guidance_scale_provided:
+            guidance_scale = req.sampling_params.guidance_scale
+        else:
+            guidance_scale = 5.0
         num_images_per_prompt = (
             req.sampling_params.num_outputs_per_prompt if req.sampling_params.num_outputs_per_prompt > 0 else 1
         )

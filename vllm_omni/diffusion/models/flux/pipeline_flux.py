@@ -612,7 +612,10 @@ class FluxPipeline(nn.Module, CFGParallelMixin):
         width = req.sampling_params.width or self.default_sample_size * self.vae_scale_factor
         num_inference_steps = req.sampling_params.num_inference_steps or 28
         sigmas = req.sampling_params.sigmas
-        guidance_scale = req.sampling_params.guidance_scale or 3.5
+        if req.sampling_params.guidance_scale_provided:
+            guidance_scale = req.sampling_params.guidance_scale
+        else:
+            guidance_scale = 3.5
         generator = req.sampling_params.generator
         true_cfg_scale = req.sampling_params.true_cfg_scale or 1.0
         max_sequence_length = req.sampling_params.max_sequence_length or 512

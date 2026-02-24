@@ -534,7 +534,10 @@ class LongCatImageEditPipeline(nn.Module, CFGParallelMixin, SupportImageInput):
         negative_prompt_embeds = None if isinstance(first_prompt, str) else first_prompt.get("negative_prompt_embeds")
 
         sigmas = req.sampling_params.sigmas
-        guidance_scale = req.sampling_params.guidance_scale or 3.5
+        if req.sampling_params.guidance_scale_provided:
+            guidance_scale = req.sampling_params.guidance_scale
+        else:
+            guidance_scale = 3.5
         num_inference_steps = req.sampling_params.num_inference_steps or 50
         num_images_per_prompt = (
             req.sampling_params.num_outputs_per_prompt if req.sampling_params.num_outputs_per_prompt > 0 else 1

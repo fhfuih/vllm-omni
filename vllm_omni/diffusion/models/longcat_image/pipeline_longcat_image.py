@@ -498,7 +498,10 @@ class LongCatImagePipeline(nn.Module, CFGParallelMixin):
         num_inference_steps = req.sampling_params.num_inference_steps or 50
         sigmas = req.sampling_params.sigmas
         generator = req.sampling_params.generator
-        guidance_scale = req.sampling_params.guidance_scale or 4.5
+        if req.sampling_params.guidance_scale_provided:
+            guidance_scale = req.sampling_params.guidance_scale
+        else:
+            guidance_scale = 4.5
         num_images_per_prompt = (
             req.sampling_params.num_outputs_per_prompt if req.sampling_params.num_outputs_per_prompt > 0 else 1
         )

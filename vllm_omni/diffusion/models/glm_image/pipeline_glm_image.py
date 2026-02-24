@@ -875,7 +875,10 @@ class GlmImagePipeline(nn.Module):
         height = req.sampling_params.height or img_height or self.default_sample_size * self.vae_scale_factor
         width = req.sampling_params.width or img_width or self.default_sample_size * self.vae_scale_factor
         num_inference_steps = req.sampling_params.num_inference_steps or 50
-        guidance_scale = req.sampling_params.guidance_scale or 1.5
+        if req.sampling_params.guidance_scale_provided:
+            guidance_scale = req.sampling_params.guidance_scale
+        else:
+            guidance_scale = 1.5
 
         # 0. Validate inputs
         self.check_inputs(prompt=prompt, height=height, width=width, prompt_embeds=prompt_embeds)
