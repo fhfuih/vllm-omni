@@ -365,17 +365,30 @@ class ZImagePipeline(nn.Module):
 
         req_prompt_embeds = [p.get("prompt_embeds") if not isinstance(p, str) else None for p in req.prompts]
         if any(p is not None for p in req_prompt_embeds):
-            # If at least one prompt is provided as an embedding,
-            # Then assume that the user wants to provide embeddings for all prompts, and enter this if block
-            # If the user in fact provides mixed input format, req_prompt_embeds will have some None's
-            # And `torch.stack` automatically raises an exception for us
-            prompt_embeds = torch.stack(req_prompt_embeds)  # type: ignore # intentionally expect TypeError
+            try:
+                prompt_embeds = torch.stack(req_prompt_embeds)  # type: ignore # intentionally expect TypeError
+            except TypeError:
+                raise ValueError(
+                    "If you provide `prompt_embeds` for at least one prompt, you have to provide `prompt_embeds` for"
+                    " all prompts so the pipeline can stack them together."
+                )
+        else:
+            prompt_embeds = None
 
         req_negative_prompt_embeds = [
             p.get("negative_prompt_embeds") if not isinstance(p, str) else None for p in req.prompts
         ]
         if any(p is not None for p in req_negative_prompt_embeds):
-            negative_prompt_embeds = torch.stack(req_negative_prompt_embeds)  # type: ignore # intentionally expect TypeError
+            try:
+                negative_prompt_embeds = torch.stack(req_negative_prompt_embeds)  # type: ignore # intentionally expect TypeError
+            except TypeError:
+                raise ValueError(
+                    "If you provide `negative_prompt_embeds` for at least one prompt, "
+                    "you have to provide `negative_prompt_embeds` for all prompts "
+                    "so the pipeline can stack them together."
+                )
+        else:
+            negative_prompt_embeds = None
 
         height = req.sampling_params.height or 1024
         width = req.sampling_params.width or 1024
