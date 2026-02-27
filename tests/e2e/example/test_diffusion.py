@@ -18,11 +18,12 @@ Each test asserts:
 """
 
 import base64
+import io
 import os
 import signal
 import subprocess
 import sys
-import tempfile
+import threading
 import urllib.request
 from io import BytesIO
 from pathlib import Path
@@ -98,38 +99,56 @@ def output_dir(tmp_path_factory) -> Path:
 def run_script(script: Path, *args: str) -> None:
     """Run an example Python script as a subprocess; assert zero exit code.
 
-    Uses temp files for stdout/stderr instead of pipes so that grandchild
-    worker processes (which inherit file descriptors) do not cause an
-    indefinite hang: proc.wait() returns as soon as the direct child exits,
-    regardless of whether grandchildren are still alive.  start_new_session
-    puts the whole tree in its own process group so orphaned workers are
-    cleaned up via killpg after the direct child exits.
-    """
-    with tempfile.TemporaryFile() as stdout_f, tempfile.TemporaryFile() as stderr_f:
-        proc = subprocess.Popen(
-            [sys.executable, str(script), *args],
-            stdout=stdout_f,
-            stderr=stderr_f,
-            start_new_session=True,  # new process group → killpg cleans up workers
-        )
-        try:
-            returncode = proc.wait()
-        finally:
-            # Kill any surviving grandchild workers so they don't linger.
-            try:
-                os.killpg(proc.pid, signal.SIGTERM)
-            except ProcessLookupError:
-                pass
+    Output is tee'd: written to the console in real time (visible with pytest
+    -s) and also buffered so the last 2000 chars appear in the assertion
+    message on failure.
 
-        stdout_f.seek(0)
-        stderr_f.seek(0)
-        stdout = stdout_f.read().decode(errors="replace")
-        stderr = stderr_f.read().decode(errors="replace")
+    Uses PIPE + reader threads rather than communicate() to avoid the classic
+    hang: grandchild worker processes inherit the pipe write-end, so
+    communicate() would block on EOF forever if the main child crashes.
+    Instead we use proc.wait() (direct-child only), then killpg to terminate
+    the whole process group, which closes all write-ends and lets the reader
+    threads finish naturally.
+    """
+    proc = subprocess.Popen(
+        [sys.executable, str(script), *args],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        start_new_session=True,  # new process group → killpg cleans up workers
+    )
+
+    stdout_buf = io.StringIO()
+    stderr_buf = io.StringIO()
+
+    def _tee(src, console, buf):
+        for raw_line in src:
+            line = raw_line.decode(errors="replace")
+            console.write(line)
+            console.flush()
+            buf.write(line)
+
+    t_out = threading.Thread(target=_tee, args=(proc.stdout, sys.stdout, stdout_buf), daemon=True)
+    t_err = threading.Thread(target=_tee, args=(proc.stderr, sys.stderr, stderr_buf), daemon=True)
+    t_out.start()
+    t_err.start()
+
+    try:
+        returncode = proc.wait()
+    finally:
+        # Kill surviving grandchild workers; this closes their pipe write-ends
+        # so the reader threads reach EOF and exit.
+        try:
+            os.killpg(proc.pid, signal.SIGTERM)
+        except ProcessLookupError:
+            pass
+
+    t_out.join(timeout=10)
+    t_err.join(timeout=10)
 
     assert returncode == 0, (
         f"{script.name} failed (exit {returncode}):\n"
-        f"--- STDOUT (last 2000 chars) ---\n{stdout[-2000:]}\n"
-        f"--- STDERR (last 2000 chars) ---\n{stderr[-2000:]}"
+        f"--- STDOUT (last 2000 chars) ---\n{stdout_buf.getvalue()[-2000:]}\n"
+        f"--- STDERR (last 2000 chars) ---\n{stderr_buf.getvalue()[-2000:]}"
     )
 
 
