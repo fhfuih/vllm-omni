@@ -110,9 +110,9 @@ python "${REPO_ROOT}/examples/offline_inference/text_to_image/text_to_image.py" 
   --model "${MODEL_PREFIX}Qwen/Qwen-Image" \
   --prompt "a cup of coffee on the table" \
   --seed 42 \
-  --cfg_scale 4.0 \
-  --num_images_per_prompt 1 \
-  --num_inference_steps 50 \
+  --cfg-scale 4.0 \
+  --num-images-per-prompt 1 \
+  --num-inference-steps 50 \
   --height 1024 \
   --width 1024 \
   --output "${OUTPUT_DIR}/qwen_image_coffee.png"
@@ -121,81 +121,81 @@ python "${REPO_ROOT}/examples/offline_inference/text_to_image/text_to_image.py" 
   --model "${MODEL_PREFIX}Qwen/Qwen-Image" \
   --prompt "a cup of coffee on the table" \
   --seed 42 \
-  --cfg_scale 4.0 \
-  --num_images_per_prompt 1 \
-  --num_inference_steps 50 \
+  --cfg-scale 4.0 \
+  --num-images-per-prompt 1 \
+  --num-inference-steps 50 \
   --height 1024 \
   --width 1024 \
-  --cache_backend cache_dit \
+  --cache-backend cache_dit \
   --output "${OUTPUT_DIR}/qwen_image_coffee_cache_dit.png"
 
 python "${REPO_ROOT}/examples/offline_inference/text_to_image/text_to_image.py" \
   --model "${MODEL_PREFIX}Qwen/Qwen-Image" \
   --prompt "a cup of coffee on the table" \
   --seed 42 \
-  --cfg_scale 4.0 \
-  --num_images_per_prompt 1 \
-  --num_inference_steps 50 \
+  --cfg-scale 4.0 \
+  --num-images-per-prompt 1 \
+  --num-inference-steps 50 \
   --height 1024 \
   --width 1024 \
-  --cache_backend tea_cache \
+  --cache-backend tea_cache \
   --output "${OUTPUT_DIR}/qwen_image_coffee_tea_cache.png"
 
 python "${REPO_ROOT}/examples/offline_inference/text_to_image/text_to_image.py" \
   --model "${MODEL_PREFIX}Qwen/Qwen-Image" \
   --prompt "a cup of coffee on the table" \
   --seed 42 \
-  --cfg_scale 4.0 \
-  --num_images_per_prompt 1 \
-  --num_inference_steps 50 \
+  --cfg-scale 4.0 \
+  --num-images-per-prompt 1 \
+  --num-inference-steps 50 \
   --height 1024 \
   --width 1024 \
-  --ulysses_degree 2 \
+  --ulysses-degree 2 \
   --output "${OUTPUT_DIR}/qwen_image_coffee_ulysses_degree.png"
 
 python "${REPO_ROOT}/examples/offline_inference/text_to_image/text_to_image.py" \
   --model "${MODEL_PREFIX}Qwen/Qwen-Image" \
   --prompt "a cup of coffee on the table" \
   --seed 42 \
-  --cfg_scale 4.0 \
-  --num_images_per_prompt 1 \
-  --num_inference_steps 50 \
+  --cfg-scale 4.0 \
+  --num-images-per-prompt 1 \
+  --num-inference-steps 50 \
   --height 1024 \
   --width 1024 \
-  --ring_degree 2 \
+  --ring 2 \
   --output "${OUTPUT_DIR}/qwen_image_coffee_ring_degree.png"
 
 python "${REPO_ROOT}/examples/offline_inference/text_to_image/text_to_image.py" \
   --model "${MODEL_PREFIX}Qwen/Qwen-Image" \
   --prompt "a cup of coffee on the table" \
   --seed 42 \
-  --cfg_scale 4.0 \
-  --num_images_per_prompt 1 \
-  --num_inference_steps 50 \
+  --cfg-scale 4.0 \
+  --num-images-per-prompt 1 \
+  --num-inference-steps 50 \
   --height 1024 \
   --width 1024 \
-  --cfg_parallel_size 2 \
+  --cfg-parallel-size 2 \
   --output "${OUTPUT_DIR}/qwen_image_coffee_cfg_parallel.png"
 
 python "${REPO_ROOT}/examples/offline_inference/text_to_image/text_to_image.py" \
   --model "${MODEL_PREFIX}Qwen/Qwen-Image" \
   --prompt "a cup of coffee on the table" \
   --seed 42 \
-  --cfg_scale 4.0 \
-  --num_images_per_prompt 1 \
-  --num_inference_steps 50 \
+  --cfg-scale 4.0 \
+  --num-images-per-prompt 1 \
+  --num-inference-steps 50 \
   --height 1024 \
   --width 1024 \
-  --tensor_parallel_size 2 \
+  --tensor-parallel-size 2 \
   --output "${OUTPUT_DIR}/qwen_image_coffee_tensor_parallel.png"
 
 python "${REPO_ROOT}/examples/offline_inference/text_to_image/text_to_image.py" \
   --model "${MODEL_PREFIX}Tongyi-MAI/Z-Image-Turbo" \
   --prompt "a cup of coffee on the table" \
   --seed 42 \
-  --cfg_scale 4.0 \
-  --num_images_per_prompt 1 \
-  --num_inference_steps 50 \
+  --cfg-scale 4.0 \
+  --num-images-per-prompt 1 \
+  --num-inference-steps 50 \
   --height 1024 \
   --width 1024 \
   --output "${OUTPUT_DIR}/zimage_coffee.png"
@@ -204,9 +204,9 @@ python "${REPO_ROOT}/examples/offline_inference/text_to_image/text_to_image.py" 
   --model "${MODEL_PREFIX}AIDC-AI/Ovis-Image-7B" \
   --prompt "a cup of coffee on the table" \
   --seed 42 \
-  --cfg_scale 4.0 \
-  --num_images_per_prompt 1 \
-  --num_inference_steps 50 \
+  --cfg-scale 4.0 \
+  --num-images-per-prompt 1 \
+  --num-inference-steps 50 \
   --height 1024 \
   --width 1024 \
   --output "${OUTPUT_DIR}/ovis_image_coffee.png"
@@ -215,9 +215,9 @@ python "${REPO_ROOT}/examples/offline_inference/text_to_image/text_to_image.py" 
   --model "${MODEL_PREFIX}meituan-longcat/LongCat-Image" \
   --prompt "a cup of coffee on the table" \
   --seed 42 \
-  --cfg_scale 4.0 \
-  --num_images_per_prompt 1 \
-  --num_inference_steps 50 \
+  --cfg-scale 4.0 \
+  --num-images-per-prompt 1 \
+  --num-inference-steps 50 \
   --height 1024 \
   --width 1024 \
   --output "${OUTPUT_DIR}/longcat_image_coffee.png"
@@ -226,9 +226,9 @@ python "${REPO_ROOT}/examples/offline_inference/text_to_image/text_to_image.py" 
   --model "${MODEL_PREFIX}stabilityai/stable-diffusion-3.5-medium" \
   --prompt "a cup of coffee on the table" \
   --seed 42 \
-  --cfg_scale 4.0 \
-  --num_images_per_prompt 1 \
-  --num_inference_steps 50 \
+  --cfg-scale 4.0 \
+  --num-images-per-prompt 1 \
+  --num-inference-steps 50 \
   --height 1024 \
   --width 1024 \
   --output "${OUTPUT_DIR}/sd3_coffee.png"
@@ -237,9 +237,9 @@ python "${REPO_ROOT}/examples/offline_inference/text_to_image/text_to_image.py" 
   --model "${MODEL_PREFIX}black-forest-labs/FLUX.1-dev" \
   --prompt "a cup of coffee on the table" \
   --seed 42 \
-  --cfg_scale 4.0 \
-  --num_images_per_prompt 1 \
-  --num_inference_steps 50 \
+  --cfg-scale 4.0 \
+  --num-images-per-prompt 1 \
+  --num-inference-steps 50 \
   --height 1024 \
   --width 1024 \
   --output "${OUTPUT_DIR}/flux1_dev_coffee.png"
@@ -248,9 +248,9 @@ python "${REPO_ROOT}/examples/offline_inference/text_to_image/text_to_image.py" 
   --model "${MODEL_PREFIX}black-forest-labs/FLUX.2-klein-9B" \
   --prompt "a cup of coffee on the table" \
   --seed 42 \
-  --cfg_scale 4.0 \
-  --num_images_per_prompt 1 \
-  --num_inference_steps 50 \
+  --cfg-scale 4.0 \
+  --num-images-per-prompt 1 \
+  --num-inference-steps 50 \
   --height 1024 \
   --width 1024 \
   --output "${OUTPUT_DIR}/flux2_klein_9b_coffee.png"
@@ -259,12 +259,34 @@ python "${REPO_ROOT}/examples/offline_inference/text_to_image/text_to_image.py" 
   --model "${MODEL_PREFIX}zai-org/GLM-Image" \
   --prompt "a cup of coffee on the table" \
   --seed 42 \
-  --cfg_scale 4.0 \
-  --num_images_per_prompt 1 \
-  --num_inference_steps 50 \
+  --cfg-scale 4.0 \
+  --num-images-per-prompt 1 \
+  --num-inference-steps 50 \
   --height 1024 \
   --width 1024 \
   --output "${OUTPUT_DIR}/GLM-Image_coffee.png"
+
+python "${REPO_ROOT}/examples/offline_inference/text_to_image/text_to_image.py" \
+  --model "${MODEL_PREFIX}OmniGen2/OmniGen2" \
+  --prompt "a cup of coffee on the table" \
+  --seed 42 \
+  --cfg-scale 4.0 \
+  --num-images-per-prompt 1 \
+  --num-inference-steps 50 \
+  --height 1024 \
+  --width 1024 \
+  --output "${OUTPUT_DIR}/omnigen2_coffee.png"
+
+python "${REPO_ROOT}/examples/offline_inference/text_to_image/text_to_image.py" \
+  --model "${MODEL_PREFIX}stepfun-ai/NextStep-1.1" \
+  --prompt "a cup of coffee on the table" \
+  --seed 42 \
+  --cfg-scale 4.0 \
+  --num-images-per-prompt 1 \
+  --num-inference-steps 50 \
+  --height 1024 \
+  --width 1024 \
+  --output "${OUTPUT_DIR}/nextstep_1.1_coffee.png"
 
 # ---------------------------
 # Image-Editing models
@@ -274,25 +296,25 @@ python "${REPO_ROOT}/examples/offline_inference/image_to_image/image_edit.py" \
   --image "${ASSETS_DIR}/qwen-bear.png" \
   --prompt "Let this mascot dance under the moon, surrounded by floating stars and poetic bubbles such as 'Be Kind'" \
   --output "${OUTPUT_DIR}/qwen_image_edit.png" \
-  --num_inference_steps 50 \
-  --cfg_scale 4.0
+  --num-inference-steps 50 \
+  --cfg-scale 4.0
 
 python "${REPO_ROOT}/examples/offline_inference/image_to_image/image_edit.py" \
   --model "${MODEL_PREFIX}Qwen/Qwen-Image-Edit-2509" \
   --image "${ASSETS_DIR}/qwen-bear.png" "${OUTPUT_DIR}/qwen_image_coffee.png" \
   --prompt "Combine these images into a single scene" \
   --output "${OUTPUT_DIR}/qwen_image_edit_2509.png" \
-  --num_inference_steps 50 \
-  --cfg_scale 4.0 \
-  --guidance_scale 1.0
+  --num-inference-steps 50 \
+  --cfg-scale 4.0 \
+  --guidance-scale 1.0
 
 python "${REPO_ROOT}/examples/offline_inference/image_to_image/image_edit.py" \
   --model "${MODEL_PREFIX}Qwen/Qwen-Image-Layered" \
   --image "${OUTPUT_DIR}/qwen_image_edit.png" \
   --prompt "Decompose the image into layered RGBA outputs" \
   --output "${OUTPUT_DIR}/qwen_image_layered" \
-  --num_inference_steps 50 \
-  --cfg_scale 4.0 \
+  --num-inference-steps 50 \
+  --cfg-scale 4.0 \
   --layers 4 \
   --color-format "RGBA"
 
@@ -301,24 +323,40 @@ python "${REPO_ROOT}/examples/offline_inference/image_to_image/image_edit.py" \
   --image "${ASSETS_DIR}/qwen-bear.png" \
   --prompt "Let this mascot dance under the moon, surrounded by floating stars and poetic bubbles such as 'Be Kind'" \
   --output "${OUTPUT_DIR}/longcat_image_edit.png" \
-  --num_inference_steps 50 \
-  --cfg_scale 4.0
+  --num-inference-steps 50 \
+  --cfg-scale 4.0
 
 python "${REPO_ROOT}/examples/offline_inference/image_to_image/image_edit.py" \
   --model "${MODEL_PREFIX}black-forest-labs/FLUX.2-klein-9B" \
   --image "${ASSETS_DIR}/qwen-bear.png" \
   --prompt "Let this mascot dance under the moon, surrounded by floating stars and poetic bubbles such as 'Be Kind'" \
   --output "${OUTPUT_DIR}/flux2_klein_9b_edit.png" \
-  --num_inference_steps 50 \
-  --cfg_scale 4.0
+  --num-inference-steps 50 \
+  --cfg-scale 4.0
 
 python "${REPO_ROOT}/examples/offline_inference/image_to_image/image_edit.py" \
   --model "${MODEL_PREFIX}zai-org/GLM-Image" \
   --image "${ASSETS_DIR}/qwen-bear.png" \
   --prompt "Let this mascot dance under the moon, surrounded by floating stars and poetic bubbles such as 'Be Kind'" \
   --output "${OUTPUT_DIR}/GLM-Image_edit.png" \
-  --num_inference_steps 50 \
-  --cfg_scale 4.0
+  --num-inference-steps 50 \
+  --cfg-scale 4.0
+
+python "${REPO_ROOT}/examples/offline_inference/image_to_image/image_edit.py" \
+  --model "${MODEL_PREFIX}OmniGen2/OmniGen2" \
+  --image "${ASSETS_DIR}/qwen-bear.png" \
+  --prompt "Let this mascot dance under the moon, surrounded by floating stars and poetic bubbles such as 'Be Kind'" \
+  --output "${OUTPUT_DIR}/omnigen2_edit.png" \
+  --num-inference-steps 50 \
+  --cfg-scale 4.0
+
+python "${REPO_ROOT}/examples/offline_inference/image_to_image/image_edit.py" \
+  --model "${MODEL_PREFIX}OmniGen2/OmniGen2" \
+  --image "${ASSETS_DIR}/qwen-bear.png" "${OUTPUT_DIR}/omnigen2_coffee.png" \
+  --prompt "Combine these images into a single scene" \
+  --output "${OUTPUT_DIR}/omnigen2_edit_multi.png" \
+  --num-inference-steps 50 \
+  --cfg-scale 4.0
 
 # ---------------------------
 # Text-to-Video (Wan2.2 T2V)
@@ -326,13 +364,13 @@ python "${REPO_ROOT}/examples/offline_inference/image_to_image/image_edit.py" \
 python "${REPO_ROOT}/examples/offline_inference/text_to_video/text_to_video.py" \
   --model "${MODEL_PREFIX}Wan-AI/Wan2.2-T2V-A14B-Diffusers" \
   --prompt "Two anthropomorphic cats in comfy boxing gear fight intensely on a spotlighted stage." \
-  --negative_prompt "" \
+  --negative-prompt "" \
   --height 480 \
   --width 640 \
-  --num_frames 32 \
-  --guidance_scale 4.0 \
-  --guidance_scale_high 3.0 \
-  --num_inference_steps 40 \
+  --num-frames 32 \
+  --guidance-scale 4.0 \
+  --guidance-scale-high 3.0 \
+  --num-inference-steps 40 \
   --enable-cpu-offload \
   --fps 16 \
   --output "${OUTPUT_DIR}/wan22_t2v.mp4"
@@ -344,13 +382,13 @@ python "${REPO_ROOT}/examples/offline_inference/image_to_video/image_to_video.py
   --model "${MODEL_PREFIX}Wan-AI/Wan2.2-TI2V-5B-Diffusers" \
   --image "${ASSETS_DIR}/qwen-bear.png" \
   --prompt "A bear playing with yarn, smooth motion" \
-  --negative_prompt "" \
+  --negative-prompt "" \
   --height 480 \
   --width 832 \
-  --num_frames 48 \
-  --guidance_scale 4.0 \
-  --num_inference_steps 40 \
-  --flow_shift 12.0 \
+  --num-frames 48 \
+  --guidance-scale 4.0 \
+  --num-inference-steps 40 \
+  --flow-shift 12.0 \
   --enable-cpu-offload \
   --fps 16 \
   --output "${OUTPUT_DIR}/wan22_ti2v.mp4"
@@ -361,12 +399,12 @@ python "${REPO_ROOT}/examples/offline_inference/image_to_video/image_to_video.py
 python "${REPO_ROOT}/examples/offline_inference/text_to_audio/text_to_audio.py" \
   --model "${MODEL_PREFIX}stabilityai/stable-audio-open-1.0" \
   --prompt "The sound of a hammer hitting a wooden surface." \
-  --negative_prompt "Low quality." \
+  --negative-prompt "Low quality." \
   --seed 42 \
-  --guidance_scale 7.0 \
-  --audio_length 10.0 \
-  --num_inference_steps 100 \
-  --num_waveforms 1 \
+  --guidance-scale 7.0 \
+  --audio-length 10.0 \
+  --num-inference-steps 100 \
+  --num-waveforms 1 \
   --output "${OUTPUT_DIR}/stable_audio_open.wav"
 
 # ---------------------------
