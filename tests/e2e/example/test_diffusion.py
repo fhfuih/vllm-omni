@@ -19,8 +19,10 @@ Each test asserts:
 
 import base64
 import os
+import signal
 import subprocess
 import sys
+import tempfile
 import urllib.request
 from io import BytesIO
 from pathlib import Path
@@ -94,16 +96,40 @@ def output_dir(tmp_path_factory) -> Path:
 
 
 def run_script(script: Path, *args: str) -> None:
-    """Run an example Python script as a subprocess; assert zero exit code."""
-    result = subprocess.run(
-        [sys.executable, str(script), *args],
-        capture_output=True,
-        text=True,
-    )
-    assert result.returncode == 0, (
-        f"{script.name} failed (exit {result.returncode}):\n"
-        f"--- STDOUT (last 2000 chars) ---\n{result.stdout[-2000:]}\n"
-        f"--- STDERR (last 2000 chars) ---\n{result.stderr[-2000:]}"
+    """Run an example Python script as a subprocess; assert zero exit code.
+
+    Uses temp files for stdout/stderr instead of pipes so that grandchild
+    worker processes (which inherit file descriptors) do not cause an
+    indefinite hang: proc.wait() returns as soon as the direct child exits,
+    regardless of whether grandchildren are still alive.  start_new_session
+    puts the whole tree in its own process group so orphaned workers are
+    cleaned up via killpg after the direct child exits.
+    """
+    with tempfile.TemporaryFile() as stdout_f, tempfile.TemporaryFile() as stderr_f:
+        proc = subprocess.Popen(
+            [sys.executable, str(script), *args],
+            stdout=stdout_f,
+            stderr=stderr_f,
+            start_new_session=True,  # new process group → killpg cleans up workers
+        )
+        try:
+            returncode = proc.wait()
+        finally:
+            # Kill any surviving grandchild workers so they don't linger.
+            try:
+                os.killpg(proc.pid, signal.SIGTERM)
+            except ProcessLookupError:
+                pass
+
+        stdout_f.seek(0)
+        stderr_f.seek(0)
+        stdout = stdout_f.read().decode(errors="replace")
+        stderr = stderr_f.read().decode(errors="replace")
+
+    assert returncode == 0, (
+        f"{script.name} failed (exit {returncode}):\n"
+        f"--- STDOUT (last 2000 chars) ---\n{stdout[-2000:]}\n"
+        f"--- STDERR (last 2000 chars) ---\n{stderr[-2000:]}"
     )
 
 
