@@ -641,3 +641,70 @@ curl -s --max-time 600 -X POST "http://localhost:${QWEN3_TTS_PORT}/v1/audio/spee
   }' --output "${QWEN3_BASE_OUTPUT}"
 
 stop_server "${QWEN3_BASE_PID}"
+
+# ---------------------------
+# Wan2.2 T2V online serving (text-to-video)
+# ---------------------------
+
+WAN_T2V_PORT=8096
+WAN_T2V_MODEL="${MODEL_PREFIX}Wan-AI/Wan2.2-T2V-A14B-Diffusers"
+WAN_T2V_LOG="${SERVER_LOG_DIR}/wan22_t2v_server.log"
+WAN_T2V_OUTPUT="${OUTPUT_DIR}/wan22_t2v_online.mp4"
+
+echo "Starting online serving test: Wan2.2-T2V-A14B-Diffusers (port ${WAN_T2V_PORT})"
+WAN_T2V_PID=$(start_server "${WAN_T2V_MODEL}" "${WAN_T2V_PORT}" "${WAN_T2V_LOG}")
+cleanup_pids+=("${WAN_T2V_PID}")
+if ! wait_for_server "${WAN_T2V_PORT}" "${WAN_T2V_PID}"; then
+  echo "Wan2.2-T2V server failed to start. See ${WAN_T2V_LOG}"
+  stop_server "${WAN_T2V_PID}"
+  exit 1
+fi
+
+curl -s --max-time 600 -X POST "http://localhost:${WAN_T2V_PORT}/v1/videos" \
+  -H "Accept: application/json" \
+  -F "prompt=Two anthropomorphic cats in comfy boxing gear fight intensely on a spotlighted stage." \
+  -F "negative_prompt=" \
+  -F "width=640" \
+  -F "height=480" \
+  -F "num_frames=32" \
+  -F "fps=16" \
+  -F "num_inference_steps=40" \
+  -F "guidance_scale=4.0" \
+  -F "guidance_scale_2=3.0" \
+  -F "seed=42" | jq -r '.data[0].b64_json' | base64 -d > "${WAN_T2V_OUTPUT}"
+
+stop_server "${WAN_T2V_PID}"
+
+# ---------------------------
+# Wan2.2 I2V online serving (image-to-video)
+# ---------------------------
+
+WAN_I2V_PORT=8097
+WAN_I2V_MODEL="${MODEL_PREFIX}Wan-AI/Wan2.2-I2V-A14B-Diffusers"
+WAN_I2V_LOG="${SERVER_LOG_DIR}/wan22_i2v_server.log"
+WAN_I2V_OUTPUT="${OUTPUT_DIR}/wan22_i2v_online.mp4"
+
+echo "Starting online serving test: Wan2.2-I2V-A14B-Diffusers (port ${WAN_I2V_PORT})"
+WAN_I2V_PID=$(start_server "${WAN_I2V_MODEL}" "${WAN_I2V_PORT}" "${WAN_I2V_LOG}")
+cleanup_pids+=("${WAN_I2V_PID}")
+if ! wait_for_server "${WAN_I2V_PORT}" "${WAN_I2V_PID}"; then
+  echo "Wan2.2-I2V server failed to start. See ${WAN_I2V_LOG}"
+  stop_server "${WAN_I2V_PID}"
+  exit 1
+fi
+
+curl -s --max-time 600 -X POST "http://localhost:${WAN_I2V_PORT}/v1/videos" \
+  -H "Accept: application/json" \
+  -F "prompt=A bear playing with yarn, smooth motion" \
+  -F "negative_prompt=" \
+  -F "input_reference=@${ASSETS_DIR}/qwen-bear.png" \
+  -F "width=832" \
+  -F "height=480" \
+  -F "num_frames=48" \
+  -F "fps=16" \
+  -F "num_inference_steps=40" \
+  -F "guidance_scale=4.0" \
+  -F "flow_shift=12.0" \
+  -F "seed=42" | jq -r '.data[0].b64_json' | base64 -d > "${WAN_I2V_OUTPUT}"
+
+stop_server "${WAN_I2V_PID}"
