@@ -28,8 +28,10 @@ import urllib.request
 from io import BytesIO
 from pathlib import Path
 
+import imageio.v3 as iio
 import pytest
 import requests
+import soundfile as sf
 from PIL import Image
 
 from tests.conftest import OmniServer
@@ -173,8 +175,6 @@ def assert_image_valid(path: Path, *, width: int | None = None, height: int | No
 def assert_video_valid(path: Path, *, width: int, height: int, num_frames: int) -> None:
     """Assert the MP4 has the expected resolution and exact frame count."""
     assert path.exists(), f"Video not found: {path}"
-    import imageio.v3 as iio
-
     # shape: (num_frames, height, width, channels)
     frames = iio.imread(str(path), plugin="pyav", index=None)
     assert frames.shape[0] == num_frames, f"Expected {num_frames} frames, got {frames.shape[0]}"
@@ -185,8 +185,6 @@ def assert_video_valid(path: Path, *, width: int, height: int, num_frames: int) 
 def assert_audio_valid(path: Path, *, sample_rate: int, channels: int, duration_s: float) -> None:
     """Assert the WAV has the expected sample rate, channel count, and duration."""
     assert path.exists(), f"Audio not found: {path}"
-    import soundfile as sf
-
     info = sf.info(str(path))
     assert info.samplerate == sample_rate, f"Expected sample_rate={sample_rate}, got {info.samplerate}"
     assert info.channels == channels, f"Expected {channels} channel(s), got {info.channels}"
