@@ -81,7 +81,8 @@ class VLLMOmniGenerateImage(_VLLMOmniGenerateBase):
         lora: dict | None = None,
         **kwargs,
     ):
-        logger.info("Uncaught kwargs: %s", kwargs)
+        if kwargs:
+            logger.info("Uncaught kwargs: %s", kwargs)
         logger.debug("Got sampling params: %s", sampling_params)
         validate_model_and_sampling_params_types(model, sampling_params)
         if image is None and mask is not None:
@@ -189,7 +190,8 @@ class VLLMOmniGenerateVideo(_VLLMOmniGenerateBase):
         lora: dict | None = None,
         **kwargs,
     ):
-        logger.info("Uncaught kwargs: %s", kwargs)
+        if kwargs:
+            logger.info("Uncaught kwargs: %s", kwargs)
         logger.debug("Got sampling params: %s", sampling_params)
         logger.debug("Got model params: %s", model_params)
         validate_model_and_sampling_params_types(model, sampling_params)
@@ -272,7 +274,8 @@ class VLLMOmniUnderstanding(_VLLMOmniGenerateBase):
         use_audio_in_video: bool = True,
         **kwargs,
     ) -> tuple[str, AudioInput]:
-        logger.info("Uncaught kwargs: %s", kwargs)
+        if kwargs:
+            logger.info("Uncaught kwargs: %s", kwargs)
         logger.debug("Got sampling params: %s", sampling_params)
         validate_model_and_sampling_params_types(model, sampling_params)
 
