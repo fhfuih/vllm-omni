@@ -224,10 +224,10 @@ class VLLMOmniClient:
         form = aiohttp.FormData()
         form.add_field("model", model)
         form.add_field("prompt", prompt)
-        form.add_field("width", width)
-        form.add_field("height", height)
-        form.add_field("num_frames", num_frames)
-        form.add_field("fps", fps)
+        form.add_field("width", str(width))
+        form.add_field("height", str(height))
+        form.add_field("num_frames", str(num_frames))
+        form.add_field("fps", str(fps))
         if negative_prompt:
             form.add_field("negative_prompt", negative_prompt)
         if sampling_params is not None:
