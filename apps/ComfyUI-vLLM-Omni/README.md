@@ -105,6 +105,20 @@ You can configure per-stage sampling parameters for multi-stage models.
 > [!TIP]
 > The node automatically choose text-to-image or image-to-image API endpoints depending on whether you connect an image input or not.
 
+### Text-to-video and image-to-video generation (e.g., Wan)
+
+(Also available at **ComfyUI sidebar->Template->vLLM-Omni->vLLM-Omni Video Generation**)
+
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" src="https://raw.githubusercontent.com/vllm-project/vllm-omni/refs/heads/main/apps/ComfyUI-vLLM-Omni/docs/images/comfyui-video-generation.jpg">
+    <img alt="vLLM-Omni video generation" src="https://raw.githubusercontent.com/vllm-project/vllm-omni/refs/heads/main/apps/ComfyUI-vLLM-Omni/docs/images/comfyui-video-generation.jpg" width=55%>
+  </picture>
+</p>
+
+> [!TIP]
+> The node automatically choose text-to-video or image-to-video API endpoints depending on whether you connect an image input or not.
+
 ### TTS (e.g., Qwen TTS series)
 
 (Also available at **ComfyUI sidebar->Template->vLLM-Omni->vLLM-Omni TTS**)
