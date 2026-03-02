@@ -225,7 +225,7 @@ def _assert_sampling_param_values(
         )
     if expected_lora:
         assert received.lora_request.lora_name == expected_lora["name"], (
-            f"Expected lora name={(expected_lora['name'],)}, got {received.lora_request.lora_name}. The received sampling params: {received}"
+            f"Expected lora name={(expected_lora['name'])}, got {received.lora_request.lora_name}. The received sampling params: {received}"
         )
         assert received.lora_request.lora_int_id == expected_lora["int_id"], (
             f"Expected lora int_id={expected_lora['int_id']}, got {received.lora_request.lora_int_id}. The received sampling params: {received}"

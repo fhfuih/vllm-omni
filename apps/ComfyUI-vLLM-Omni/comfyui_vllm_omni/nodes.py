@@ -643,7 +643,7 @@ class VLLMOmniRemoteLoRA:
                 "name": ("STRING", {"default": ""}),
                 "scale": (
                     "FLOAT",
-                    {"default": 0.0, "step": 0.1},
+                    {"default": 1.0, "min": 0.0, "max": 1.0, "step": 0.1},
                 ),
                 "int_id": (
                     "INT",
@@ -664,8 +664,8 @@ class VLLMOmniRemoteLoRA:
 
     @classmethod
     def VALIDATE_INPUTS(cls, local_path, name) -> str | Literal[True]:
-        if not local_path.strip() and not name.strip():
-            return "Either local_path or name must be provided."
+        if not local_path.strip() or not name.strip():
+            return "Both local_path and name must be provided."
         return True
 
     def get_lora(self, local_path: str, name: str, scale: float, int_id: int):
