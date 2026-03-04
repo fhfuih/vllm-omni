@@ -14,7 +14,7 @@ import pytest
 import requests
 
 from tests.conftest import OmniServer
-from tests.example.conftest import I2I_ONLINE_CLIENT, assert_image_valid, decode_b64_png, run_script
+from tests.examples.conftest import I2I_ONLINE_CLIENT, assert_image_valid, decode_b64_png, run_script
 
 # ---------------------------------------------------------------------------
 # Doc-linked tests: docs/user_guide/examples/online_serving/image_to_image.md

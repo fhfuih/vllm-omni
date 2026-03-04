@@ -9,7 +9,7 @@ Doc-linked tests (test_<subsection>_<id>) mirror every executable snippet in
 docs/user_guide/examples/offline_inference/text_to_image.md.
 """
 
-from tests.example.conftest import (
+from tests.examples.conftest import (
     T2I_SCRIPT,
     assert_image_valid,
     run_script,

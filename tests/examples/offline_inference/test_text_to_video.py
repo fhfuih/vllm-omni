@@ -8,7 +8,7 @@ Doc-linked tests (test_<subsection>_<id>) mirror every executable snippet in
 docs/user_guide/examples/offline_inference/text_to_video.md.
 """
 
-from tests.example.conftest import T2V_SCRIPT, assert_video_valid, run_script
+from tests.examples.conftest import T2V_SCRIPT, assert_video_valid, run_script
 
 # ---------------------------------------------------------------------------
 # Doc-linked tests: docs/user_guide/examples/offline_inference/text_to_video.md

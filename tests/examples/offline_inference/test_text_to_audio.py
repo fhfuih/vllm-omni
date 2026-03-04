@@ -8,7 +8,7 @@ Doc-linked tests (test_<subsection>_<id>) mirror every executable snippet in
 docs/user_guide/examples/offline_inference/text_to_audio.md.
 """
 
-from tests.example.conftest import T2A_SCRIPT, assert_audio_valid, run_script
+from tests.examples.conftest import T2A_SCRIPT, assert_audio_valid, run_script
 
 # ---------------------------------------------------------------------------
 # Doc-linked tests: docs/user_guide/examples/offline_inference/text_to_audio.md

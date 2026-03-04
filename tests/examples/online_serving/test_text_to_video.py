@@ -15,7 +15,7 @@ import pytest
 import requests
 
 from tests.conftest import OmniServer
-from tests.example.conftest import assert_video_valid
+from tests.examples.conftest import assert_video_valid
 
 # ---------------------------------------------------------------------------
 # Doc-linked tests: docs/user_guide/examples/online_serving/text_to_video.md

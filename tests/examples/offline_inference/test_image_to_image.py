@@ -8,7 +8,7 @@ Covers:
 
 import pytest
 
-from tests.example.conftest import (
+from tests.examples.conftest import (
     I2I_SCRIPT,
     assert_image_valid,
     run_script,

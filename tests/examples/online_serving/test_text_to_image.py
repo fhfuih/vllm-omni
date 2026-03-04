@@ -13,7 +13,7 @@ import pytest
 import requests
 
 from tests.conftest import OmniServer
-from tests.example.conftest import (
+from tests.examples.conftest import (
     T2I_ONLINE_CLIENT,
     assert_image_valid,
     decode_b64_png,

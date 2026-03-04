@@ -1,13 +1,15 @@
 """
-Shared fixtures, helpers, and path constants for tests/example/.
+Shared fixtures, helpers, and path constants for tests/examples/.
 
-All offline and online diffusion example tests import from here.
+All offline and online diffusion example tests (multimedia generation) and
+online omni example tests (multimodal comprehension) import from here.
 """
 
 import base64
 import io
 import os
 import pathlib
+import re
 import signal
 import subprocess
 import sys
@@ -22,7 +24,7 @@ import soundfile as sf
 from PIL import Image
 
 # ---------------------------------------------------------------------------
-# Add L4 markers to all tests in this directory and subdirectories.
+# Add markers to all tests in this directory and subdirectories.
 # ---------------------------------------------------------------------------
 
 
@@ -30,7 +32,7 @@ def pytest_collection_modifyitems(session, config, items):
     rootdir = pathlib.Path(config.rootdir)
     for item in items:
         rel_path = pathlib.Path(item.fspath).relative_to(rootdir)
-        if rel_path.parts[:2] == ("tests", "example"):
+        if rel_path.parts[:2] == ("tests", "examples"):
             item.add_marker("advanced_model")
             item.add_marker("example")
 
@@ -109,16 +111,15 @@ def output_dir(tmp_path_factory) -> Path:
 
 
 # ---------------------------------------------------------------------------
-# Subprocess helper
+# Subprocess helpers
 # ---------------------------------------------------------------------------
 
 
 def run_script(script: Path, *args: str) -> None:
-    """Run an example Python script as a subprocess; assert zero exit code.
+    """Run a diffusion example Python script as a subprocess; assert zero exit code.
 
-    Output is tee'd: written to the console in real time (visible with pytest
-    -s) and also buffered so the last 2000 chars appear in the assertion
-    message on failure.
+    Output is tee'd to the console in real time (visible with pytest -s) and also
+    buffered so the last 2000 chars appear in the assertion message on failure.
 
     Uses PIPE + reader threads rather than communicate() to avoid the classic
     hang: grandchild worker processes inherit the pipe write-end, so
@@ -169,9 +170,40 @@ def run_script(script: Path, *args: str) -> None:
     )
 
 
+def run_cmd(command: list[str]) -> str:
+    """Run a command as a subprocess; assert zero exit code and return stdout.
+
+    Output is fully captured and returned as a string so callers can parse it
+    (e.g. with :func:`extract_content_after_keyword`).
+    Use this for scripts whose printed output is part of the test assertion.
+    """
+    result = subprocess.run(command, capture_output=True, text=True)
+
+    if result.returncode != 0:
+        print(f"STDERR: {result.stderr}")
+        raise subprocess.CalledProcessError(result.returncode, command)
+
+    all_output = result.stdout
+    print(f"All output:\n{all_output}")
+    return all_output
+
+
 # ---------------------------------------------------------------------------
 # Output validation helpers
 # ---------------------------------------------------------------------------
+
+
+def extract_content_after_keyword(keywords: str, text: str) -> str:
+    """Return the text that follows *keywords* in *text* (regex match).
+
+    Raises ``AssertionError`` if the keyword is not found, so test failures
+    produce a clear message pointing at the missing keyword.
+    """
+    matches = re.findall(rf"{keywords}\s*(.+)", text, re.DOTALL)
+
+    if not matches:
+        raise AssertionError(f"Keywords {keywords} not found in provided text output")
+    return matches[0]
 
 
 def assert_image_valid(path: Path, *, width: int | None = None, height: int | None = None) -> Image.Image:

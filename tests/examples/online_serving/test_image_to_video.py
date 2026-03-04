@@ -14,7 +14,7 @@ import pytest
 import requests
 
 from tests.conftest import OmniServer
-from tests.example.conftest import assert_video_valid
+from tests.examples.conftest import assert_video_valid
 
 _I2V_PROMPT = "A bear playing with yarn, smooth motion"
 

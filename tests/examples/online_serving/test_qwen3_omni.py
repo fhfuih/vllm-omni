@@ -6,13 +6,12 @@ import os
 
 os.environ["VLLM_WORKER_MULTIPROC_METHOD"] = "spawn"
 
-import re
-import subprocess
 from pathlib import Path
 
 import pytest
 
 from tests.conftest import convert_audio_file_to_text, cosine_similarity_text
+from tests.examples.conftest import extract_content_after_keyword, run_cmd
 from tests.utils import hardware_test
 
 models = ["Qwen/Qwen3-Omni-30B-A3B-Instruct"]
@@ -23,30 +22,6 @@ stage_configs = [str(Path(__file__).parent.parent.parent / "e2e" / "stage_config
 example_dir = str(Path(__file__).parent.parent.parent.parent / "examples" / "online_serving" / "qwen3_omni")
 # Create parameter combinations for model and stage config
 test_params = [(8091, model, stage_config) for model in models for stage_config in stage_configs]
-
-
-def run_cmd(command):
-    result = subprocess.run(
-        command,
-        capture_output=True,
-        text=True,
-    )
-
-    if result.returncode != 0:
-        print(f"STDERR: {result.stderr}")
-        raise subprocess.CalledProcessError(result.returncode, command)
-
-    all_output = result.stdout
-    print(f"All output:\n{all_output}")
-    return all_output
-
-
-def extract_content_after_keyword(keywords, text):
-    matches = re.findall(rf"{keywords}\s*(.+)", text, re.DOTALL)
-
-    if not matches:
-        raise AssertionError(f"Keywords {keywords} not found in provided text output")
-    return matches[0]
 
 
 @pytest.mark.advanced_model
