@@ -8,7 +8,7 @@ Doc-linked tests (test_<subsection>_<id>) mirror every executable snippet in
 docs/user_guide/examples/offline_inference/text_to_video.md.
 """
 
-from tests.examples.conftest import T2V_SCRIPT, assert_video_valid, run_script
+from tests.examples.conftest import T2V_SCRIPT, assert_video_valid, run_script_with_successful_return
 
 # ---------------------------------------------------------------------------
 # Doc-linked tests: docs/user_guide/examples/offline_inference/text_to_video.md
@@ -20,7 +20,7 @@ from tests.examples.conftest import T2V_SCRIPT, assert_video_valid, run_script
 def test_local_cli_usage_1(model_prefix, output_dir):
     """CLI snippet from doc: Wan2.2-T2V-A14B-Diffusers, width=832, num-frames=33."""
     out = output_dir / "doc-t2v-local_cli_usage_1.mp4"
-    run_script(
+    run_script_with_successful_return(
         T2V_SCRIPT,
         "--model", f"{model_prefix}Wan-AI/Wan2.2-T2V-A14B-Diffusers",
         "--prompt", "Two anthropomorphic cats in comfy boxing gear and bright gloves fight intensely on a spotlighted stage.",

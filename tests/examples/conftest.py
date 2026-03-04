@@ -1,8 +1,5 @@
 """
 Shared fixtures, helpers, and path constants for tests/examples/.
-
-All offline and online diffusion example tests (multimedia generation) and
-online omni example tests (multimodal comprehension) import from here.
 """
 
 import base64
@@ -115,8 +112,8 @@ def output_dir(tmp_path_factory) -> Path:
 # ---------------------------------------------------------------------------
 
 
-def run_script(script: Path, *args: str) -> None:
-    """Run a diffusion example Python script as a subprocess; assert zero exit code.
+def run_command_with_successful_return(command: list[str]) -> None:
+    """Run a command as a subprocess; assert zero exit code.
 
     Output is tee'd to the console in real time (visible with pytest -s) and also
     buffered so the last 2000 chars appear in the assertion message on failure.
@@ -129,7 +126,7 @@ def run_script(script: Path, *args: str) -> None:
     threads finish naturally.
     """
     proc = subprocess.Popen(
-        [sys.executable, str(script), *args],
+        command,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         start_new_session=True,  # new process group → killpg cleans up workers
@@ -164,10 +161,15 @@ def run_script(script: Path, *args: str) -> None:
     t_err.join(timeout=10)
 
     assert returncode == 0, (
-        f"{script.name} failed (exit {returncode}):\n"
+        f"`{command[0]}` command failed (exit {returncode}):\n"
         f"--- STDOUT (last 2000 chars) ---\n{stdout_buf.getvalue()[-2000:]}\n"
         f"--- STDERR (last 2000 chars) ---\n{stderr_buf.getvalue()[-2000:]}"
     )
+
+
+def run_script_with_successful_return(script: Path, *args: str) -> None:
+    command = [sys.executable, str(script), *args]
+    run_command_with_successful_return(command)
 
 
 def run_cmd(command: list[str]) -> str:

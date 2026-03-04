@@ -12,7 +12,7 @@ docs/user_guide/examples/offline_inference/text_to_image.md.
 from tests.examples.conftest import (
     T2I_SCRIPT,
     assert_image_valid,
-    run_script,
+    run_script_with_successful_return,
 )
 
 # ---------------------------------------------------------------------------
@@ -75,7 +75,7 @@ def test_basic_usage_3(model_prefix, output_dir):
 def test_qwen_tongyi_models_1(model_prefix, output_dir):
     """CLI snippet for Tongyi-MAI/Z-Image-Turbo."""
     out = output_dir / "doc-t2i-qwen_tongyi_models_1.png"
-    run_script(
+    run_script_with_successful_return(
         T2I_SCRIPT,
         "--model", f"{model_prefix}Tongyi-MAI/Z-Image-Turbo",
         "--prompt", "a cup of coffee on the table",
@@ -96,7 +96,7 @@ def test_qwen_tongyi_models_1(model_prefix, output_dir):
 def test_nextstep_models_1(model_prefix, output_dir):
     """CLI snippet for stepfun-ai/NextStep-1.1 with its specific arguments."""
     out = output_dir / "doc-t2i-nextstep_models_1.png"
-    run_script(
+    run_script_with_successful_return(
         T2I_SCRIPT,
         "--model", f"{model_prefix}stepfun-ai/NextStep-1.1",
         "--prompt", "A baby panda wearing an Iron Man mask, holding a board with 'NextStep-1' written on it",

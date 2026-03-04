@@ -14,7 +14,12 @@ import pytest
 import requests
 
 from tests.conftest import OmniServer
-from tests.examples.conftest import I2I_ONLINE_CLIENT, assert_image_valid, decode_b64_png, run_script
+from tests.examples.conftest import (
+    I2I_ONLINE_CLIENT,
+    assert_image_valid,
+    decode_b64_png,
+    run_script_with_successful_return,
+)
 
 # ---------------------------------------------------------------------------
 # Doc-linked tests: docs/user_guide/examples/online_serving/image_to_image.md
@@ -61,7 +66,7 @@ def test_method_1_using_curl_image_editing_1(qwen_edit_server, assets_dir):
 def test_method_2_using_python_client_1(qwen_edit_server, output_dir, bear):
     """openai_chat_client.py single image → valid PNG."""
     out = output_dir / "doc-i2i-method_2_using_python_client_1.png"
-    run_script(
+    run_script_with_successful_return(
         I2I_ONLINE_CLIENT,
         "--input", bear,
         "--prompt", "Convert to oil painting style",
@@ -80,7 +85,7 @@ def qwen_edit_2509_server(model_prefix):
 def test_method_2_using_python_client_2(qwen_edit_2509_server, output_dir, bear, horse):
     """openai_chat_client.py multi-image (Qwen-Image-Edit-2509 server) → valid PNG."""
     out = output_dir / "doc-i2i-method_2_using_python_client_2.png"
-    run_script(
+    run_script_with_successful_return(
         I2I_ONLINE_CLIENT,
         "--input", bear, horse,
         "--prompt", "Combine these images into a single scene",

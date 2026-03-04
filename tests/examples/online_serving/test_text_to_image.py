@@ -17,7 +17,7 @@ from tests.examples.conftest import (
     T2I_ONLINE_CLIENT,
     assert_image_valid,
     decode_b64_png,
-    run_script,
+    run_script_with_successful_return,
 )
 
 # ---------------------------------------------------------------------------
@@ -57,7 +57,7 @@ def test_method_1_using_curl_1(qwen_image_server):
 def test_method_2_using_python_client_1(qwen_image_server, output_dir):
     """openai_chat_client.py → valid 1024×1024 PNG."""
     out = output_dir / "doc-t2i-method_2_using_python_client_1.png"
-    run_script(
+    run_script_with_successful_return(
         T2I_ONLINE_CLIENT,
         "--prompt", "A beautiful landscape painting",
         "--output", str(out),

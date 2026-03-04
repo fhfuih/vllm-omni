@@ -8,7 +8,7 @@ Doc-linked tests (test_<subsection>_<id>) mirror every executable snippet in
 docs/user_guide/examples/offline_inference/text_to_audio.md.
 """
 
-from tests.examples.conftest import T2A_SCRIPT, assert_audio_valid, run_script
+from tests.examples.conftest import T2A_SCRIPT, assert_audio_valid, run_script_with_successful_return
 
 # ---------------------------------------------------------------------------
 # Doc-linked tests: docs/user_guide/examples/offline_inference/text_to_audio.md
@@ -20,7 +20,7 @@ from tests.examples.conftest import T2A_SCRIPT, assert_audio_valid, run_script
 def test_local_cli_usage_1(model_prefix, output_dir):
     """CLI snippet from doc: stable-audio-open-1.0."""
     out = output_dir / "doc-t2a-local_cli_usage_1.wav"
-    run_script(
+    run_script_with_successful_return(
         T2A_SCRIPT,
         "--model", f"{model_prefix}stabilityai/stable-audio-open-1.0",
         "--prompt", "The sound of a hammer hitting a wooden surface",
