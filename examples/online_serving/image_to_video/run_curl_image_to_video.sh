@@ -1,6 +1,7 @@
 #!/bin/bash
 # Wan2.2 image-to-video curl example (OpenAI-style multipart)
 
+SERVER="${SERVER:-http://localhost:8099}"
 INPUT_IMAGE="${INPUT_IMAGE:-../../offline_inference/image_to_video/qwen-bear.png}"
 OUTPUT_PATH="${OUTPUT_PATH:-wan22_i2v_output.mp4}"
 NEGATIVE_PROMPT="${NEGATIVE_PROMPT:-}"
@@ -15,7 +16,7 @@ if [ -n "$NEGATIVE_PROMPT" ]; then
     NEGATIVE_PROMPT_FLAG="-F negative_prompt=${NEGATIVE_PROMPT}"
 fi
 
-curl -X POST http://localhost:8099/v1/videos \
+curl -X POST "$SERVER/v1/videos" \
   -H "Accept: application/json" \
   -F "prompt=A bear playing with yarn, smooth motion" \
   $NEGATIVE_PROMPT_FLAG \

@@ -23,7 +23,6 @@ from tests.examples.conftest import (
 
 
 def test_basic_usage_1(model_prefix, output_dir):
-    """Snippet 1: single string prompt via Omni API."""
     from vllm_omni.entrypoints.omni import Omni
 
     omni = Omni(model=f"{model_prefix}Qwen/Qwen-Image")
@@ -36,7 +35,6 @@ def test_basic_usage_1(model_prefix, output_dir):
 
 
 def test_basic_usage_2(model_prefix, output_dir):
-    """Snippet 2: list of prompts via Omni API."""
     from vllm_omni.entrypoints.omni import Omni
 
     omni = Omni(model=f"{model_prefix}Qwen/Qwen-Image")
@@ -53,7 +51,6 @@ def test_basic_usage_2(model_prefix, output_dir):
 
 
 def test_basic_usage_3(model_prefix, output_dir):
-    """Snippet 3: dict prompts with negative_prompt via Omni API."""
     from vllm_omni.entrypoints.omni import Omni
 
     omni = Omni(model=f"{model_prefix}Qwen/Qwen-Image")
@@ -73,7 +70,6 @@ def test_basic_usage_3(model_prefix, output_dir):
 
 
 def test_qwen_tongyi_models_1(model_prefix, output_dir):
-    """CLI snippet for Tongyi-MAI/Z-Image-Turbo."""
     out = output_dir / "doc-t2i-qwen_tongyi_models_1.png"
     run_script_with_successful_return(
         T2I_SCRIPT,
@@ -94,7 +90,6 @@ def test_qwen_tongyi_models_1(model_prefix, output_dir):
 
 
 def test_nextstep_models_1(model_prefix, output_dir):
-    """CLI snippet for stepfun-ai/NextStep-1.1 with its specific arguments."""
     out = output_dir / "doc-t2i-nextstep_models_1.png"
     run_script_with_successful_return(
         T2I_SCRIPT,

@@ -18,7 +18,6 @@ from tests.examples.conftest import T2V_SCRIPT, assert_video_valid, run_script_w
 
 
 def test_local_cli_usage_1(model_prefix, output_dir):
-    """CLI snippet from doc: Wan2.2-T2V-A14B-Diffusers, width=832, num-frames=33."""
     out = output_dir / "doc-t2v-local_cli_usage_1.mp4"
     run_script_with_successful_return(
         T2V_SCRIPT,

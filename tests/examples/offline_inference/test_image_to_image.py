@@ -24,7 +24,6 @@ pytestmark = [pytest.mark.advanced_model, pytest.mark.example]
 
 
 def test_single_image_editing_1(model_prefix, output_dir, bear):
-    """CLI snippet: single-image editing with Qwen/Qwen-Image-Edit."""
     out = output_dir / "doc-i2i-single_image_editing_1.png"
     run_script_with_successful_return(
         I2I_SCRIPT,
@@ -42,7 +41,6 @@ def test_single_image_editing_1(model_prefix, output_dir, bear):
 
 
 def test_multiple_image_editing_qwen_image_edit_2509_1(model_prefix, output_dir, bear, horse):
-    """CLI snippet: multi-image editing with Qwen/Qwen-Image-Edit-2509."""
     out = output_dir / "doc-i2i-multiple_image_editing_qwen_image_edit_2509_1.png"
     run_script_with_successful_return(
         I2I_SCRIPT,

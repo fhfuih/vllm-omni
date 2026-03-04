@@ -18,7 +18,6 @@ from tests.examples.conftest import T2A_SCRIPT, assert_audio_valid, run_script_w
 
 
 def test_local_cli_usage_1(model_prefix, output_dir):
-    """CLI snippet from doc: stable-audio-open-1.0."""
     out = output_dir / "doc-t2a-local_cli_usage_1.wav"
     run_script_with_successful_return(
         T2A_SCRIPT,

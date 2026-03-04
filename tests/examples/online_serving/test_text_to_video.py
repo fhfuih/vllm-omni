@@ -8,14 +8,11 @@ Doc-linked tests (test_<subsection>_<id>) mirror every executable snippet in
 docs/user_guide/examples/online_serving/text_to_video.md.
 """
 
-import base64
-
 import imageio.v3 as iio
 import pytest
-import requests
 
 from tests.conftest import OmniServer
-from tests.examples.conftest import assert_video_valid
+from tests.examples.conftest import assert_video_valid, run_command_with_successful_return
 
 # ---------------------------------------------------------------------------
 # Doc-linked tests: docs/user_guide/examples/online_serving/text_to_video.md
@@ -32,29 +29,25 @@ def wan_t2v_server(model_prefix):
 
 
 def test_method_1_using_curl_1(wan_t2v_server, output_dir):
-    """POST /v1/videos with full params from doc → MP4 with width=832, height=480, 33 frames."""
-    resp = requests.post(
-        f"http://{wan_t2v_server.host}:{wan_t2v_server.port}/v1/videos",
-        data={
-            "prompt": "Two anthropomorphic cats in comfy boxing gear and bright gloves fight intensely on a spotlighted stage.",
-            "negative_prompt": "",
-            "width": "832",
-            "height": "480",
-            "num_frames": "33",
-            "fps": "16",
-            "num_inference_steps": "40",
-            "guidance_scale": "4.0",
-            "guidance_scale_2": "4.0",
-            "boundary_ratio": "0.875",
-            "seed": "42",
-        },
-        headers={"Accept": "application/json"},
-        timeout=600,
-    )
-    assert resp.status_code == 200
-    mp4_bytes = base64.b64decode(resp.json()["data"][0]["b64_json"])
+    url = f"http://{wan_t2v_server.host}:{wan_t2v_server.port}/v1/videos"
     out = output_dir / "doc-t2v-method_1_using_curl_1.mp4"
-    out.write_bytes(mp4_bytes)
+    run_command_with_successful_return([
+        "bash", "-c",
+        f"curl -s '{url}'"
+        " -H 'Accept: application/json'"
+        " -F 'prompt=Two anthropomorphic cats in comfy boxing gear and bright gloves fight intensely on a spotlighted stage.'"
+        " -F 'width=832'"
+        " -F 'height=480'"
+        " -F 'num_frames=33'"
+        " -F 'negative_prompt=色调艳丽 ，过曝，静态，细节模糊不清，字幕，风格，作品，画作，画面，静止，整体发灰，最差质量，低质量，JPEG压缩残留，丑陋的，残缺的，多余的手指，画得不好的手部，画得不好的脸部，畸形的，毁容的，形态畸形的肢体，手指融合，静止不动的画面，杂乱的背景，三条腿，背景人很多，倒着走'"
+        " -F 'fps=16'"
+        " -F 'num_inference_steps=40'"
+        " -F 'guidance_scale=4.0'"
+        " -F 'guidance_scale_2=4.0'"
+        " -F 'boundary_ratio=0.875'"
+        " -F 'seed=42'"
+        f" | jq -r '.data[0].b64_json' | base64 -d > '{out}'",
+    ])  # fmt: skip
     assert_video_valid(out, width=832, height=480, num_frames=33)
 
 
@@ -62,17 +55,14 @@ def test_method_1_using_curl_1(wan_t2v_server, output_dir):
 
 
 def test_simple_text_to_video_generation_1(wan_t2v_server, output_dir):
-    """POST /v1/videos with prompt only → non-empty MP4."""
-    resp = requests.post(
-        f"http://{wan_t2v_server.host}:{wan_t2v_server.port}/v1/videos",
-        data={"prompt": "A cinematic view of a futuristic city at sunset"},
-        headers={"Accept": "application/json"},
-        timeout=600,
-    )
-    assert resp.status_code == 200
-    mp4_bytes = base64.b64decode(resp.json()["data"][0]["b64_json"])
+    url = f"http://{wan_t2v_server.host}:{wan_t2v_server.port}/v1/videos"
     out = output_dir / "doc-t2v-simple_text_to_video_generation_1.mp4"
-    out.write_bytes(mp4_bytes)
+    run_command_with_successful_return([
+        "bash", "-c",
+        f"curl -X POST '{url}'"
+        " -F 'prompt=A cinematic view of a futuristic city at sunset'"
+        f" | jq -r '.data[0].b64_json' | base64 -d > '{out}'",
+    ])  # fmt: skip
     frames = iio.imread(str(out), plugin="pyav", index=None)
     assert frames.shape[0] >= 1
 
@@ -81,28 +71,23 @@ def test_simple_text_to_video_generation_1(wan_t2v_server, output_dir):
 
 
 def test_generation_with_parameters_1(wan_t2v_server, output_dir):
-    """POST /v1/videos with all generation params → MP4 with width=832, height=480, 33 frames."""
-    resp = requests.post(
-        f"http://{wan_t2v_server.host}:{wan_t2v_server.port}/v1/videos",
-        data={
-            "prompt": "A cinematic view of a futuristic city at sunset",
-            "width": "832",
-            "height": "480",
-            "num_frames": "33",
-            "negative_prompt": "low quality, blurry, static",
-            "fps": "16",
-            "num_inference_steps": "40",
-            "guidance_scale": "4.0",
-            "guidance_scale_2": "4.0",
-            "boundary_ratio": "0.875",
-            "flow_shift": "5.0",
-            "seed": "42",
-        },
-        headers={"Accept": "application/json"},
-        timeout=600,
-    )
-    assert resp.status_code == 200
-    mp4_bytes = base64.b64decode(resp.json()["data"][0]["b64_json"])
+    url = f"http://{wan_t2v_server.host}:{wan_t2v_server.port}/v1/videos"
     out = output_dir / "doc-t2v-generation_with_parameters_1.mp4"
-    out.write_bytes(mp4_bytes)
+    run_command_with_successful_return([
+        "bash", "-c",
+        f"curl -X POST '{url}'"
+        " -F 'prompt=A cinematic view of a futuristic city at sunset'"
+        " -F 'width=832'"
+        " -F 'height=480'"
+        " -F 'num_frames=33'"
+        " -F 'negative_prompt=low quality, blurry, static'"
+        " -F 'fps=16'"
+        " -F 'num_inference_steps=40'"
+        " -F 'guidance_scale=4.0'"
+        " -F 'guidance_scale_2=4.0'"
+        " -F 'boundary_ratio=0.875'"
+        " -F 'flow_shift=5.0'"
+        " -F 'seed=42'"
+        f" | jq -r '.data[0].b64_json' | base64 -d > '{out}'",
+    ])  # fmt: skip
     assert_video_valid(out, width=832, height=480, num_frames=33)

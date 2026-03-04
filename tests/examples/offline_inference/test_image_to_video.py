@@ -18,7 +18,6 @@ from tests.examples.conftest import I2V_SCRIPT, assert_video_valid, run_script_w
 
 
 def test_wan2_2_i2v_a14b_diffusers_moe_1(model_prefix, output_dir, horse):
-    """CLI snippet: Wan2.2-I2V-A14B-Diffusers MoE model."""
     out = output_dir / "doc-i2v-wan2_2_i2v_a14b_diffusers_moe_1.mp4"
     run_script_with_successful_return(
         I2V_SCRIPT,
@@ -44,7 +43,6 @@ def test_wan2_2_i2v_a14b_diffusers_moe_1(model_prefix, output_dir, horse):
 
 
 def test_wan2_2_ti2v_5b_diffusers_unified_1(model_prefix, output_dir, horse):
-    """CLI snippet: Wan2.2-TI2V-5B-Diffusers unified model."""
     out = output_dir / "doc-i2v-wan2_2_ti2v_5b_diffusers_unified_1.mp4"
     run_script_with_successful_return(
         I2V_SCRIPT,
