@@ -32,7 +32,7 @@ logger = get_logger(__name__)
 
 
 class VLLMOmniClient:
-    def __init__(self, base_url: str, timeout: float = 300.0):
+    def __init__(self, base_url: str, timeout: float | None = None):
         self.base_url = base_url
         self.timeout = aiohttp.ClientTimeout(total=timeout)
 
