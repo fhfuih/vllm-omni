@@ -6,22 +6,18 @@ E2E online serving test for Qwen-Image-Edit-2509 multi-image input.
 
 import base64
 import os
-import signal
-import socket
-import subprocess
-import sys
 import threading
-import time
 from io import BytesIO
 from typing import Any
 
 import openai
 import pytest
 import requests
+from openai.types.chat import ChatCompletionContentPartParam, ChatCompletionUserMessageParam
 from PIL import Image
 from vllm.assets.image import ImageAsset
-from vllm.utils.network_utils import get_open_port
 
+from tests.conftest import OmniServer
 from tests.utils import hardware_test
 
 os.environ["VLLM_WORKER_MULTIPROC_METHOD"] = "spawn"
@@ -31,89 +27,6 @@ os.environ.setdefault("VLLM_IMAGE_FETCH_TIMEOUT", "60")
 models = ["Qwen/Qwen-Image-Edit-2509"]
 test_params = models
 t2i_models = ["Tongyi-MAI/Z-Image-Turbo"]
-
-
-class OmniServer:
-    """Omniserver for vLLM-Omni tests."""
-
-    def __init__(
-        self,
-        model: str,
-        serve_args: list[str],
-        *,
-        env_dict: dict[str, str] | None = None,
-    ) -> None:
-        self.model = model
-        self.serve_args = serve_args
-        self.env_dict = env_dict
-        self.proc: subprocess.Popen | None = None
-        self.host = "127.0.0.1"
-        self.port = get_open_port()
-
-    def _start_server(self) -> None:
-        """Start the vLLM-Omni server subprocess."""
-        env = os.environ.copy()
-        env["VLLM_WORKER_MULTIPROC_METHOD"] = "spawn"
-        if self.env_dict is not None:
-            env.update(self.env_dict)
-
-        cmd = [
-            sys.executable,
-            "-m",
-            "vllm_omni.entrypoints.cli.main",
-            "serve",
-            self.model,
-            "--omni",
-            "--host",
-            self.host,
-            "--port",
-            str(self.port),
-        ] + self.serve_args
-
-        print(f"Launching OmniServer with: {' '.join(cmd)}")
-        self.proc = subprocess.Popen(
-            cmd,
-            env=env,
-            cwd=os.path.dirname(os.path.dirname(os.path.abspath(__file__))),  # Set working directory to vllm-omni root
-            start_new_session=True,
-        )
-
-        # Wait for server to be ready
-        max_wait = 600  # 10 minutes
-        start_time = time.time()
-        while time.time() - start_time < max_wait:
-            try:
-                with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
-                    sock.settimeout(1)
-                    result = sock.connect_ex((self.host, self.port))
-                    if result == 0:
-                        print(f"Server ready on {self.host}:{self.port}")
-                        return
-            except Exception:
-                pass
-            time.sleep(2)
-
-        raise RuntimeError(f"Server failed to start within {max_wait} seconds")
-
-    def __enter__(self):
-        self._start_server()
-        return self
-
-    def __exit__(self, exc_type, exc_val, exc_tb):
-        if self.proc:
-            try:
-                os.killpg(self.proc.pid, signal.SIGTERM)
-            except ProcessLookupError:
-                pass
-
-            try:
-                self.proc.wait(timeout=30)
-            except subprocess.TimeoutExpired:
-                try:
-                    os.killpg(self.proc.pid, signal.SIGKILL)
-                except ProcessLookupError:
-                    pass
-                self.proc.wait()
 
 
 @pytest.fixture
@@ -151,9 +64,9 @@ def base64_encoded_images() -> list[str]:
 def dummy_messages_from_image_data(
     image_data_urls: list[str],
     content_text: str = "Combine these two images into one scene.",
-):
+) -> list[ChatCompletionUserMessageParam]:
     """Create messages with image data URLs for OpenAI API."""
-    content = [{"type": "text", "text": content_text}]
+    content: list[ChatCompletionContentPartParam] = [{"type": "text", "text": content_text}]
     for image_url in image_data_urls:
         content.append({"type": "image_url", "image_url": {"url": image_url}})
     return [{"role": "user", "content": content}]
