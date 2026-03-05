@@ -57,7 +57,7 @@ def test_qwen_image_edit_single(case_id, extra_args, model_prefix):
     pil_image = PIL.Image.open(synthetic_image["file_path"]).convert("RGB")
     model = f"{model_prefix}Qwen/Qwen-Image-Edit"
     omni = Omni(model=model, seed=42, stage_init_timeout=300, **extra_args)
-    req_output = omni.generate(
+    output = omni.generate(
         {
             "prompt": EDIT_PROMPT,
             "multi_modal_data": {
@@ -72,7 +72,7 @@ def test_qwen_image_edit_single(case_id, extra_args, model_prefix):
             seed=42,
         ),
     )
-    img = req_output[0].images[0]
+    img = output.request_output[0].images[0]
     assert_image_valid(img, width=512, height=512)
 
 
@@ -90,7 +90,7 @@ def test_qwen_image_edit_multi(case_id, extra_args, model_prefix):
     pil_image_2 = PIL.Image.open(synthetic_image_2["file_path"]).convert("RGB")
     model = f"{model_prefix}Qwen/Qwen-Image-Edit-2509"
     omni = Omni(model=model, seed=42, stage_init_timeout=300, **extra_args)
-    req_output = omni.generate(
+    output = omni.generate(
         {
             "prompt": MULTI_EDIT_PROMPT,
             "multi_modal_data": {
@@ -108,5 +108,5 @@ def test_qwen_image_edit_multi(case_id, extra_args, model_prefix):
             seed=42,
         ),
     )
-    img = req_output[0].images[0]
+    img = output.request_output[0].images[0]
     assert_image_valid(img, width=512, height=512)
