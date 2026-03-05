@@ -11,8 +11,12 @@ import requests
 from tests.conftest import OmniServer, assert_image_valid, decode_b64_image, generate_synthetic_image
 from tests.utils import hardware_marks
 
-EDIT_PROMPT = "Let this mascot dance under the moon, surrounded by floating stars and poetic bubbles such as 'Be Kind'"
-MULTI_EDIT_PROMPT = "Make the bear ride the horse, with smooth blending between them"
+EDIT_PROMPT = "Transform this image of colorful geometric shapes into a Piet Mondrian style abstract painting."
+MULTI_EDIT_PROMPT = (
+    "Transform the first image of colorful geometric shapes into a Piet Mondrian style abstract painting. "
+    "Transform the second image of colorful geometric shapes into a Vincent van Gogh style painting. "
+    "Then juxtapose the two transformed images into a single artwork for visual contrast."
+)
 SINGLE_CARD_FEATURE_MARKS = hardware_marks(res={"cuda": "L4", "rocm": "MI325", "npu": "A2"})
 PARALLEL_FEATURE_MARKS = hardware_marks(res={"cuda": "L4", "rocm": "MI325", "npu": "A2"}, num_cards=2, parallel=True)
 
