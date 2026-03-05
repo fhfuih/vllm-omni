@@ -17,15 +17,6 @@ SINGLE_CARD_FEATURE_MARKS = hardware_marks(res={"cuda": "L4", "rocm": "MI325", "
 PARALLEL_FEATURE_MARKS = hardware_marks(res={"cuda": "L4", "rocm": "MI325", "npu": "A2"}, num_cards=2, parallel=True)
 
 
-@pytest.fixture(scope="session")
-def model_prefix() -> str:
-    """Optional model-path prefix from MODEL_PREFIX env var."""
-    import os
-
-    prefix = os.environ.get("MODEL_PREFIX", "")
-    return f"{prefix.rstrip('/')}/" if prefix else ""
-
-
 _DIFFUSION_FEATURE_CASES = [
     pytest.param("cache_tea_cache", ["--cache-backend", "tea_cache"], marks=SINGLE_CARD_FEATURE_MARKS),
     pytest.param("cache_cache_dit", ["--cache-backend", "cache_dit"], marks=SINGLE_CARD_FEATURE_MARKS),
@@ -70,6 +61,7 @@ def test_qwen_image_edit_single(case_id, extra_args, model_prefix):
                     "seed": 42,
                 },
             },
+            timeout=600,  # Same as the OpenAI python client's default timeout
         )
         assert resp.status_code == 200, f"Request failed: {resp.text}"
         data_url = resp.json()["choices"][0]["message"]["content"][0]["image_url"]["url"]
@@ -110,6 +102,7 @@ def test_qwen_image_edit_multi(case_id, extra_args, model_prefix):
                     "seed": 42,
                 },
             },
+            timeout=600,  # Same as the OpenAI python client's default timeout
         )
         assert resp.status_code == 200, f"Request failed: {resp.text}"
         data_url = resp.json()["choices"][0]["message"]["content"][0]["image_url"]["url"]
