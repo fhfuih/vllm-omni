@@ -48,7 +48,7 @@ This extension offers the following nodes based on the output modalities:
 
 - **Generate Image** for text-to-image and image-to-image tasks
 - **Generate Video** for text-to-video and image-to-video tasks
-- **Multimodality Comprehension** for multimodality-to-text and multimodality-to-audio tasks
+- **Multimodality Understanding** for multimodality-to-text and multimodality-to-audio tasks
 - **TTS** and **TTS Voice Clone** for TTS tasks
 
 This extension also offers example workflows (at **ComfyUI sidebar -> Templates -> vLLM-Omni**)
