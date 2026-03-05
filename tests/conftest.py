@@ -18,15 +18,19 @@ import sys
 import threading
 import time
 from dataclasses import dataclass
+from io import BytesIO
 from pathlib import Path
 from typing import Any
 
+import imageio.v3 as iio
 import numpy as np
 import psutil
 import pytest
+import soundfile as sf
 import torch
 import yaml
 from openai import OpenAI
+from PIL import Image
 from vllm import TextPrompt
 from vllm.distributed.parallel_state import cleanup_dist_env_and_memory
 from vllm.logger import init_logger
@@ -41,6 +45,48 @@ logger = init_logger(__name__)
 PromptAudioInput = list[tuple[Any, int]] | tuple[Any, int] | None
 PromptImageInput = list[Any] | Any | None
 PromptVideoInput = list[Any] | Any | None
+
+
+def assert_image_valid(path: Path, *, width: int | None = None, height: int | None = None):
+    """Assert the file is a loadable image with optional exact dimensions."""
+    assert path.exists(), f"Image not found: {path}"
+    img = Image.open(path)
+    img.load()
+    assert img.width > 0 and img.height > 0
+    if width is not None:
+        assert img.width == width, f"Expected width={width}, got {img.width} in {path.name}"
+    if height is not None:
+        assert img.height == height, f"Expected height={height}, got {img.height} in {path.name}"
+    return img
+
+
+def assert_video_valid(path: Path, *, width: int, height: int, num_frames: int) -> None:
+    """Assert the MP4 has the expected resolution and exact frame count."""
+
+    assert path.exists(), f"Video not found: {path}"
+    frames = iio.imread(str(path), plugin="pyav", index=None)
+    assert frames.shape[0] == num_frames, f"Expected {num_frames} frames, got {frames.shape[0]}"
+    assert frames.shape[1] == height, f"Expected height={height}, got {frames.shape[1]}"
+    assert frames.shape[2] == width, f"Expected width={width}, got {frames.shape[2]}"
+
+
+def assert_audio_valid(path: Path, *, sample_rate: int, channels: int, duration_s: float) -> None:
+    """Assert the WAV has the expected sample rate, channel count, and duration."""
+
+    assert path.exists(), f"Audio not found: {path}"
+    info = sf.info(str(path))
+    assert info.samplerate == sample_rate, f"Expected sample_rate={sample_rate}, got {info.samplerate}"
+    assert info.channels == channels, f"Expected {channels} channel(s), got {info.channels}"
+    expected_frames = int(duration_s * sample_rate)
+    assert info.frames == expected_frames, (
+        f"Expected {expected_frames} frames ({duration_s}s @ {sample_rate} Hz), got {info.frames}"
+    )
+
+
+def decode_b64_image(b64: str):
+    img = Image.open(BytesIO(base64.b64decode(b64)))
+    img.load()
+    return img
 
 
 @pytest.fixture(autouse=True)
