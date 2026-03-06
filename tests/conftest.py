@@ -1405,7 +1405,7 @@ def openai_client(omni_server, run_level):
 
 class OmniRunner:
     """
-    Test runner for Omni models.
+    Offline test runner for vLLM-Omni models.
     """
 
     def __init__(
