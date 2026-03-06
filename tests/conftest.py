@@ -1116,7 +1116,7 @@ def omni_server(request, run_level):
     with _omni_server_lock:
         *port, model, stage_config_path, server_args = request.param
         port = port[0] if port else None
-        if run_level == "advanced_model":
+        if run_level == "advanced_model" and stage_config_path is not None:
             stage_config_path = modify_stage_config(
                 stage_config_path,
                 deletes={
@@ -1128,7 +1128,10 @@ def omni_server(request, run_level):
                 },
             )
 
-        server_args = ["--stage-configs-path", stage_config_path, "--stage-init-timeout", "120", *server_args]
+        server_args = ["--stage-init-timeout", "120", *server_args]
+        if stage_config_path is not None:
+            server_args += ["--stage-configs-path", stage_config_path]
+
         with OmniServer(model, server_args, port=port) if port else OmniServer(model, server_args) as server:
             print("OmniServer started successfully")
             yield server
