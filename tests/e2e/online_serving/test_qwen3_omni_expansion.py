@@ -50,7 +50,7 @@ def get_chunk_config(default_path):
 default_path = str(Path(__file__).parent.parent / "stage_configs" / "qwen3_omni_ci.yaml")
 stage_configs = [default_path, get_chunk_config(default_path)]
 # Create parameter combinations for model and stage config
-test_params = [(model, stage_config) for model in models for stage_config in stage_configs]
+test_params = [(model, stage_config, None) for model in models for stage_config in stage_configs]
 
 
 def get_system_prompt():

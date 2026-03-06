@@ -1114,7 +1114,7 @@ def omni_server(request, run_level):
     Multi-stage initialization can take 10-20+ minutes.
     """
     with _omni_server_lock:
-        *port, model, stage_config_path = request.param
+        *port, model, stage_config_path, server_args = request.param
         port = port[0] if port else None
         if run_level == "advanced_model":
             stage_config_path = modify_stage_config(
@@ -1128,7 +1128,7 @@ def omni_server(request, run_level):
                 },
             )
 
-        server_args = ["--stage-configs-path", stage_config_path, "--stage-init-timeout", "120"]
+        server_args = ["--stage-configs-path", stage_config_path, "--stage-init-timeout", "120", *server_args]
         with OmniServer(model, server_args, port=port) if port else OmniServer(model, server_args) as server:
             print("OmniServer started successfully")
             yield server

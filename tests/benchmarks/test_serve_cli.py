@@ -9,7 +9,7 @@ models = ["Qwen/Qwen2.5-Omni-7B"]
 stage_configs = [str(Path(__file__).parent.parent / "e2e" / "stage_configs" / "qwen2_5_omni_ci.yaml")]
 
 # Create parameter combinations for model and stage config
-test_params = [(model, stage_config) for model in models for stage_config in stage_configs]
+test_params = [(model, stage_config, None) for model in models for stage_config in stage_configs]
 
 
 @pytest.mark.core_model

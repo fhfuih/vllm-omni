@@ -51,7 +51,7 @@ else:
     stage_configs = [get_chunk_config()]
 
 # Create parameter combinations for model and stage config
-test_params = [(model, stage_config) for model in models for stage_config in stage_configs]
+test_params = [(model, stage_config, None) for model in models for stage_config in stage_configs]
 
 
 def get_system_prompt():
