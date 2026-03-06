@@ -99,7 +99,7 @@ def test_text_to_audio_001(omni_server, openai_client) -> None:
         "key_words": {"text": ["beijing"]},
     }
 
-    openai_client.send_request(request_config)
+    openai_client.send_omni_request(request_config)
 
 
 @pytest.mark.advanced_model
@@ -115,7 +115,7 @@ def test_text_to_text_audio_001(omni_server, openai_client) -> None:
         "key_words": {"text": ["beijing"]},
     }
 
-    openai_client.send_request(request_config)
+    openai_client.send_omni_request(request_config)
 
 
 @pytest.mark.advanced_model
@@ -133,7 +133,7 @@ def test_image_to_text_001(omni_server, openai_client) -> None:
         "key_words": {"image": IMAGE_KEY},
     }
 
-    openai_client.send_request(request_config)
+    openai_client.send_omni_request(request_config)
 
 
 @pytest.mark.advanced_model
@@ -151,7 +151,7 @@ def test_image_to_audio_001(omni_server, openai_client) -> None:
         "key_words": {"image": IMAGE_KEY},
     }
 
-    openai_client.send_request(request_config)
+    openai_client.send_omni_request(request_config)
 
 
 @pytest.mark.advanced_model
@@ -169,7 +169,7 @@ def test_image_to_text_audio_001(omni_server, openai_client) -> None:
         "key_words": {"image": IMAGE_KEY},
     }
 
-    openai_client.send_request(request_config, request_num=get_max_batch_size())
+    openai_client.send_omni_request(request_config, request_num=get_max_batch_size())
 
 
 @pytest.mark.advanced_model
@@ -187,7 +187,7 @@ def test_video_to_text_001(omni_server, openai_client) -> None:
         "key_words": {"video": VIDEO_KEY},
     }
 
-    openai_client.send_request(request_config)
+    openai_client.send_omni_request(request_config)
 
 
 @pytest.mark.advanced_model
@@ -205,7 +205,7 @@ def test_video_to_audio_001(omni_server, openai_client) -> None:
         "key_words": {"video": VIDEO_KEY},
     }
 
-    openai_client.send_request(request_config)
+    openai_client.send_omni_request(request_config)
 
 
 @pytest.mark.advanced_model
@@ -223,7 +223,7 @@ def test_video_to_text_audio_001(omni_server, openai_client) -> None:
         "key_words": {"video": VIDEO_KEY},
     }
 
-    openai_client.send_request(request_config, request_num=get_max_batch_size())
+    openai_client.send_omni_request(request_config, request_num=get_max_batch_size())
 
 
 @pytest.mark.advanced_model
@@ -243,7 +243,7 @@ def test_text_audio_to_text_audio_001(omni_server, openai_client) -> None:
         "key_words": {"audio": AUDIO_KEY},
     }
 
-    openai_client.send_request(request_config)
+    openai_client.send_omni_request(request_config)
 
 
 @pytest.mark.advanced_model
@@ -264,7 +264,7 @@ def test_text_image_to_text_audio_001(omni_server, openai_client) -> None:
         "key_words": {"image": IMAGE_KEY},
     }
 
-    openai_client.send_request(request_config)
+    openai_client.send_omni_request(request_config)
 
 
 @pytest.mark.skip(reason="There is a known issue with oom error.")
@@ -285,7 +285,7 @@ def test_text_video_to_text_audio_001(omni_server, openai_client) -> None:
         "key_words": {"video": VIDEO_KEY},
     }
 
-    openai_client.send_request(request_config, request_num=get_max_batch_size())
+    openai_client.send_omni_request(request_config, request_num=get_max_batch_size())
 
 
 @pytest.mark.skip(reason="There is a known issue with shape mismatch error.")
@@ -311,4 +311,4 @@ def test_mix_to_text_audio_001(omni_server, openai_client) -> None:
         "stream": True,
         "key_words": {"audio": AUDIO_KEY, "image": IMAGE_KEY, "video": VIDEO_KEY},
     }
-    openai_client.send_request(request_config, request_num=get_max_batch_size())
+    openai_client.send_omni_request(request_config, request_num=get_max_batch_size())

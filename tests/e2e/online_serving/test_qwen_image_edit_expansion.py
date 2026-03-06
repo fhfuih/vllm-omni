@@ -5,12 +5,9 @@ and are supported by the following models:
 - Qwen-Image-Edit-2509: two image inputs
 """
 
-import time
-
 import pytest
-import requests
 
-from tests.conftest import assert_image_valid, decode_b64_image, generate_synthetic_image
+from tests.conftest import dummy_messages_from_mix_data, generate_synthetic_image
 from tests.utils import hardware_marks
 
 EDIT_PROMPT = "Transform this image of colorful geometric shapes into a Piet Mondrian style abstract painting."
@@ -58,41 +55,24 @@ def _get_diffusion_feature_cases(model: str):
     _get_diffusion_feature_cases("Qwen/Qwen-Image-Edit"),
     indirect=True,
 )
-def test_qwen_image_edit_single(omni_server):
+def test_qwen_image_edit_single(omni_server, openai_client):
     image_data_url = f"data:image/jpeg;base64,{generate_synthetic_image(512, 512)['base64']}"
 
-    start_time = time.perf_counter()
+    messages = dummy_messages_from_mix_data(image_data_url=image_data_url, content_text=EDIT_PROMPT)
 
-    resp = requests.post(
-        f"http://{omni_server.host}:{omni_server.port}/v1/chat/completions",
-        json={
-            "messages": [
-                {
-                    "role": "user",
-                    "content": [
-                        {"type": "text", "text": EDIT_PROMPT},
-                        {"type": "image_url", "image_url": {"url": image_data_url}},
-                    ],
-                }
-            ],
-            "extra_body": {
-                "height": 512,
-                "width": 512,
-                "num_inference_steps": 50,
-                "guidance_scale": 1,
-                "seed": 42,
-            },
+    request_config = {
+        "model": omni_server.model,
+        "messages": messages,
+        "extra_body": {
+            "height": 512,
+            "width": 512,
+            "num_inference_steps": 50,
+            "guidance_scale": 1,
+            "seed": 42,
         },
-        timeout=600,  # Same as the OpenAI python client's default timeout
-    )
-    assert resp.status_code == 200, f"Request failed: {resp.text}"
+    }
 
-    e2e_latency = time.perf_counter() - start_time
-    print(f"the avg e2e is: {e2e_latency}")
-
-    data_url = resp.json()["choices"][0]["message"]["content"][0]["image_url"]["url"]
-    img = decode_b64_image(data_url.split(",", 1)[1])
-    assert_image_valid(img, width=512, height=512)
+    openai_client.send_diffusion_request(request_config)
 
 
 @pytest.mark.advanced_model
@@ -102,40 +82,24 @@ def test_qwen_image_edit_single(omni_server):
     _get_diffusion_feature_cases("Qwen/Qwen-Image-Edit-2509"),
     indirect=True,
 )
-def test_qwen_image_edit_multi(omni_server):
+def test_qwen_image_edit_multi(omni_server, openai_client):
     image_data_url_1 = f"data:image/jpeg;base64,{generate_synthetic_image(512, 512)['base64']}"
     image_data_url_2 = f"data:image/jpeg;base64,{generate_synthetic_image(512, 512)['base64']}"
 
-    start_time = time.perf_counter()
-
-    resp = requests.post(
-        f"http://{omni_server.host}:{omni_server.port}/v1/chat/completions",
-        json={
-            "messages": [
-                {
-                    "role": "user",
-                    "content": [
-                        {"type": "text", "text": MULTI_EDIT_PROMPT},
-                        {"type": "image_url", "image_url": {"url": image_data_url_1}},
-                        {"type": "image_url", "image_url": {"url": image_data_url_2}},
-                    ],
-                }
-            ],
-            "extra_body": {
-                "height": 512,
-                "width": 512,
-                "num_inference_steps": 50,
-                "guidance_scale": 1,
-                "seed": 42,
-            },
-        },
-        timeout=600,  # Same as the OpenAI python client's default timeout
+    messages = dummy_messages_from_mix_data(
+        image_data_url=[image_data_url_1, image_data_url_2], content_text=MULTI_EDIT_PROMPT
     )
-    assert resp.status_code == 200, f"Request failed: {resp.text}"
 
-    e2e_latency = time.perf_counter() - start_time
-    print(f"the avg e2e is: {e2e_latency}")
+    request_config = {
+        "model": omni_server.model,
+        "messages": messages,
+        "extra_body": {
+            "height": 512,
+            "width": 512,
+            "num_inference_steps": 50,
+            "guidance_scale": 1,
+            "seed": 42,
+        },
+    }
 
-    data_url = resp.json()["choices"][0]["message"]["content"][0]["image_url"]["url"]
-    img = decode_b64_image(data_url.split(",", 1)[1])
-    assert_image_valid(img, width=512, height=512)
+    openai_client.send_diffusion_request(request_config)

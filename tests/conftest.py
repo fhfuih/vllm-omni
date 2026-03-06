@@ -29,7 +29,7 @@ import pytest
 import soundfile as sf
 import torch
 import yaml
-from openai import OpenAI
+from openai import Omit, OpenAI
 from PIL import Image
 from vllm import TextPrompt
 from vllm.distributed.parallel_state import cleanup_dist_env_and_memory
@@ -1151,6 +1151,17 @@ class OmniResponse:
     error_message: str | None = None
 
 
+@dataclass
+class DiffusionResponse:
+    text_content: str | None = None
+    images: list[Image.Image] | None = None
+    audios: list[Any] | None = None
+    videos: list[Any] | None = None
+    e2e_latency: float | None = None
+    success: bool = False
+    error_message: str | None = None
+
+
 def assert_omni_response(response: OmniResponse, request_config: dict[str, Any], run_level):
     """
     Validate response results.
@@ -1199,6 +1210,47 @@ def assert_omni_response(response: OmniResponse, request_config: dict[str, Any],
             print(f"similarity is: {response.similarity}")
 
 
+def assert_diffusion_response(response: DiffusionResponse, request_config: dict[str, Any], run_level: str = None):
+    """
+    Validate diffusion response results.
+
+    Args:
+        response: DiffusionResponse object. Any not-None content will be validated based on the request_config.
+        request_config: Request configuration dictionary containing parameters like model, messages, extra_body.
+            When validating a certain modality, the corresponding params in request_config['extra_body'] must present.
+            It will be used to check against the multimedia file in the response.
+        run_level: Test run level (e.g., "core_model", "advanced_model")
+
+    Raises:
+        AssertionError: When the response does not meet validation criteria
+        KeyError: When the request_config does not contain necessary parameters for validation
+    """
+    assert response.success, "The request failed."
+
+    e2e_latency = response.e2e_latency
+    if e2e_latency is not None:
+        print(f"the avg e2e is: {e2e_latency}")
+
+    extra_body = request_config.get("extra_body", {})
+
+    num_outputs_per_prompt = extra_body.get("num_outputs_per_prompt", 1)
+
+    if response.images is not None:
+        assert len(response.images) > 0, "No images in response"
+        assert len(response.images) == num_outputs_per_prompt, (
+            f"Expected {num_outputs_per_prompt} images, got {len(response.images)}"
+        )
+        if run_level == "advanced_model":
+            expected_width = extra_body["width"]  # intend to raise KeyError
+            expected_height = extra_body["height"]  # intend to raise KeyError
+            for img in response.images:
+                assert_image_valid(img, width=expected_width, height=expected_height)
+    if response.videos is not None:
+        raise NotImplementedError("Video validation is not implemented yet")
+    if response.audios is not None:
+        raise NotImplementedError("Audio validation is not implemented yet")
+
+
 class OpenAIClientHandler:
     """
     OpenAI client handler class, encapsulating both streaming and non-streaming response processing logic.
@@ -1221,7 +1273,7 @@ class OpenAIClientHandler:
         self.client = OpenAI(base_url=f"http://{host}:{port}/v1", api_key=api_key)
         self.run_level = run_level
 
-    def _process_stream_response(self, chat_completion) -> OmniResponse:
+    def _process_stream_omni_response(self, chat_completion) -> OmniResponse:
         """
         Process streaming responses.
 
@@ -1282,7 +1334,7 @@ class OpenAIClientHandler:
 
         return result
 
-    def _process_non_stream_response(self, chat_completion) -> OmniResponse:
+    def _process_non_stream_omni_response(self, chat_completion) -> OmniResponse:
         """
         Process non-streaming responses.
 
@@ -1336,7 +1388,45 @@ class OpenAIClientHandler:
 
         return result
 
-    def send_request(self, request_config: dict[str, Any], request_num: int = 1) -> list[OmniResponse]:
+    def _process_diffusion_response(self, chat_completion) -> DiffusionResponse:
+        """
+        Process diffusion responses (image generation/editing).
+
+        Args:
+            chat_completion: OpenAI response object
+
+        Returns:
+            DiffusionResponse: Processed response object
+        """
+        result = DiffusionResponse()
+        start_time = time.perf_counter()
+
+        try:
+            images = []
+
+            for choice in chat_completion.choices:
+                if hasattr(choice.message, "content") and choice.message.content is not None:
+                    content = choice.message.content
+                    if isinstance(content, list):
+                        for item in content:
+                            if hasattr(item, "image_url") and item.image_url is not None:
+                                image_url = item.image_url.url
+                                if image_url.startswith("data:image"):
+                                    b64_data = image_url.split(",", 1)[1]
+                                    img = decode_b64_image(b64_data)
+                                    images.append(img)
+
+            result.e2e_latency = time.perf_counter() - start_time
+            result.images = images if images else None
+            result.success = True
+
+        except Exception as e:
+            result.error_message = f"Diffusion response processing error: {str(e)}"
+            print(f"Error: {result.error_message}")
+
+        return result
+
+    def send_omni_request(self, request_config: dict[str, Any], request_num: int = 1) -> list[OmniResponse]:
         """
         Send OpenAI requests.
 
@@ -1362,9 +1452,9 @@ class OpenAIClientHandler:
             )
 
             if stream:
-                response = self._process_stream_response(chat_completion)
+                response = self._process_stream_omni_response(chat_completion)
             else:
-                response = self._process_non_stream_response(chat_completion)
+                response = self._process_non_stream_omni_response(chat_completion)
 
             assert_omni_response(response, request_config, run_level=self.run_level)
             responses.append(response)
@@ -1390,11 +1480,67 @@ class OpenAIClientHandler:
                     chat_completion = future.result()
 
                     if stream:
-                        response = self._process_stream_response(chat_completion)
+                        response = self._process_stream_omni_response(chat_completion)
                     else:
-                        response = self._process_non_stream_response(chat_completion)
+                        response = self._process_non_stream_omni_response(chat_completion)
 
                     assert_omni_response(response, request_config, run_level=self.run_level)
+                    responses.append(response)
+
+        return responses
+
+    def send_diffusion_request(self, request_config: dict[str, Any], request_num: int = 1) -> list[OmniResponse]:
+        """
+        Send OpenAI requests for diffusion models.
+
+        Args:
+            request_config: Request configuration dictionary containing parameters like model, messages
+            request_num: Number of requests to send concurrently, defaults to 1 (single request)
+        Returns:
+            List[OmniResponse]: List of response objects
+        """
+        responses = []
+        stream = request_config.get("stream", False)
+        modalities = request_config.get("modalities", Omit)  # Most diffusion models don't require modalities param
+        extra_body = request_config.get("extra_body", None)
+
+        if stream:
+            raise NotImplementedError("Streaming is not currently implemented for diffusion model e2e test")
+
+        if request_num == 1:
+            # Send single request
+            chat_completion = self.client.chat.completions.create(
+                model=request_config.get("model"),
+                messages=request_config.get("messages"),
+                extra_body=extra_body,
+                modalities=modalities,
+            )
+
+            response = self._process_diffusion_response(chat_completion)
+            assert_diffusion_response(response, request_config, run_level=self.run_level)
+            responses.append(response)
+
+        else:
+            # Send concurrent requests
+            with concurrent.futures.ThreadPoolExecutor(max_workers=request_num) as executor:
+                futures = []
+
+                # Submit all request tasks
+                for _ in range(request_num):
+                    future = executor.submit(
+                        self.client.chat.completions.create,
+                        model=request_config.get("model"),
+                        messages=request_config.get("messages"),
+                        modalities=modalities,
+                        extra_body=extra_body,
+                    )
+                    futures.append(future)
+
+                # Process completed tasks
+                for future in concurrent.futures.as_completed(futures):
+                    chat_completion = future.result()
+                    response = self._process_diffusion_response(chat_completion)
+                    assert_diffusion_response(response, request_config, run_level=self.run_level)
                     responses.append(response)
 
         return responses
