@@ -28,7 +28,7 @@ _DIFFUSION_FEATURE_CASES = [
     pytest.param("ring_2", ["--ring", "2"], marks=PARALLEL_FEATURE_MARKS),
     pytest.param("cfg_parallel_2", ["--cfg-parallel-size", "2"], marks=PARALLEL_FEATURE_MARKS),
     pytest.param("cpu_offload", ["--enable-cpu-offload"], marks=SINGLE_CARD_FEATURE_MARKS),
-    pytest.param("cpu_offload_layerwise", ["--enable-layerwise-offload"], marks=SINGLE_CARD_FEATURE_MARKS),
+    pytest.param("layerwise_offload", ["--enable-layerwise-offload"], marks=SINGLE_CARD_FEATURE_MARKS),
     # pytest.param("vae_slicing", ["--vae-use-slicing"], marks=SINGLE_CARD_FEATURE_MARKS),
     # pytest.param("vae_tiling", ["--vae-use-tiling"], marks=SINGLE_CARD_FEATURE_MARKS),
 ]
