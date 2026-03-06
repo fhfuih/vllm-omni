@@ -29,7 +29,7 @@ import pytest
 import soundfile as sf
 import torch
 import yaml
-from openai import Omit, OpenAI
+from openai import OpenAI, omit
 from PIL import Image
 from vllm import TextPrompt
 from vllm.distributed.parallel_state import cleanup_dist_env_and_memory
@@ -1501,7 +1501,7 @@ class OpenAIClientHandler:
         """
         responses = []
         stream = request_config.get("stream", False)
-        modalities = request_config.get("modalities", Omit)  # Most diffusion models don't require modalities param
+        modalities = request_config.get("modalities", omit)  # Most diffusion models don't require modalities param
         extra_body = request_config.get("extra_body", None)
 
         if stream:
