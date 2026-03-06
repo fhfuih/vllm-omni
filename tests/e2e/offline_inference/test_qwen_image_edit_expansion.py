@@ -72,7 +72,7 @@ def test_qwen_image_edit_single(case_id, extra_args, model_prefix):
             seed=42,
         ),
     )
-    img = output.request_output[0].images[0]
+    img = output[0].request_output[0].images[0]
     assert_image_valid(img, width=512, height=512)
 
 
@@ -108,5 +108,5 @@ def test_qwen_image_edit_multi(case_id, extra_args, model_prefix):
             seed=42,
         ),
     )
-    img = output.request_output[0].images[0]
+    img = output[0].request_output[0].images[0]
     assert_image_valid(img, width=512, height=512)
