@@ -29,24 +29,28 @@ PARALLEL_FEATURE_MARKS = hardware_marks(res={"cuda": "L4", "rocm": "MI325", "npu
 def _get_diffusion_feature_cases(model: str):
     return [
         pytest.param(
-            model,
-            None,
-            {
-                "parallel_config": DiffusionParallelConfig(
-                    tensor_parallel_size=2,
-                ),
-            },
+            (
+                model,
+                None,
+                {
+                    "parallel_config": DiffusionParallelConfig(
+                        tensor_parallel_size=2,
+                    ),
+                },
+            ),  # This tuple's structure corresponds to `omni_runner`'s `request.param`. See tests/conftest.py.
             marks=PARALLEL_FEATURE_MARKS,
             id="tp_2",
         ),
         pytest.param(
-            model,
-            None,
-            {
-                "parallel_config": DiffusionParallelConfig(
-                    vae_patch_parallel_size=2,
-                ),
-            },
+            (
+                model,
+                None,
+                {
+                    "parallel_config": DiffusionParallelConfig(
+                        vae_patch_parallel_size=2,
+                    ),
+                },
+            ),
             id="vae_parallel_2",
             marks=PARALLEL_FEATURE_MARKS,
         ),
