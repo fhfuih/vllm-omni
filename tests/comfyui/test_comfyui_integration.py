@@ -294,7 +294,7 @@ def _build_mock_outputs(outputs: Iterable[OmniRequestOutput], sampling_case: Sam
         elif sampling_case.kind is SamplingKind.UNDERSTANDING_AR_LIST:
             assert len(received_sampling_params_list) == 3
             for i, expected in enumerate(AR_LIST_SAMPLING_PARAMS):
-                _assert_sampling_param_values(received_sampling_params_list[i], expected, LORA_PARAMS)
+                _assert_sampling_param_values(received_sampling_params_list[i], expected)
         elif sampling_case.kind in {SamplingKind.TTS_NONE, SamplingKind.TTS_DIFFUSION_SINGLE}:
             assert len(received_sampling_params_list) == 1
         elif sampling_case.kind is SamplingKind.VIDEO_NONE:
