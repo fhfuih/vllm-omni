@@ -140,6 +140,7 @@ vllm_omni/                                    tests/
                                                │   ├── test_async_omni.py
                                                │   ├── test_qwen3_omni.py
                                                │   ├── test_qwen3_omni_expansion.py
+                                               │   ├── test_qwen_image_edit_expansion.py
                                                │   ├── test_image_gen_edit.py
                                                │   ├── test_images_generations_lora.py
                                                │   └── stage_configs/
@@ -158,6 +159,7 @@ vllm_omni/                                    tests/
                                                    ├── test_diffusion_layerwise_offload.py
                                                    ├── test_diffusion_lora.py
                                                    ├── test_sequence_parallel.py
+                                               │   ├── test_qwen_image_edit_expansion.py
                                                    └── stage_configs/
                                                        ├── qwen2_5_omni_ci.yaml
                                                        ├── qwen3_omni_ci.yaml
