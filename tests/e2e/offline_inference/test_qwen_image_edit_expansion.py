@@ -55,7 +55,7 @@ def test_qwen_image_edit_single(case_id, extra_args, model_prefix):
     synthetic_image = generate_synthetic_image(512, 512, save_to_file=True)
     pil_image = PIL.Image.open(synthetic_image["file_path"]).convert("RGB")
     model = f"{model_prefix}Qwen/Qwen-Image-Edit"
-    runner = OmniRunner(model=model, seed=42, stage_init_timeout=300, **extra_args)
+    runner = OmniRunner(model, **extra_args)
     output = runner.generate(
         {
             "prompt": EDIT_PROMPT,
@@ -88,7 +88,7 @@ def test_qwen_image_edit_multi(case_id, extra_args, model_prefix):
     pil_image_1 = PIL.Image.open(synthetic_image_1["file_path"]).convert("RGB")
     pil_image_2 = PIL.Image.open(synthetic_image_2["file_path"]).convert("RGB")
     model = f"{model_prefix}Qwen/Qwen-Image-Edit-2509"
-    runner = OmniRunner(model=model, seed=42, stage_init_timeout=300, **extra_args)
+    runner = OmniRunner(model, **extra_args)
     output = runner.generate(
         {
             "prompt": MULTI_EDIT_PROMPT,
