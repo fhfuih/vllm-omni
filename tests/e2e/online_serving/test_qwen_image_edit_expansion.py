@@ -5,6 +5,8 @@ and are supported by the following models:
 - Qwen-Image-Edit-2509: two image inputs
 """
 
+import time
+
 import pytest
 import requests
 
@@ -45,6 +47,9 @@ def test_qwen_image_edit_single(case_id, extra_args, model_prefix):
     model = f"{model_prefix}Qwen/Qwen-Image-Edit"
     with OmniServer(model, extra_args) as server:
         image_data_url = f"data:image/jpeg;base64,{generate_synthetic_image(512, 512)['base64']}"
+
+        start_time = time.perf_counter()
+
         resp = requests.post(
             f"http://{server.host}:{server.port}/v1/chat/completions",
             json={
@@ -68,6 +73,10 @@ def test_qwen_image_edit_single(case_id, extra_args, model_prefix):
             timeout=600,  # Same as the OpenAI python client's default timeout
         )
         assert resp.status_code == 200, f"Request failed: {resp.text}"
+
+        e2e_latency = time.perf_counter() - start_time
+        print(f"the avg e2e is: {e2e_latency}")
+
         data_url = resp.json()["choices"][0]["message"]["content"][0]["image_url"]["url"]
         img = decode_b64_image(data_url.split(",", 1)[1])
         assert_image_valid(img, width=512, height=512)
@@ -85,6 +94,9 @@ def test_qwen_image_edit_multi(case_id, extra_args, model_prefix):
     with OmniServer(model, extra_args) as server:
         image_data_url_1 = f"data:image/jpeg;base64,{generate_synthetic_image(512, 512)['base64']}"
         image_data_url_2 = f"data:image/jpeg;base64,{generate_synthetic_image(512, 512)['base64']}"
+
+        start_time = time.perf_counter()
+
         resp = requests.post(
             f"http://{server.host}:{server.port}/v1/chat/completions",
             json={
@@ -109,6 +121,10 @@ def test_qwen_image_edit_multi(case_id, extra_args, model_prefix):
             timeout=600,  # Same as the OpenAI python client's default timeout
         )
         assert resp.status_code == 200, f"Request failed: {resp.text}"
+
+        e2e_latency = time.perf_counter() - start_time
+        print(f"the avg e2e is: {e2e_latency}")
+
         data_url = resp.json()["choices"][0]["message"]["content"][0]["image_url"]["url"]
         img = decode_b64_image(data_url.split(",", 1)[1])
         assert_image_valid(img, width=512, height=512)

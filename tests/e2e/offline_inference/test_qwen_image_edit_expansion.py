@@ -5,6 +5,8 @@ Comprehensive tests of diffusion features that are *ONLY* available in offline i
 - Qwen-Image-Edit-2509: two image inputs
 """
 
+import time
+
 import PIL
 import pytest
 
@@ -61,6 +63,9 @@ def _get_diffusion_feature_cases(model: str):
 def test_qwen_image_edit_single(omni_runner):
     synthetic_image = generate_synthetic_image(512, 512, save_to_file=True)
     pil_image = PIL.Image.open(synthetic_image["file_path"]).convert("RGB")
+
+    start_time = time.perf_counter()
+
     output = omni_runner.generate(
         {
             "prompt": EDIT_PROMPT,
@@ -76,6 +81,10 @@ def test_qwen_image_edit_single(omni_runner):
             seed=42,
         ),
     )
+
+    e2e_latency = time.perf_counter() - start_time
+    print(f"the avg e2e is: {e2e_latency}")
+
     img = output[0].request_output[0].images[0]
     assert_image_valid(img, width=512, height=512)
 
@@ -92,6 +101,9 @@ def test_qwen_image_edit_multi(omni_runner):
     synthetic_image_2 = generate_synthetic_image(512, 512, save_to_file=True)
     pil_image_1 = PIL.Image.open(synthetic_image_1["file_path"]).convert("RGB")
     pil_image_2 = PIL.Image.open(synthetic_image_2["file_path"]).convert("RGB")
+
+    start_time = time.perf_counter()
+
     output = omni_runner.generate(
         {
             "prompt": MULTI_EDIT_PROMPT,
@@ -110,5 +122,9 @@ def test_qwen_image_edit_multi(omni_runner):
             seed=42,
         ),
     )
+
+    e2e_latency = time.perf_counter() - start_time
+    print(f"the avg e2e is: {e2e_latency}")
+
     img = output[0].request_output[0].images[0]
     assert_image_valid(img, width=512, height=512)
