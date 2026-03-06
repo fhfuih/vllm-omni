@@ -26,7 +26,7 @@ else:
     stage_config = str(Path(__file__).parent.parent / "stage_configs" / "qwen2_5_omni_ci.yaml")
 
 # Create parameter combinations for model and stage config
-test_params = [(model, stage_config) for model in models]
+test_params = [(model, stage_config, None) for model in models]
 
 
 def get_question(prompt_type="mix"):

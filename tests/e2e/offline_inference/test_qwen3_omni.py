@@ -27,7 +27,7 @@ else:
     stage_configs = [str(Path(__file__).parent.parent / "stage_configs" / "qwen3_omni_ci.yaml")]
 
 # Create parameter combinations for model and stage config
-test_params = [(model, stage_config) for model in models for stage_config in stage_configs]
+test_params = [(model, stage_config, None) for model in models for stage_config in stage_configs]
 
 
 def get_question(prompt_type="video"):
