@@ -34,7 +34,8 @@ if __name__ == "__main__":
     ]
     outputs = omni.generate(prompts)
     for i, output in enumerate(outputs):
-      image = output.request_output[0].images[0].save(f"{i}.jpg")
+      image = output.request_output[0].images[0]
+      image.save(f"{i}.jpg")
 ```
 
 !!! info
@@ -60,16 +61,17 @@ if __name__ == "__main__":
     omni = Omni(model="Qwen/Qwen-Image")
     outputs = omni.generate([
       {
-        "prompt": "a cup of coffee on a table"，
+        "prompt": "a cup of coffee on a table",
         "negative_prompt": "low resolution"
       },
       {
-        "prompt": "a toy dinosaur on a sandy beach"，
+        "prompt": "a toy dinosaur on a sandy beach",
         "negative_prompt": "cinematic, realistic"
       }
     ])
     for i, output in enumerate(outputs):
-      image = output.request_output[0].images[0].save(f"{i}.jpg")
+      image = output.request_output[0].images[0]
+      image.save(f"{i}.jpg")
 ```
 
 ## Local CLI Usage
