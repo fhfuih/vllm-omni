@@ -72,6 +72,7 @@ python text_to_image.py \
 | -------- | ---- | ------- | ----------- |
 | `--prompt` | str | `"a cup of coffee on the table"` | Text description for image generation |
 | `--seed` | int | `142` | Integer seed for deterministic sampling |
+| `--negative-prompt` | str | `None` | Negative prompt for classifier-free conditional guidance |
 | `--cfg-scale` | float | `4.0` | True CFG scale (model-specific guidance strength) |
 | `--guidance-scale` | float | `1.0` | Classifier-free guidance scale |
 | `--num-images-per-prompt` | int | `1` | Number of images per prompt (saved as `output`, `output_1`, ...) |
@@ -212,8 +213,8 @@ if __name__ == "__main__":
 You can also pass a negative prompt via the CLI argument `--negative-prompt`:
 
 ```bash
-python text_to_image.py \
-  --model Tongyi-MAI/Z-Image-Turbo \
+python examples/offline_inference/text_to_image/text_to_image.py \
+  --model Qwen/Qwen-Image \
   --prompt "a cup of coffee on a table" \
   --negative-prompt "low resolution, blurry" \
   --output coffee.png
