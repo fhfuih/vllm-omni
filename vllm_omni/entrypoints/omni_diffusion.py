@@ -93,6 +93,8 @@ class OmniDiffusion:
             elif model_type == "nextstep":
                 if od_config.model_class_name is None:
                     pipeline_class = "NextStep11Pipeline"
+                else:
+                    pipeline_class = od_config.model_class_name
             elif model_type == "glm-image" or "GlmImageForConditionalGeneration" in architectures:
                 pipeline_class = "GlmImagePipeline"
             elif architectures and len(architectures) == 1:
