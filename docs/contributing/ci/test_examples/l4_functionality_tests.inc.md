@@ -4,7 +4,7 @@ For diffusion models, the L4 functionality test covers all or common *diffusion 
 
 **Test Case Design**
 
-For a *high priority* model (currently listed in [PR #1832](https://github.com/vllm-project/vllm-omni/issues/1832)), we use several test cases, each with multiple features turned on, so that each supported feature is tested in at least one test case. This is to relieve the GPU workload on the CI machine. The suggested test case combination is as follows:
+For a *high priority* model (currently listed in [issue #1832](https://github.com/vllm-project/vllm-omni/issues/1832)), we use several test cases, each with multiple features turned on, so that each supported feature is tested in at least one test case. This is to relieve the GPU workload on the CI machine. The suggested test case combination is as follows:
 
 - If the model can fit into 4 L4 GPU (with quantization and tensor parallel always on) (20GB RAM each)
     - (1 GPU) TeaCache + Layerwise CPU offloading + GGUF
