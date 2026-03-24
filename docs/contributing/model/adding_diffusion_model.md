@@ -653,7 +653,7 @@ For a fair comparison, keep the same **prompt**, **seed**, **resolution**, **num
 
 To ensure project maintainability and sustainable development, please submit test code (unit tests, system tests, or end-to-end tests) alongside their code changes.
 
-For comprehensive testing guidelines and the definition of test levels (L1-L5), please refer to the [Multi-Level Automated Testing System Documentation](../ci/CI_5levels.md). You are at least required to add L4 *functionality* test described in this page.
+For comprehensive testing guidelines and the definition of test levels (L1-L5), please refer to the [Multi-Level Automated Testing System Documentation](../ci/CI_5levels.md). You are at least required to add an L4 *functionality* test described in that document.
 
 ---
 
