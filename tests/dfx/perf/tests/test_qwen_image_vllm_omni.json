@@ -21,7 +21,7 @@
                 "max-concurrency": 1,
                 "enable-negative-prompt": true,
                 "baseline": {
-                    "throughput_qps": 0.40,
+                    "throughput_qps": 0.30,
                     "latency_p99": 2.55,
                     "peak_memory_mb_max": 67000,
                     "peak_memory_mb_mean": 67000
@@ -178,7 +178,7 @@
                 "enable-negative-prompt": true,
                 "baseline": {
                     "throughput_qps": 0.52,
-                    "latency_p99": 2.36,
+                    "latency_p99": 2.20,
                     "peak_memory_mb_max": 67000,
                     "peak_memory_mb_mean": 67000
                 }
