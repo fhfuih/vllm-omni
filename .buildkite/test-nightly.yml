@@ -376,7 +376,6 @@ steps:
         exit $$((EXIT1 | EXIT2 | EXIT3))
       - buildkite-agent artifact upload "tests/dfx/perf/results/benchmark_results_*.json"
       - buildkite-agent artifact upload "tests/dfx/perf/results/logs/*.log"
-    soft_fail: true  # ensure every benchmark is run even if some fail
     agents:
       queue: "mithril-h100-pool"
     plugins:
