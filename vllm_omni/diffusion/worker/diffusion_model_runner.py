@@ -94,7 +94,7 @@ class DiffusionModelRunner(OmniConnectorModelRunnerMixin):
     def load_model(
         self,
         memory_pool_context_fn: callable | None = None,
-        load_format: str | None = None,
+        load_format: str = "default",
         custom_pipeline_name: str | None = None,
     ) -> None:
         """
