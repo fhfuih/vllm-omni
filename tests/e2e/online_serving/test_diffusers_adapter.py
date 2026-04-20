@@ -5,10 +5,6 @@
 
 These tests require a GPU and download model weights from HuggingFace.
 They are intended to run in nightly CI, not per-PR.
-
-Run with:
-    pytest tests/diffusion/models/test_diffusers_adapter_e2e.py \
-        -v -s --gpu
 """
 
 from types import SimpleNamespace
@@ -22,6 +18,7 @@ from vllm_omni.diffusion.request import OmniDiffusionRequest
 from vllm_omni.inputs.data import OmniDiffusionSamplingParams
 
 pytestmark = [
+    pytest.mark.skip(reason="WIP"),
     pytest.mark.gpu,
     pytest.mark.diffusion,
     pytest.mark.nightly,
@@ -29,7 +26,6 @@ pytestmark = [
 
 
 def _make_od_config(model, dtype=torch.float16, **overrides):
-    """Create an OmniDiffusionConfig for e2e testing."""
     return OmniDiffusionConfig(
         model=model,
         model_class_name="DiffusersAdapterPipeline",
@@ -48,7 +44,6 @@ def _make_od_config(model, dtype=torch.float16, **overrides):
 
 
 def _make_request(prompt, **overrides):
-    """Create an OmniDiffusionRequest for e2e testing."""
     return OmniDiffusionRequest(
         prompts=[{"prompt": prompt}],
         sampling_params=OmniDiffusionSamplingParams(
@@ -70,11 +65,8 @@ def _make_request(prompt, **overrides):
 @pytest.mark.skip(reason="Requires GPU and model download; run nightly only")
 class TestDiffusersAdapterE2E:
     def test_e2e_sd15_text2img(self):
-        """Stable Diffusion 1.5: prompt -> image, verify shape/range."""
         from vllm_omni.diffusion.data import DiffusionOutput
-        from vllm_omni.diffusion.models.diffusers_adapter import (
-            DiffusersAdapterPipeline,
-        )
+        from vllm_omni.diffusion.models.diffusers_adapter import DiffusersAdapterPipeline
 
         od_config = _make_od_config(
             model="stable-diffusion-v1-5/stable-diffusion-v1-5",
@@ -108,11 +100,8 @@ class TestDiffusersAdapterE2E:
         assert output.output.max() <= 1.0
 
     def test_e2e_wan_text2video(self):
-        """Wan2.1 T2V via diffusers: prompt -> video, verify shape/range."""
         from vllm_omni.diffusion.data import DiffusionOutput
-        from vllm_omni.diffusion.models.diffusers_adapter import (
-            DiffusersAdapterPipeline,
-        )
+        from vllm_omni.diffusion.models.diffusers_adapter import DiffusersAdapterPipeline
 
         od_config = _make_od_config(
             model="Wan-AI/Wan2.1-T2V-1.3B-Diffusers",
