@@ -201,7 +201,7 @@ class DiffusersAdapterPipeline(nn.Module, DiffusionPipelineProfilerMixin):
         attention_backend_config = self.od_config.attention_backend or os.environ.get("DIFFUSION_ATTENTION_BACKEND")
         attention_backend_attempts: list[str] = []
         match attention_backend_config:
-            case "FLASH_ATTN":
+            case "FLASH_ATTN" | None:
                 if current_omni_platform.is_rocm():
                     attention_backend_attempts.append("aiter")
                 elif current_omni_platform.is_xpu():
