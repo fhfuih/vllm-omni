@@ -181,3 +181,6 @@ class TestDiffusersAdapterPipeline:
         assert kwargs["num_frames"] == 8
         assert kwargs["num_images_per_prompt"] == 2
         assert kwargs["output_type"] == "pil"
+        assert isinstance(kwargs["generator"], torch.Generator)
+        assert kwargs["generator"].device.type == "cpu"
+        assert kwargs["generator"].initial_seed() == 123
