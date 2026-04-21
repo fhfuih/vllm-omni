@@ -3,7 +3,6 @@
 
 from collections import namedtuple
 from types import SimpleNamespace
-from unittest.mock import patch
 
 import pytest
 import torch
@@ -65,7 +64,7 @@ def _make_request(**overrides) -> OmniDiffusionRequest:
 
 
 class TestDiffusersAdapterPipeline:
-    def test_adapter_forward_returns_output(self):
+    def test_adapter_forward_returns_output(self, mocker):
         od_config = _make_od_config()
         request = _make_request()
         stub_image = Image.new("RGB", (request.sampling_params.width, request.sampling_params.height))  # pyright: ignore[reportArgumentType]
@@ -75,12 +74,12 @@ class TestDiffusersAdapterPipeline:
         MockPipeline = type("MockPipeline", (DiffusionPipeline,), {})
         adapter._pipeline = MockPipeline()
 
-        with patch.object(
+        mocker.patch.object(
             MockPipeline,
             "__call__",
             return_value=MockPipelineOutput(image=stub_image),
-        ):
-            output = adapter.forward(request)
+        )
+        output = adapter.forward(request)
 
         assert isinstance(output, DiffusionOutput)
         assert isinstance(output.output, MockPipelineOutput)
@@ -126,7 +125,7 @@ class TestDiffusersAdapterPipeline:
         with pytest.raises(NotImplementedError):
             DiffusersAdapterPipeline(od_config=od_config)
 
-    def test_adapter_guard_unknown_output_type(self):
+    def test_adapter_guard_unknown_output_type(self, mocker):
         """Test that the adapter wraps an unknown output type as-is.
         This is useful when `return_dict=True` and the diffusers pipeline returns an OrderedDict subclass."""
 
@@ -136,12 +135,12 @@ class TestDiffusersAdapterPipeline:
         MockPipeline = type("MockPipeline", (DiffusionPipeline,), {})
         adapter._pipeline = MockPipeline()
 
-        with patch.object(
+        mocker.patch.object(
             MockPipeline,
             "__call__",
             return_value=raw_output,
-        ):
-            output = adapter.forward(_make_request())
+        )
+        output = adapter.forward(_make_request())
 
         assert isinstance(output, DiffusionOutput)
         assert output.output == raw_output
