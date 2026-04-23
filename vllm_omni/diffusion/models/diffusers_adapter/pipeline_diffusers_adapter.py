@@ -15,7 +15,7 @@ It does NOT support:
 
 import logging
 import os
-from typing import Any
+from typing import Any, cast
 
 import torch
 from diffusers.pipelines.pipeline_utils import DiffusionPipeline
@@ -24,7 +24,7 @@ from torch import nn
 from vllm_omni.diffusion.data import DiffusionOutput, OmniDiffusionConfig
 from vllm_omni.diffusion.profiler.diffusion_pipeline_profiler import DiffusionPipelineProfilerMixin
 from vllm_omni.diffusion.request import OmniDiffusionRequest
-from vllm_omni.inputs.data import OmniPromptType
+from vllm_omni.inputs.data import OmniPromptType, OmniTextPrompt
 from vllm_omni.platforms import current_omni_platform
 
 logger = logging.getLogger(__name__)
@@ -270,14 +270,14 @@ class DiffusersAdapterPipeline(nn.Module, DiffusionPipelineProfilerMixin):
     def _build_call_kwargs(self, req: OmniDiffusionRequest) -> dict[str, Any]:
         """Translate ``OmniDiffusionRequest`` into diffusers ``__call__`` kwargs."""
         sampling = req.sampling_params
-        prompt, neg_prompt = self._extract_prompt(req.prompts)
+        input_kwargs = self._extract_input(req.prompts)
 
         # Merge user-provided call kwargs from stage/CLI defaults.
         # Request-time parameters take precedence over stage-config defaults
         call_kwargs = self.od_config.diffusers_call_kwargs
         kwargs: dict[str, Any] = {
             **call_kwargs,
-            "prompt": prompt,
+            **input_kwargs,
             "num_inference_steps": sampling.num_inference_steps,
             "guidance_scale": sampling.guidance_scale,
             "output_type": sampling.output_type or self.od_config.output_type,
@@ -292,9 +292,6 @@ class DiffusersAdapterPipeline(nn.Module, DiffusionPipelineProfilerMixin):
         if sampling.num_outputs_per_prompt is not None and sampling.num_outputs_per_prompt > 1:
             kwargs["num_images_per_prompt"] = sampling.num_outputs_per_prompt
 
-        if neg_prompt is not None:
-            kwargs["negative_prompt"] = neg_prompt
-
         if sampling.generator is not None:
             kwargs["generator"] = sampling.generator
         elif sampling.seed is not None:
@@ -308,25 +305,67 @@ class DiffusersAdapterPipeline(nn.Module, DiffusionPipelineProfilerMixin):
         return kwargs
 
     @staticmethod
-    def _extract_prompt(prompt_obj: list[OmniPromptType]) -> tuple[str | list[str], str | list[str] | None]:
+    def _extract_input(prompt_obj: list[OmniPromptType]) -> dict[str, Any]:
         """Extract the text prompts and negative prompts from a list of prompt objects."""
         if len(prompt_obj) == 1:
             if isinstance(prompt_obj[0], str):
-                return prompt_obj[0], None
+                return {"prompt": prompt_obj[0]}
             else:
-                return prompt_obj[0].get("prompt", ""), prompt_obj[0].get("negative_prompt", None)
+                obj = cast(OmniTextPrompt, prompt_obj[0])
+                multi_modal_data = obj.get("multi_modal_data") or {}
+                return {
+                    "prompt": obj.get("prompt", ""),
+                    "negative_prompt": obj.get("negative_prompt", None),
+                    **multi_modal_data,
+                }
 
-        prompts = []
-        negative_prompts: list[str] | None = []
-        for prompt in prompt_obj:
+        # Check the first element for the presence of multimodal data.
+        # The following elements should have the same multimodal data fields, or none has multimodal data.
+        multi_modal_data_fields: list[str] = []
+        if isinstance(prompt_obj[0], dict) and (multi_modal_data := prompt_obj[0].get("multi_modal_data")):
+            multi_modal_data_fields = list(multi_modal_data.keys())
+        if multi_modal_data_fields:
+            for i, prompt in enumerate(prompt_obj):
+                assert isinstance(prompt, dict) and (multi_modal_data := prompt.get("multi_modal_data")) is not None, (
+                    "When there are multiple prompts and the first prompt has multimodal data, "
+                    f"each prompt should also contain the same multimodal data fields, but prompt {i} does not."
+                )
+                for key in multi_modal_data_fields:
+                    assert key in multi_modal_data, (
+                        "When there are multiple prompts and the first prompt has multimodal data, each prompt should "
+                        f"also contain the same multimodal data fields, but prompt {i} does not contain {key}."
+                    )
+                    assert not isinstance(multi_modal_data.get(key), list), (
+                        f"When there are multiple prompts and each prompt has multiple {key} data, this input pattern "
+                        "is ambiguous as diffusers accepts flattened lists of text prompts and multimodal data. "
+                        f"To use multiple {key} data, please use one single prompt instead."
+                    )
+
+        input_kwargs = {"prompt": [], **{key: [] for key in multi_modal_data_fields}}
+        has_negative_prompt = False
+        if any(isinstance(p, dict) and p.get("negative_prompt") is not None for p in prompt_obj):
+            input_kwargs["negative_prompt"] = []
+            has_negative_prompt = True
+
+        for i, prompt in enumerate(prompt_obj):
             if isinstance(prompt, str):
-                prompts.append(prompt)
+                input_kwargs["prompt"].append(prompt)
+                if has_negative_prompt:
+                    input_kwargs["negative_prompt"].append("")
+                for key in multi_modal_data_fields:
+                    input_kwargs[key].append(None)
             else:
-                prompts.append(prompt.get("prompt", ""))
-                negative_prompts.append(prompt.get("negative_prompt", ""))
-        if all(not np for np in negative_prompts):
-            negative_prompts = None
-        return prompts, negative_prompts
+                obj = cast(OmniTextPrompt, prompt)
+                input_kwargs["prompt"].append(obj.get("prompt", ""))
+
+                if has_negative_prompt:
+                    negative_prompt: str = obj.get("negative_prompt", "")
+                    input_kwargs["negative_prompt"].append(negative_prompt)
+
+                multi_modal_data = obj.get("multi_modal_data") or {}
+                for key in multi_modal_data_fields:
+                    input_kwargs[key].append(multi_modal_data.get(key))
+        return input_kwargs
 
     @staticmethod
     def _extract_negative_prompt(prompt_obj: Any) -> str | None:
