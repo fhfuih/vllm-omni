@@ -737,6 +737,13 @@ class OmniDiffusionConfig:
             # (non-DiT models don't have a separate transformer folder/config)
             if self.diffusion_load_format == "diffusers":
                 self.tf_model_config = TransformerConfig()
+                logger.warning(
+                    "Could not find valid model_index.json per diffusers format. "
+                    "This model is suspectedly unsupported by the diffusers backend. "
+                    "Also, without knowing the underlying diffusers pipeline class from model_index.json, "
+                    "the dummy run will input only text prompt, which may cause errors for pipelines "
+                    "that require additional inputs."
+                )
             else:
                 cfg = get_hf_file_to_dict("config.json", self.model)
                 if cfg is None:
