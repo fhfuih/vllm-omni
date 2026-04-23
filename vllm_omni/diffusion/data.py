@@ -8,6 +8,7 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field, fields
 from typing import TYPE_CHECKING, Any
 
+import diffusers
 import torch
 from PIL import Image
 from pydantic import model_validator
@@ -460,6 +461,8 @@ class OmniDiffusionConfig:
     diffusers_load_kwargs: dict[str, Any] = field(default_factory=dict)
     # kwargs forwarded to pipeline.__call__()
     diffusers_call_kwargs: dict[str, Any] = field(default_factory=dict)
+    # Actual diffusers pipeline object (to determine inputs of the dummy run)
+    diffusers_pipeline_cls: type[diffusers.DiffusionPipeline] | None = None  # pyright: ignore[reportPrivateImportUsage]
 
     # http server endpoint config, would be ignored in local mode
     host: str | None = None
@@ -714,6 +717,16 @@ class OmniDiffusionConfig:
                 # (non-DiT models don't have a separate transformer folder/config)
                 if self.diffusion_load_format == "diffusers":
                     self.tf_model_config = TransformerConfig()
+                    try:
+                        diffusers_pipeline_cls_name = config_dict["_class_name"]
+                        self.diffusers_pipeline_cls = getattr(diffusers, diffusers_pipeline_cls_name)
+                    except (KeyError, AttributeError) as exc:
+                        logger.warning(
+                            "Could not find valid _class_name for diffusers pipeline in model_index.json "
+                            "(see Trackback below). Without knowing the underlying diffusers pipeline class, "
+                            "the dummy run will input only text prompt, which may cause errors for pipelines "
+                            f"that require additional inputs. {exc}"
+                        )
                 else:
                     tf_config_dict = get_hf_file_to_dict("transformer/config.json", self.model)
                     self.tf_model_config = TransformerConfig.from_dict(tf_config_dict)
