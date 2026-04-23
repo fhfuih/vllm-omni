@@ -13,6 +13,7 @@ It does NOT support:
 - Step-wise execution (continuous batching)
 """
 
+import inspect
 import logging
 import os
 from typing import Any, cast
@@ -81,6 +82,13 @@ class DiffusersAdapterPipeline(nn.Module, DiffusionPipelineProfilerMixin):
             model_id,
             **load_kwargs,
         ).to(self.device)
+
+        # Expose multi modal data capability/requirements
+        signature = inspect.signature(self._pipeline.__call__)
+        support_image_input = "image" in signature.parameters
+        support_audio_input = "audio_latents" in signature.parameters  # ref. LTX-2 format
+        setattr(DiffusersAdapterPipeline, "support_image_input", support_image_input)
+        setattr(DiffusersAdapterPipeline, "support_audio_input", support_audio_input)
 
         # CPU offloading
         if self.od_config.enable_layerwise_offload:
