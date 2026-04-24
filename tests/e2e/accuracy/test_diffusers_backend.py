@@ -209,7 +209,7 @@ def _run_diffusers_qwen_image(*, model: str, output_path: Path) -> Image.Image:
 @hardware_test(res={"cuda": "H100"}, num_cards=1)
 @pytest.mark.parametrize("model_id", ["Qwen/Qwen-Image"])
 def test_diffusers_backend_matches_diffusers(model_id: str, accuracy_artifact_root: Path) -> None:
-    output_dir = model_output_dir(accuracy_artifact_root, "diffusers-backend/" + model_id)
+    output_dir = model_output_dir(accuracy_artifact_root, model_id + "-diffusers-backend")
 
     vllm_output = _run_vllm_omni_qwen_image(model=model_id, output_path=output_dir / "vllm_omni.png")
     diffusers_output = _run_diffusers_qwen_image(model=model_id, output_path=output_dir / "diffusers.png")
@@ -233,7 +233,7 @@ def test_diffusers_backend_wan22_i2v_matches_diffusers(
     accuracy_artifact_root: Path,
     qwen_bear_image: Image.Image,
 ) -> None:
-    output_dir = model_output_dir(accuracy_artifact_root, "diffusers-backend/" + model_id)
+    output_dir = model_output_dir(accuracy_artifact_root, model_id + "-diffusers-backend")
 
     resized_image = qwen_bear_image.resize((VIDEO_WIDTH, VIDEO_HEIGHT), Image.Resampling.LANCZOS)
 
