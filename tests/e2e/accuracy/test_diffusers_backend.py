@@ -227,6 +227,8 @@ def test_diffusers_backend_t2i_matches_diffusers(model_id: str, accuracy_artifac
     diffusers_output, diffusers_latency = _run_diffusers_qwen_image(
         model=model_id, output_path=output_dir / "diffusers.png"
     )
+    vllm_latency = vllm_latency * 1000
+    diffusers_latency = diffusers_latency * 1000
     latency_threshold = diffusers_latency * 1.1
     print(f"{model_id} latency metrics:")
     print(
