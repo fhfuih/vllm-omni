@@ -722,10 +722,9 @@ class OmniDiffusionConfig:
                         self.diffusers_pipeline_cls = getattr(diffusers, diffusers_pipeline_cls_name)
                     except (KeyError, AttributeError) as exc:
                         logger.warning(
-                            "Could not find valid _class_name for diffusers pipeline in model_index.json "
-                            "(see Traceback below). Without knowing the underlying diffusers pipeline class, "
-                            "the dummy run will input only text prompt, which may cause errors for pipelines "
-                            f"that require additional inputs. {exc}"
+                            f"Could not find valid _class_name for diffusers pipeline in model_index.json: {exc}. "
+                            "Without knowing the underlying diffusers pipeline class, the dummy run will input only "
+                            "text prompt, which may cause errors for pipelines that require additional inputs."
                         )
                 else:
                     tf_config_dict = get_hf_file_to_dict("transformer/config.json", self.model)
