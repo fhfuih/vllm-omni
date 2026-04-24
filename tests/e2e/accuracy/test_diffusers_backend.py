@@ -42,8 +42,6 @@ NUM_FRAMES = 8
 FPS = 8
 GUIDANCE_SCALE = 4.0
 GUIDANCE_SCALE_2 = 1.0
-BOUNDARY_RATIO = 0.5
-FLOW_SHIFT = 12.0
 VIDEO_SSIM_THRESHOLD = 0.92
 VIDEO_PSNR_THRESHOLD = 26.0
 
@@ -74,8 +72,6 @@ def _run_vllm_omni_wan22_i2v(
         "fps": FPS,
         "guidance_scale": GUIDANCE_SCALE,
         "guidance_scale_2": GUIDANCE_SCALE_2,
-        "boundary_ratio": BOUNDARY_RATIO,
-        "flow_shift": FLOW_SHIFT,
         "seed": SEED,
     }
     with OmniServer(model, server_args, use_omni=True) as omni_server:
@@ -105,8 +101,6 @@ def _run_diffusers_wan22_i2v(*, model: str, output_path: Path, conditioning_imag
             model,
             torch_dtype=torch.bfloat16,
             trust_remote_code=True,
-            boundary_ratio=BOUNDARY_RATIO,
-            flow_shift=FLOW_SHIFT,
         )
         pipe.to("cuda")
 
