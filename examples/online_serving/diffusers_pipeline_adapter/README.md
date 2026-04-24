@@ -19,7 +19,7 @@ For these features, it is recommended to use natively supported pipelines instea
 
 Any model loadable via `DiffusionPipeline.from_pretrained()` should run, including text-to-image, image-to-image, text-to-video, image-to-video, and text-to-audio.
 
-However, as we thrive to ensure output similarity between vLLM-Omni's diffuser backend and plain diffusers library, the following models are particularly verified:
+However, as we strive to ensure output similarity between vLLM-Omni's diffuser backend and plain diffusers library, the following models are particularly verified:
 
 - Qwen/Qwen-Image
 - Tongyi-MAI/Z-Image-Turbo
@@ -43,7 +43,7 @@ vllm serve "stable-diffusion-v1-5/stable-diffusion-v1-5" \
 
 Users turns on diffusers backend primarily through `--diffusion-load-format diffusers` argument.
 There are two more optional arguments, `--diffusers-load-kwargs` and `--diffusers-call-kwargs`,
-which are are only valid together with `--diffusion-load-format diffusers`.
+which are only valid together with `--diffusion-load-format diffusers`.
 
 After launching the model, users send a request as usual. Refer to other documentation pages on how to request a particular input/output modality, such as `examples/online_serving/text_to_image/openai_chat_client.py`.
 
