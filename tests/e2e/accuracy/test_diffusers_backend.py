@@ -218,7 +218,7 @@ def _run_diffusers_qwen_image(*, model: str, output_path: Path) -> tuple[Image.I
 @pytest.mark.benchmark
 @hardware_test(res={"cuda": "H100"}, num_cards=1)
 @pytest.mark.parametrize("model_id", ["Qwen/Qwen-Image"])
-def test_diffusers_backend_matches_diffusers(model_id: str, accuracy_artifact_root: Path) -> None:
+def test_diffusers_backend_t2i_matches_diffusers(model_id: str, accuracy_artifact_root: Path) -> None:
     output_dir = model_output_dir(accuracy_artifact_root, model_id + "-diffusers-backend")
 
     vllm_output, vllm_latency = _run_vllm_omni_qwen_image(model=model_id, output_path=output_dir / "vllm_omni.png")
@@ -248,7 +248,7 @@ def test_diffusers_backend_matches_diffusers(model_id: str, accuracy_artifact_ro
 @pytest.mark.benchmark
 @hardware_test(res={"cuda": "H100"}, num_cards=1)
 @pytest.mark.parametrize("model_id", ["Wan-AI/Wan2.2-I2V-A14B-Diffusers"])
-def test_diffusers_backend_wan22_i2v_matches_diffusers(
+def test_diffusers_backend_i2v_matches_diffusers(
     model_id: str,
     accuracy_artifact_root: Path,
     qwen_bear_image: Image.Image,
