@@ -10,7 +10,7 @@ from diffusers.pipelines.pipeline_utils import DiffusionPipeline
 from diffusers.utils import export_to_video  # pyright: ignore[reportPrivateImportUsage]
 from PIL import Image
 
-from benchmarks.accuracy.common import pil_to_png_bytes
+from benchmarks.accuracy.common import pil_to_base64
 from tests.e2e.accuracy.helpers import assert_similarity, model_output_dir
 from tests.e2e.accuracy.wan22_i2v.test_wan22_i2v_video_similarity import (
     _parse_psnr_score,
@@ -87,7 +87,7 @@ def _run_vllm_omni_wan22_i2v(
         request_config = {
             "model": omni_server.model,
             "form_data": form_data,
-            "image_reference": pil_to_png_bytes(conditioning_image),
+            "image_reference": pil_to_base64(conditioning_image),
         }
         results = client.send_video_diffusion_request(request_config)
         video_bytes = results[0].images[0]  # pyright: ignore
