@@ -35,10 +35,10 @@ SEED = 42
 SSIM_THRESHOLD = 0.97
 PSNR_THRESHOLD = 30.0
 
-VIDEO_PROMPT = "Two anthropomorphic cats in comfy boxing gear and bright gloves fight intensely on a spotlighted stage."
+VIDEO_PROMPT = "The bear in the image dances happily"
 VIDEO_WIDTH = 832
 VIDEO_HEIGHT = 480
-VIDEO_NUM_INFERENCE_STEPS = 2
+VIDEO_NUM_INFERENCE_STEPS = 10
 NUM_FRAMES = 9
 FPS = 4
 GUIDANCE_SCALE = 4.0
@@ -64,6 +64,10 @@ def _run_vllm_omni_wan22_i2v(
         "900",
         "--diffusion-load-format",
         "diffusers",
+        "--boundary-ratio",
+        str(BOUNDARY_RATIO),
+        "--flow-shift",
+        str(FLOW_SHIFT),
     ]
     form_data = {
         "prompt": VIDEO_PROMPT,
@@ -75,8 +79,6 @@ def _run_vllm_omni_wan22_i2v(
         "fps": FPS,
         "guidance_scale": GUIDANCE_SCALE,
         "guidance_scale_2": GUIDANCE_SCALE_2,
-        "boundary_ratio": BOUNDARY_RATIO,
-        "flow_shift": FLOW_SHIFT,
         "seed": SEED,
     }
     with OmniServer(model, server_args, use_omni=True) as omni_server:

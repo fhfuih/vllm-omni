@@ -3,8 +3,20 @@
 Source <https://github.com/vllm-project/vllm-omni/tree/main/examples/online_serving/diffusers_pipeline_adapter>.
 
 
-This example demonstrates how to serve any 🤗 Diffusers pipeline through vLLM-Omni
-using the `diffusers` load format.
+vLLM-Omni supports running diffusion models with the diffusers backend, directly serving any 🤗 Diffusers pipeline online without implementing them natively.
+
+## Limitations
+
+The diffusers backend is a black-box adapter. Its primary focus is to serve diffusion models online.
+Currently, the following features are NOT yet supported.
+It is not guaranteed whether they will be supported in the future.
+
+- CFG parallel execution
+- Sequence parallel execution
+- TeaCache / Cache-DiT acceleration
+- Step-wise execution (continuous batching)
+
+For these features, it is recommended to use natively supported pipelines instead.
 
 ## Supported Models
 
@@ -44,3 +56,26 @@ This is suitable for sampling parameters not available through the vLLM-Omni int
 
 When a parameter is available in the vLLM-Omni interface, it will be adapted here.
 But if that parameter is simultaneously set in both the vLLM-Omni interface and `diffusers_call_kwargs`, the **former** will take precedence (because it is set at request time).
+
+### Model Specific Settings
+
+The model loading and inference strictly follows the diffusers library, and they may be different from vLLM-Omni's native interface for some specific models.
+Users are encouraged to double-check the model pipeline's interface in [diffusers' official documentation](https://huggingface.co/docs/diffusers/api/pipelines/overview).
+Some particular examples are below.
+
+#### Wan Series
+
+The Wan series video generation models takes `boundary_ratio` and `flow_shift` during model initialization ([ref](https://huggingface.co/docs/diffusers/api/pipelines/wan)), not during inference.
+
+Since our `OmniDiffusionConfig` contains these two values ([source](https://github.com/vllm-project/vllm-omni/blob/main/vllm_omni/diffusion/data.py)), we can directly pass `--boundary-ratio` and `--flow-shift` arguments to `vllm serve` command.
+
+```bash
+vllm serve "Wan2.2-T2V-A14B-Diffusers" \
+    --omni \
+    --boundary-ratio 0.875 \
+    --flow-shift 3 \
+    --diffusion-load-format diffusers
+```
+
+These extra CLI args will be attempted to pass as-is to the `OmniDiffusionConfig` dataclass and being accessible during model loading time.
+Special routines inside the pipeline adapter ensures that they are set properly.
