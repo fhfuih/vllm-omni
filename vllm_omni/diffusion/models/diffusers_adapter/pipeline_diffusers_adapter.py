@@ -379,12 +379,15 @@ class DiffusersAdapterPipeline(nn.Module, DiffusionPipelineProfilerMixin):
                 return {"prompt": prompt_obj[0]}
             else:
                 obj = cast(OmniTextPrompt, prompt_obj[0])
+                negative_prompt = obj.get("negative_prompt")
                 multi_modal_data = obj.get("multi_modal_data") or {}
-                return {
+                kwargs = {
                     "prompt": obj.get("prompt", ""),
-                    "negative_prompt": obj.get("negative_prompt", None),
                     **multi_modal_data,
                 }
+                if negative_prompt is not None:
+                    kwargs["negative_prompt"] = negative_prompt
+                return kwargs
 
         # Check the first element for the presence of multimodal data.
         # The following elements should have the same multimodal data fields, or none has multimodal data.
