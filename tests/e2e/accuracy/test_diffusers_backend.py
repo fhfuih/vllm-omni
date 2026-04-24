@@ -83,7 +83,7 @@ def _run_vllm_omni_wan22_i2v(
         request_config = {
             "model": omni_server.model,
             "form_data": form_data,
-            "image_reference": pil_to_base64(conditioning_image),
+            "image_reference": f"data:image/png;base64,{pil_to_base64(conditioning_image, 'png')}",
         }
         results = client.send_video_diffusion_request(request_config)
         video_bytes = results[0].images[0]  # pyright: ignore
