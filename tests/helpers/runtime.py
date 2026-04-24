@@ -510,7 +510,7 @@ class DiffusionResponse:
     text_content: str | None = None
     images: list[Image.Image] | None = None
     audios: list[Any] | None = None
-    videos: list[Any] | None = None
+    videos: list[bytes] | None = None
     e2e_latency: float | None = None
     success: bool = False
     error_message: str | None = None
@@ -914,7 +914,9 @@ class OpenAIClientHandler:
                     responses.append(response)
         return responses
 
-    def send_video_diffusion_request(self, request_config: dict[str, Any], request_num: int = 1) -> list[OmniResponse]:
+    def send_video_diffusion_request(
+        self, request_config: dict[str, Any], request_num: int = 1
+    ) -> list[DiffusionResponse]:
         """
         Send native /v1/videos requests.
         """

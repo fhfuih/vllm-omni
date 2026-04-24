@@ -85,8 +85,8 @@ def _run_vllm_omni_wan22_i2v(
             "form_data": form_data,
             "image_reference": f"data:image/png;base64,{pil_to_base64(conditioning_image, 'png')}",
         }
-        results = client.send_video_diffusion_request(request_config)
-        video_bytes = results[0].images[0]  # pyright: ignore
+        result = client.send_video_diffusion_request(request_config)[0]
+        video_bytes = result.videos[0]  # pyright: ignore[reportOptionalSubscript] # Guaranteed not None
         output_path.write_bytes(video_bytes)
         return output_path
 
