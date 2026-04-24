@@ -723,7 +723,7 @@ class OmniDiffusionConfig:
                     except (KeyError, AttributeError) as exc:
                         logger.warning(
                             "Could not find valid _class_name for diffusers pipeline in model_index.json "
-                            "(see Trackback below). Without knowing the underlying diffusers pipeline class, "
+                            "(see Traceback below). Without knowing the underlying diffusers pipeline class, "
                             "the dummy run will input only text prompt, which may cause errors for pipelines "
                             f"that require additional inputs. {exc}"
                         )
