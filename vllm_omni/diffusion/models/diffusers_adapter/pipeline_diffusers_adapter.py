@@ -51,7 +51,7 @@ class DiffusersAdapterPipeline(nn.Module, DiffusionPipelineProfilerMixin):
     def __init__(self, *, od_config: OmniDiffusionConfig, device: torch.device | None = None):
         super().__init__()
         self._pipeline: DiffusionPipeline
-        self._accept_call_kwargs: set[str]
+        self._accept_call_kwargs: set[str] | None = None  # None to accept all kwargs
         self.od_config = od_config
         self.device = device
         self._capabilities: dict[str, Any] = {}
@@ -319,7 +319,7 @@ class DiffusersAdapterPipeline(nn.Module, DiffusionPipelineProfilerMixin):
 
         # Load time defaults
         for key, value in self.od_config.diffusers_call_kwargs.items():
-            if key in self._accept_call_kwargs:
+            if self._accept_call_kwargs is None or key in self._accept_call_kwargs:
                 kwargs[key] = value
             else:
                 logger.warning(
@@ -329,7 +329,7 @@ class DiffusersAdapterPipeline(nn.Module, DiffusionPipelineProfilerMixin):
 
         # Input kwargs
         for key, value in input_kwargs.items():
-            if key in self._accept_call_kwargs:
+            if self._accept_call_kwargs is None or key in self._accept_call_kwargs:
                 kwargs[key] = value
             else:
                 logger.warning(
@@ -341,7 +341,7 @@ class DiffusersAdapterPipeline(nn.Module, DiffusionPipelineProfilerMixin):
         for key, value in sampling.__dict__.items():
             if value is None:
                 continue
-            if key in self._accept_call_kwargs:
+            if self._accept_call_kwargs is None or key in self._accept_call_kwargs:
                 kwargs[key] = value
 
         # Special format fields in sampling params
@@ -350,7 +350,7 @@ class DiffusersAdapterPipeline(nn.Module, DiffusionPipelineProfilerMixin):
 
         if (num_outputs_per_prompt := sampling.num_outputs_per_prompt) > 0:
             # In diffusers, they are num_images_per_prompt, num_videos_per_prompt, etc.
-            for key in self._accept_call_kwargs:
+            for key in self._accept_call_kwargs or ():
                 if re.match(r"num_[a-z]+_per_prompt", key):
                     kwargs[key] = num_outputs_per_prompt
 
