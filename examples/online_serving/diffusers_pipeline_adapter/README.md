@@ -41,7 +41,7 @@ vllm serve "stable-diffusion-v1-5/stable-diffusion-v1-5" \
     --diffusion-load-format diffusers
 ```
 
-Users turns on diffusers backend primarily through `--diffusion-load-format diffusers` argument.
+Users turn on the diffusers backend primarily through `--diffusion-load-format diffusers` argument.
 There are two more optional arguments, `--diffusers-load-kwargs` and `--diffusers-call-kwargs`,
 which are only valid together with `--diffusion-load-format diffusers`.
 
