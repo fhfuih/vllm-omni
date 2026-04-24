@@ -2,7 +2,7 @@
 Comprehensive tests of diffusion features that are available in online serving mode
 and are supported by the following models:
 - Qwen-Image-Edit: single image input
-- Qwen-Image-Edit-2509: two image inputs
+- Qwen-Image-Edit-2511: two image inputs
 """
 
 import pytest
@@ -140,11 +140,11 @@ def test_qwen_image_edit(omni_server: OmniServer, openai_client: OpenAIClientHan
 
 @pytest.mark.parametrize(
     "omni_server",
-    _get_diffusion_feature_cases("Qwen/Qwen-Image-Edit-2509"),
+    _get_diffusion_feature_cases("Qwen/Qwen-Image-Edit-2511"),
     indirect=True,
 )
-def test_qwen_image_edit_2509(omni_server: OmniServer, openai_client: OpenAIClientHandler):
-    """Test all diffusion features with Qwen-Image-Edit-2509 in regular end-user scenarios."""
+def test_qwen_image_edit_2511(omni_server: OmniServer, openai_client: OpenAIClientHandler):
+    """Test all diffusion features with Qwen-Image-Edit-2511 in regular end-user scenarios."""
     image_data_url_1 = f"data:image/jpeg;base64,{generate_synthetic_image(512, 512)['base64']}"
     image_data_url_2 = f"data:image/jpeg;base64,{generate_synthetic_image(512, 512)['base64']}"
 
