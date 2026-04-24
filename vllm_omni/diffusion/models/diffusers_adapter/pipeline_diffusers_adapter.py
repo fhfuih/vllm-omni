@@ -13,8 +13,10 @@ It does NOT support:
 - Step-wise execution (continuous batching)
 """
 
+import inspect
 import logging
 import os
+import re
 from typing import Any, cast
 
 import torch
@@ -49,6 +51,7 @@ class DiffusersAdapterPipeline(nn.Module, DiffusionPipelineProfilerMixin):
     def __init__(self, *, od_config: OmniDiffusionConfig, device: torch.device | None = None):
         super().__init__()
         self._pipeline: DiffusionPipeline
+        self._accept_call_kwargs: set[str]
         self.od_config = od_config
         self.device = device
         self._capabilities: dict[str, Any] = {}
@@ -81,6 +84,8 @@ class DiffusersAdapterPipeline(nn.Module, DiffusionPipelineProfilerMixin):
             model_id,
             **load_kwargs,
         ).to(self.device)
+
+        self._accept_call_kwargs = set(inspect.signature(self._pipeline.__call__).parameters.keys())
 
         # CPU offloading
         if self.od_config.enable_layerwise_offload:
@@ -273,24 +278,50 @@ class DiffusersAdapterPipeline(nn.Module, DiffusionPipelineProfilerMixin):
         input_kwargs = self._extract_input(req.prompts)
 
         # Merge user-provided call kwargs from stage/CLI defaults.
-        # Request-time parameters take precedence over stage-config defaults
-        call_kwargs = self.od_config.diffusers_call_kwargs
-        kwargs: dict[str, Any] = {
-            **call_kwargs,
-            **input_kwargs,
-            "num_inference_steps": sampling.num_inference_steps,
-            "guidance_scale": sampling.guidance_scale,
-            "output_type": sampling.output_type or self.od_config.output_type,
-        }
+        # Load time defaults -> input kwargs (prompts, neg prompts, images...) -> request-time sampling params
+        kwargs: dict[str, Any] = {}
 
-        if sampling.height is not None:
-            kwargs["height"] = sampling.height
-        if sampling.width is not None:
-            kwargs["width"] = sampling.width
-        if sampling.num_frames is not None and sampling.num_frames > 1:
-            kwargs["num_frames"] = sampling.num_frames
-        if sampling.num_outputs_per_prompt is not None and sampling.num_outputs_per_prompt > 1:
-            kwargs["num_images_per_prompt"] = sampling.num_outputs_per_prompt
+        # Load time defaults
+        for key, value in self.od_config.diffusers_call_kwargs.items():
+            if key in self._accept_call_kwargs:
+                kwargs[key] = value
+            else:
+                logger.warning(
+                    f"Skipping unsupported diffusers pipeline __call__ argument `{key}` from "
+                    f"diffusers_call_kwargs. Check out the documentation of {self._pipeline.__class__.__name__}."
+                )
+
+        # Input kwargs
+        for key, value in input_kwargs.items():
+            if key in self._accept_call_kwargs:
+                kwargs[key] = value
+            else:
+                logger.warning(
+                    f"Skipping unsupported diffusers pipeline __call__ argument `{key}` from prompt input."
+                    f"Check out the documentation of {self._pipeline.__class__.__name__}."
+                )
+
+        # Request-time sampling params
+        for key, value in sampling.__dict__.items():
+            if value is None:
+                continue
+            if key in self._accept_call_kwargs:
+                kwargs[key] = value
+            else:
+                logger.warning(
+                    f"Skipping unsupported diffusers pipeline __call__ argument `{key}` from sampling params."
+                    f"Check out the documentation of {self._pipeline.__class__.__name__}."
+                )
+
+        # Special format fields in sampling params
+        if output_type := sampling.output_type or self.od_config.output_type:
+            kwargs["output_type"] = output_type
+
+        if (num_outputs_per_prompt := sampling.num_outputs_per_prompt) > 0:
+            # In diffusers, they are num_images_per_prompt, num_videos_per_prompt, etc.
+            for key in kwargs.keys():
+                if re.match(r"num_[a-z]+_per_prompt", key):
+                    kwargs[key] = num_outputs_per_prompt
 
         if sampling.generator is not None:
             kwargs["generator"] = sampling.generator
@@ -298,9 +329,6 @@ class DiffusersAdapterPipeline(nn.Module, DiffusionPipelineProfilerMixin):
             kwargs["generator"] = torch.Generator(device=sampling.generator_device).manual_seed(sampling.seed)
         else:
             kwargs["generator"] = torch.Generator(device=sampling.generator_device)
-
-        if sampling.latents is not None:
-            kwargs["latents"] = sampling.latents
 
         return kwargs
 
