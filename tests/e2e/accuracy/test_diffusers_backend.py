@@ -134,7 +134,7 @@ def _run_diffusers_wan22_i2v(*, model: str, output_path: Path, conditioning_imag
         run_post_test_cleanup(enable_force=True)
 
 
-def _run_vllm_omni_qwen_image(*, model: str, output_path: Path) -> Image.Image:
+def _run_vllm_omni_qwen_image(*, model: str, output_path: Path) -> tuple[Image.Image, float]:
     server_args = [
         "--num-gpus",
         "1",
@@ -146,6 +146,7 @@ def _run_vllm_omni_qwen_image(*, model: str, output_path: Path) -> Image.Image:
         "diffusers",
     ]
     with OmniServer(model, server_args, use_omni=True) as omni_server:
+        start_time = time.perf_counter()
         response = requests.post(
             f"http://{omni_server.host}:{omni_server.port}/v1/images/generations",
             json={
@@ -161,6 +162,8 @@ def _run_vllm_omni_qwen_image(*, model: str, output_path: Path) -> Image.Image:
             },
             timeout=600,
         )
+        end_time = time.perf_counter()
+        e2e_latency = end_time - start_time
         response.raise_for_status()
         payload = response.json()
         assert len(payload["data"]) == 1
@@ -168,10 +171,10 @@ def _run_vllm_omni_qwen_image(*, model: str, output_path: Path) -> Image.Image:
         image = Image.open(io.BytesIO(image_bytes)).convert("RGB")
         image.load()
         image.save(output_path)
-        return image
+        return image, e2e_latency
 
 
-def _run_diffusers_qwen_image(*, model: str, output_path: Path) -> Image.Image:
+def _run_diffusers_qwen_image(*, model: str, output_path: Path) -> tuple[Image.Image, float]:
     run_pre_test_cleanup(enable_force=True)
     pipe: DiffusionPipeline | None = None
     try:
@@ -181,6 +184,7 @@ def _run_diffusers_qwen_image(*, model: str, output_path: Path) -> Image.Image:
             trust_remote_code=True,
         ).to("cuda")
         generator = torch.Generator(device="cuda").manual_seed(SEED)
+        start_time = time.perf_counter()
         result = pipe(  # pyright: ignore[reportCallIssue]
             prompt=PROMPT,
             negative_prompt=NEGATIVE_PROMPT,
@@ -190,9 +194,11 @@ def _run_diffusers_qwen_image(*, model: str, output_path: Path) -> Image.Image:
             true_cfg_scale=TRUE_CFG_SCALE,
             generator=generator,
         )
+        end_time = time.perf_counter()
+        e2e_latency = end_time - start_time
         output_image = result.images[0].convert("RGB")
         output_image.save(output_path)
-        return output_image
+        return output_image, e2e_latency
     finally:
         if pipe is not None and hasattr(pipe, "maybe_free_model_hooks"):
             pipe.maybe_free_model_hooks()
@@ -209,8 +215,15 @@ def _run_diffusers_qwen_image(*, model: str, output_path: Path) -> Image.Image:
 def test_diffusers_backend_matches_diffusers(model_id: str, accuracy_artifact_root: Path) -> None:
     output_dir = model_output_dir(accuracy_artifact_root, model_id + "-diffusers-backend")
 
-    vllm_output = _run_vllm_omni_qwen_image(model=model_id, output_path=output_dir / "vllm_omni.png")
-    diffusers_output = _run_diffusers_qwen_image(model=model_id, output_path=output_dir / "diffusers.png")
+    vllm_output, vllm_latency = _run_vllm_omni_qwen_image(model=model_id, output_path=output_dir / "vllm_omni.png")
+    diffusers_output, diffusers_latency = _run_diffusers_qwen_image(
+        model=model_id, output_path=output_dir / "diffusers.png"
+    )
+    latency_threshold = diffusers_latency * 1.1
+    print(f"{model_id} latency metrics:")
+    print(
+        f"  Latency={vllm_latency:.2f}ms, threshold<={latency_threshold:.2f}ms, diffusers latency={diffusers_latency:.2f}ms, lower is better"
+    )
 
     assert_similarity(
         model_name=model_id,
@@ -220,6 +233,9 @@ def test_diffusers_backend_matches_diffusers(model_id: str, accuracy_artifact_ro
         height=HEIGHT,
         ssim_threshold=SSIM_THRESHOLD,
         psnr_threshold=PSNR_THRESHOLD,
+    )
+    assert vllm_latency <= latency_threshold, (
+        f"VLLM latency ({vllm_latency:.2f}ms) is greater than 10% more than Diffusers latency ({diffusers_latency:.2f}ms)."
     )
 
 
@@ -250,13 +266,14 @@ def test_diffusers_backend_wan22_i2v_matches_diffusers(
     psnr_output = _run_ffmpeg_similarity("psnr", vllm_path, diffusers_path)
     ssim_score = _parse_ssim_score(ssim_output)
     psnr_score = _parse_psnr_score(psnr_output)
+    print(f"{model_id} latency metrics:")
+    print(
+        f"  Latency={vllm_latency:.2f}ms, threshold<={latency_threshold:.2f}ms, diffusers latency={diffusers_latency:.2f}ms, lower is better"
+    )
     print(f"{model_id} similarity metrics:")
     print(f"  SSIM: value={ssim_score:.6f}, threshold>={VIDEO_SSIM_THRESHOLD:.6f}, range=[-1, 1], higher is better")
     print(
         f"  PSNR: value={psnr_score:.6f} dB, threshold>={VIDEO_PSNR_THRESHOLD:.6f} dB, range=[0, +inf), higher is better"
-    )
-    print(
-        f"  Latency={vllm_latency:.2f}ms, threshold<={latency_threshold:.2f}ms, diffusers latency={diffusers_latency:.2f}ms, lower is better"
     )
 
     assert ssim_score >= VIDEO_SSIM_THRESHOLD, (
