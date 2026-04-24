@@ -1,6 +1,7 @@
 import base64
 import gc
 import io
+import time
 from pathlib import Path
 
 import pytest
@@ -51,7 +52,7 @@ def _run_vllm_omni_wan22_i2v(
     model: str,
     output_path: Path,
     conditioning_image: Image.Image,
-) -> Path:
+) -> float:
     server_args = [
         "--num-gpus",
         "1",
@@ -88,10 +89,10 @@ def _run_vllm_omni_wan22_i2v(
         result = client.send_video_diffusion_request(request_config)[0]
         video_bytes = result.videos[0]  # pyright: ignore[reportOptionalSubscript] # Guaranteed not None
         output_path.write_bytes(video_bytes)
-        return output_path
+        return result.e2e_latency  # pyright: ignore[reportReturnType] # Guaranteed not None
 
 
-def _run_diffusers_wan22_i2v(*, model: str, output_path: Path, conditioning_image: Image.Image) -> Path:
+def _run_diffusers_wan22_i2v(*, model: str, output_path: Path, conditioning_image: Image.Image) -> float:
     from diffusers import WanImageToVideoPipeline  # pyright: ignore[reportPrivateImportUsage]
 
     run_pre_test_cleanup(enable_force=True)
@@ -105,6 +106,7 @@ def _run_diffusers_wan22_i2v(*, model: str, output_path: Path, conditioning_imag
         pipe.to("cuda")
 
         generator = torch.Generator(device="cuda").manual_seed(SEED)
+        start_time = time.perf_counter()
         result = pipe(
             image=conditioning_image,
             prompt=VIDEO_PROMPT,
@@ -117,9 +119,11 @@ def _run_diffusers_wan22_i2v(*, model: str, output_path: Path, conditioning_imag
             guidance_scale_2=GUIDANCE_SCALE_2,
             generator=generator,
         )
+        end_time = time.perf_counter()
+        e2e_latency = end_time - start_time
         frames = result.frames[0]  # pyright: ignore[reportAttributeAccessIssue]
         export_to_video(frames, str(output_path), fps=FPS)  # pyright: ignore[reportArgumentType]
-        return output_path
+        return e2e_latency
     finally:
         if pipe is not None and hasattr(pipe, "maybe_free_model_hooks"):
             pipe.maybe_free_model_hooks()
@@ -231,25 +235,28 @@ def test_diffusers_backend_wan22_i2v_matches_diffusers(
 
     resized_image = qwen_bear_image.resize((VIDEO_WIDTH, VIDEO_HEIGHT), Image.Resampling.LANCZOS)
 
-    vllm_path = _run_vllm_omni_wan22_i2v(
-        model=model_id,
-        output_path=output_dir / "vllm_omni.mp4",
-        conditioning_image=resized_image,
+    vllm_path = output_dir / "vllm_omni.mp4"
+    vllm_latency = _run_vllm_omni_wan22_i2v(model=model_id, output_path=vllm_path, conditioning_image=resized_image)
+    vllm_latency = vllm_latency * 1000
+
+    diffusers_path = output_dir / "diffusers.mp4"
+    diffusers_latency = _run_diffusers_wan22_i2v(
+        model=model_id, output_path=diffusers_path, conditioning_image=resized_image
     )
-    diffusers_path = _run_diffusers_wan22_i2v(
-        model=model_id,
-        output_path=output_dir / "diffusers.mp4",
-        conditioning_image=resized_image,
-    )
+    diffusers_latency = diffusers_latency * 1000
+    latency_threshold = diffusers_latency * 1.1
 
     ssim_output = _run_ffmpeg_similarity("ssim", vllm_path, diffusers_path)
     psnr_output = _run_ffmpeg_similarity("psnr", vllm_path, diffusers_path)
     ssim_score = _parse_ssim_score(ssim_output)
     psnr_score = _parse_psnr_score(psnr_output)
     print(f"{model_id} similarity metrics:")
-    print(f"  SSIM: value={ssim_score:.6f}, threshold>={VIDEO_SSIM_THRESHOLD:.6f}, range=[-1, 1], higher_is_better")
+    print(f"  SSIM: value={ssim_score:.6f}, threshold>={VIDEO_SSIM_THRESHOLD:.6f}, range=[-1, 1], higher is better")
     print(
-        f"  PSNR: value={psnr_score:.6f} dB, threshold>={VIDEO_PSNR_THRESHOLD:.6f} dB, range=[0, +inf), higher_is_better"
+        f"  PSNR: value={psnr_score:.6f} dB, threshold>={VIDEO_PSNR_THRESHOLD:.6f} dB, range=[0, +inf), higher is better"
+    )
+    print(
+        f"  Latency={vllm_latency:.2f}ms, threshold<={latency_threshold:.2f}ms, diffusers latency={diffusers_latency:.2f}ms, lower is better"
     )
 
     assert ssim_score >= VIDEO_SSIM_THRESHOLD, (
@@ -257,4 +264,7 @@ def test_diffusers_backend_wan22_i2v_matches_diffusers(
     )
     assert psnr_score >= VIDEO_PSNR_THRESHOLD, (
         f"PSNR below threshold for {model_id}: got {psnr_score:.6f}, expected >= {VIDEO_PSNR_THRESHOLD:.6f}."
+    )
+    assert vllm_latency <= latency_threshold, (
+        f"VLLM latency ({vllm_latency:.2f}ms) is greater than 10% more than Diffusers latency ({diffusers_latency:.2f}ms)."
     )
