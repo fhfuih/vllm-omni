@@ -9,6 +9,8 @@ import torch
 from diffusers import DiffusionPipeline
 from PIL import Image
 
+from tests.helpers.mark import hardware_test
+from tests.helpers.runtime import OmniServer, OmniServerParams, OpenAIClientHandler, dummy_messages_from_mix_data
 from vllm_omni.diffusion.data import (
     DiffusionOutput,
     DiffusionParallelConfig,
@@ -18,7 +20,7 @@ from vllm_omni.diffusion.models.diffusers_adapter import DiffusersAdapterPipelin
 from vllm_omni.diffusion.request import OmniDiffusionRequest
 from vllm_omni.inputs.data import OmniDiffusionSamplingParams
 
-pytestmark = [pytest.mark.core_model, pytest.mark.diffusion, pytest.mark.cpu]
+pytestmark = [pytest.mark.diffusion]
 
 
 def _make_od_config(**overrides) -> OmniDiffusionConfig:
@@ -63,7 +65,9 @@ def _make_request(**overrides) -> OmniDiffusionRequest:
     return OmniDiffusionRequest(**defaults)
 
 
-class TestDiffusersAdapterPipeline:
+@pytest.mark.core_model
+@pytest.mark.cpu
+class TestPipelineArgumentsHandling:
     def test_adapter_forward_returns_output(self, mocker):
         od_config = _make_od_config()
         request = _make_request()
@@ -184,3 +188,47 @@ class TestDiffusersAdapterPipeline:
         assert isinstance(kwargs["generator"], torch.Generator)
         assert kwargs["generator"].device.type == "cpu"
         assert kwargs["generator"].initial_seed() == 123
+
+
+@pytest.mark.advanced_model
+@hardware_test(res={"cuda": "L4"}, num_cards=1)
+class TestDiffusersBackendEndToEndExecution:
+    @pytest.mark.parametrize(
+        "omni_server",
+        [
+            OmniServerParams(
+                model="tiny-random/Qwen-Image",
+                server_args=[
+                    "--diffusion-load-format",
+                    "diffusers",
+                    "--diffusers-call-kwargs",
+                    '{"height": 512, "width": 0}',  # deliberately weird width to be overridden
+                ],
+            ),
+        ],
+        indirect=True,
+    )
+    def test_t2i_random_weights(
+        self,
+        omni_server: OmniServer,
+        openai_client: OpenAIClientHandler,
+    ):
+        messages = dummy_messages_from_mix_data(content_text="a photo of an astronaut riding a horse on mars")
+
+        request_config = {
+            "model": omni_server.model,
+            "messages": messages,
+            "extra_body": {
+                "width": 512,
+                "num_inference_steps": 2,
+                "negative_prompt": "blurry",
+                "true_cfg_scale": 4.0,
+                "seed": 42,
+            },
+        }
+
+        response = openai_client.send_diffusion_request(request_config)
+        image: Image.Image = response[0].images[0]  # pyright: ignore[reportOptionalSubscript]
+
+        # Request config has incomplete width/height, so internal assertion in `send_diffusion_request` is incomplete.
+        assert image.size == (512, 512)
