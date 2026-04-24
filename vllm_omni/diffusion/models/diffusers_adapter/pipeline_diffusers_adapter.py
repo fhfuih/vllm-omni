@@ -343,11 +343,6 @@ class DiffusersAdapterPipeline(nn.Module, DiffusionPipelineProfilerMixin):
                 continue
             if key in self._accept_call_kwargs:
                 kwargs[key] = value
-            elif key not in ["num_outputs_per_prompt", "generator", "seed"]:
-                logger.warning(
-                    f"Skipping unsupported diffusers pipeline __call__ argument `{key}` from sampling params."
-                    f"Check out the documentation of {self._pipeline.__class__.__name__}."
-                )
 
         # Special format fields in sampling params
         if output_type := sampling.output_type or self.od_config.output_type:
@@ -361,10 +356,18 @@ class DiffusersAdapterPipeline(nn.Module, DiffusionPipelineProfilerMixin):
 
         if sampling.generator is not None:
             kwargs["generator"] = sampling.generator
+            if isinstance(sampling.generator, list):
+                _generator_log = str([f"(seed={g.initial_seed()}, device={g.device})" for g in sampling.generator])
+            else:
+                _generator_log = f"(seed={sampling.generator.initial_seed()}, device={sampling.generator.device})"
         elif sampling.seed is not None:
             kwargs["generator"] = torch.Generator(device=sampling.generator_device).manual_seed(sampling.seed)
+            _generator_log = f"seed={sampling.seed}, device={kwargs['generator'].device}"
         else:
             kwargs["generator"] = torch.Generator(device=sampling.generator_device)
+            _generator_log = f"seed=None, device={kwargs['generator'].device}"
+
+        logger.info("Calling diffusers pipeline with kwargs: %s", {**kwargs, "generator": _generator_log})
 
         return kwargs
 

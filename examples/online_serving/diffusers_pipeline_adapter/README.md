@@ -15,7 +15,22 @@ It is not guaranteed whether they will be supported in the future.
 
 For these features, it is recommended to use natively supported pipelines instead.
 
-Any model loadable via `DiffusionPipeline.from_pretrained()` should be supported, including text-to-image, image-to-image, text-to-video, image-to-video, and text-to-audio.
+## Model Support
+
+Any model loadable via `DiffusionPipeline.from_pretrained()` should run, including text-to-image, image-to-image, text-to-video, image-to-video, and text-to-audio.
+
+However, as we thrive to ensure output similarity between vLLM-Omni's diffuser backend and plain diffusers library, the following models are particularly verified:
+
+- Qwen/Qwen-Image
+- TODO
+
+Meanwhile, the following models may produce different outputs from running diffusers model directly, provided the same set of sampling parameters:
+
+- Wan2.2-I2V-A14B-Diffusers
+- Wan2.2-T2V-A14B-Diffusers
+
+If you find that a model not listed above also produces different outputs from running diffusers model directly.
+Please consider file an issue or submit a PR to fix.
 
 ## Usage
 
