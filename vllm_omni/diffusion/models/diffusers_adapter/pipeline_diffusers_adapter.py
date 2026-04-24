@@ -87,8 +87,8 @@ class DiffusersAdapterPipeline(nn.Module, DiffusionPipelineProfilerMixin):
             pipeline_class_name = pipeline_class.__name__
             is_wan = pipeline_class_name.startswith("Wan")
         if is_wan:
-            load_kwargs["boundary_ratio"] = self.od_config.boundary_ratio
-            load_kwargs["flow_shift"] = self.od_config.flow_shift
+            if self.od_config.boundary_ratio is not None:
+                load_kwargs["boundary_ratio"] = self.od_config.boundary_ratio
 
         self._pipeline = DiffusionPipeline.from_pretrained(model_id, **load_kwargs)
 
