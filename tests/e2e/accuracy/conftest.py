@@ -189,10 +189,13 @@ def accuracy_artifact_root() -> Path:
 def qwen_bear_image(accuracy_artifact_root: Path) -> Image.Image:
     """Download the Qwen bear image from the URL and save it to the accuracy artifact root."""
     QWEN_BEAR_IMAGE_URL = "https://vllm-public-assets.s3.us-west-2.amazonaws.com/omni-assets/qwen-bear.png"
+    image_path = accuracy_artifact_root / "qwen_bear.png"
+    if image_path.exists():
+        return Image.open(image_path).convert("RGB")
     response = requests.get(QWEN_BEAR_IMAGE_URL, timeout=60)
     response.raise_for_status()
     image = Image.open(BytesIO(response.content)).convert("RGB")
-    image.save(accuracy_artifact_root / "qwen_bear.png")
+    image.save(image_path)
     return image
 
 
@@ -200,10 +203,13 @@ def qwen_bear_image(accuracy_artifact_root: Path) -> Image.Image:
 def rabbit_image(accuracy_artifact_root: Path) -> Image.Image:
     """Download the rabbit image from the URL and save it to the accuracy artifact root."""
     RABBIT_IMAGE_URL = "https://vllm-public-assets.s3.us-west-2.amazonaws.com/omni-assets/rabbit.png"
+    image_path = accuracy_artifact_root / "rabbit.png"
+    if image_path.exists():
+        return Image.open(image_path).convert("RGB")
     response = requests.get(RABBIT_IMAGE_URL, timeout=60)
     response.raise_for_status()
     image = Image.open(BytesIO(response.content)).convert("RGB")
-    image.save(accuracy_artifact_root / "rabbit.png")
+    image.save(image_path)
     return image
 
 
