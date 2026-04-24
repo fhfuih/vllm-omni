@@ -80,11 +80,30 @@ class DiffusersAdapterPipeline(nn.Module, DiffusionPipelineProfilerMixin):
         }
         logger.debug(f"Loading diffusers pipeline with kwargs: {load_kwargs}")
 
-        self._pipeline = DiffusionPipeline.from_pretrained(
-            model_id,
-            **load_kwargs,
-        ).to(self.device)
+        # Dirty load model-specific weights
+        is_wan = False
+        pipeline_class = self.od_config.diffusers_pipeline_cls
+        if pipeline_class is not None:
+            pipeline_class_name = pipeline_class.__name__
+            is_wan = pipeline_class_name.startswith("Wan")
+        if is_wan:
+            load_kwargs["boundary_ratio"] = self.od_config.boundary_ratio
+            load_kwargs["flow_shift"] = self.od_config.flow_shift
 
+        self._pipeline = DiffusionPipeline.from_pretrained(model_id, **load_kwargs)
+
+        # Dirty post-set model-specific attributes
+        if is_wan:
+            if self.od_config.flow_shift is not None:
+                from diffusers.schedulers.scheduling_unipc_multistep import UniPCMultistepScheduler
+
+                self._pipeline.scheduler = UniPCMultistepScheduler.from_config(
+                    self._pipeline.scheduler.config, flow_shift=self.od_config.flow_shift
+                )
+
+        self._pipeline.to(self.device)
+
+        # Cache __call__kwargs signature introspection for later input validation
         self._accept_call_kwargs = set(inspect.signature(self._pipeline.__call__).parameters.keys())
 
         # CPU offloading
@@ -277,6 +296,23 @@ class DiffusersAdapterPipeline(nn.Module, DiffusionPipelineProfilerMixin):
         sampling = req.sampling_params
         input_kwargs = self._extract_input(req.prompts)
 
+        # Dirty validate incompatible sampling params
+        is_wan = False
+        if self.od_config.diffusers_pipeline_cls is not None:
+            pipeline_class_name = self.od_config.diffusers_pipeline_cls.__name__
+            is_wan = pipeline_class_name.startswith("Wan")
+        if is_wan:
+            if sampling.boundary_ratio is not None:
+                raise ValueError(
+                    "Boundary ratio is not supported at runtime with the diffusers backend for Wan models. Please set "
+                    "it at model loading time using the `boundary_ratio` kwarg or `--diffusers-load-kwargs` JSON."
+                )
+            if sampling.extra_args.get("flow_shift") is not None:
+                raise ValueError(
+                    "Flow shift is not supported at runtime with the diffusers backend for Wan models. Please set "
+                    "it at model loading time using the `flow_shift` kwarg."
+                )
+
         # Merge user-provided call kwargs from stage/CLI defaults.
         # Load time defaults -> input kwargs (prompts, neg prompts, images...) -> request-time sampling params
         kwargs: dict[str, Any] = {}
@@ -307,7 +343,7 @@ class DiffusersAdapterPipeline(nn.Module, DiffusionPipelineProfilerMixin):
                 continue
             if key in self._accept_call_kwargs:
                 kwargs[key] = value
-            else:
+            elif key not in ["num_outputs_per_prompt", "generator", "seed"]:
                 logger.warning(
                     f"Skipping unsupported diffusers pipeline __call__ argument `{key}` from sampling params."
                     f"Check out the documentation of {self._pipeline.__class__.__name__}."
