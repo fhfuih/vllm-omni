@@ -356,18 +356,14 @@ class DiffusersAdapterPipeline(nn.Module, DiffusionPipelineProfilerMixin):
 
         if sampling.generator is not None:
             kwargs["generator"] = sampling.generator
-            if isinstance(sampling.generator, list):
-                _generator_log = str([f"(seed={g.initial_seed()}, device={g.device})" for g in sampling.generator])
-            else:
-                _generator_log = f"(seed={sampling.generator.initial_seed()}, device={sampling.generator.device})"
         elif sampling.seed is not None:
             kwargs["generator"] = torch.Generator(device=sampling.generator_device).manual_seed(sampling.seed)
-            _generator_log = f"seed={sampling.seed}, device={kwargs['generator'].device}"
         else:
             kwargs["generator"] = torch.Generator(device=sampling.generator_device)
-            _generator_log = f"seed=None, device={kwargs['generator'].device}"
 
-        logger.info("Calling diffusers pipeline with kwargs: %s", {**kwargs, "generator": _generator_log})
+        logger.info(
+            "Calling diffusers pipeline with kwargs: %s", DiffusersAdapterPipeline._summarize_call_kwargs_value(kwargs)
+        )
 
         return kwargs
 
@@ -465,3 +461,30 @@ class DiffusersAdapterPipeline(nn.Module, DiffusionPipelineProfilerMixin):
             return DiffusionOutput(output=output.audios)
 
         return DiffusionOutput(output=output)
+
+    @staticmethod
+    def _summarize_call_kwargs_value(value: Any) -> Any:
+        """Return a sanitized summary of diffusers call kwargs for logging."""
+        if value is None or isinstance(value, (bool, int, float)):
+            return value
+        if isinstance(value, str):
+            if len(value) < 20:
+                return value
+            return f"{value[:10]}...{value[-10:]}"
+        if isinstance(value, torch.Tensor):
+            return f"Tensor with shape {tuple(value.shape)}, dtype {value.dtype}, device {value.device}"
+        if isinstance(value, torch.Generator):
+            return f"Generator with seed {value.initial_seed()} on device {value.device}"
+        if isinstance(value, dict):
+            return {k: DiffusersAdapterPipeline._summarize_call_kwargs_value(v) for k, v in value.items()}
+        if isinstance(value, (list, tuple, set)):
+            if len(value) > 10:
+                return f"{value.__class__.__name__} of length {len(value)}"
+            return value.__class__([DiffusersAdapterPipeline._summarize_call_kwargs_value(v) for v in value])
+        shape = getattr(value, "shape", None)
+        size = getattr(value, "size", None)
+        if shape is not None:
+            return {"type": type(value).__name__, "shape": tuple(shape)}
+        if size is not None and not callable(size):
+            return {"type": type(value).__name__, "size": size}
+        return f"<{type(value).__name__}>"
