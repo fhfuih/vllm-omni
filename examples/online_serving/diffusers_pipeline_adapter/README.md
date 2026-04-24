@@ -22,7 +22,8 @@ Any model loadable via `DiffusionPipeline.from_pretrained()` should run, includi
 However, as we thrive to ensure output similarity between vLLM-Omni's diffuser backend and plain diffusers library, the following models are particularly verified:
 
 - Qwen/Qwen-Image
-- TODO
+- Tongyi-MAI/Z-Image-Turbo
+- black-forest-labs/FLUX.2-klein-4B
 
 Meanwhile, the following models may produce different outputs from running diffusers model directly, provided the same set of sampling parameters:
 
@@ -66,6 +67,20 @@ This is suitable for sampling parameters not available through the vLLM-Omni int
 
 When a parameter is available in the vLLM-Omni interface, it will be adapted here.
 But if that parameter is simultaneously set in both the vLLM-Omni interface and `diffusers_call_kwargs`, the **former** will take precedence (because it is set at request time).
+
+### Attention Backends
+
+The diffusers backend converts
+[vLLM-Omni standard of attention backend setting](../../../docs/user_guide/diffusion/attention_backends.md)
+to [diffusers standard](https://huggingface.co/docs/diffusers/optimization/attention_backends#available-backends).
+
+Specifically for `FLASH_ATTN`, it will first attempt to use FlashAttention-3 and then FlashAttention-2.
+
+For each attempted version of `FLASH_ATTN` and `SAGE_ATTN`, it will first try to load the attention backend from HuggingFace `kernels` library, then without.
+
+For unsuccessful attention selection or `TORCH_SDPA`, it will use the PyTorch's default attention backend.
+
+The loaded attention backend and the failed attempts (if any) are logged to console.
 
 ### Model Specific Settings
 
