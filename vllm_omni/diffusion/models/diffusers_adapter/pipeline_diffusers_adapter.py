@@ -350,7 +350,7 @@ class DiffusersAdapterPipeline(nn.Module, DiffusionPipelineProfilerMixin):
 
         if (num_outputs_per_prompt := sampling.num_outputs_per_prompt) > 0:
             # In diffusers, they are num_images_per_prompt, num_videos_per_prompt, etc.
-            for key in kwargs.keys():
+            for key in self._accept_call_kwargs:
                 if re.match(r"num_[a-z]+_per_prompt", key):
                     kwargs[key] = num_outputs_per_prompt
 
