@@ -6,7 +6,7 @@ from types import SimpleNamespace
 
 import pytest
 import torch
-from diffusers import DiffusionPipeline
+from diffusers import DiffusionPipeline  # pyright: ignore[reportPrivateImportUsage]
 from PIL import Image
 
 from tests.helpers.mark import hardware_test
@@ -188,6 +188,154 @@ class TestPipelineArgumentsHandling:
         assert isinstance(kwargs["generator"], torch.Generator)
         assert kwargs["generator"].device.type == "cpu"
         assert kwargs["generator"].initial_seed() == 123
+
+    def test_adapter_extract_input_reads_negative_prompt_fallback(self):
+        # 1. test with diffusers_call_kwargs.negative_prompt is a correct list[str]
+        adapter = DiffusersAdapterPipeline(
+            od_config=_make_od_config(
+                diffusers_call_kwargs={
+                    "negative_prompt": [
+                        "fallback negative prompt 0",
+                        "fallback negative prompt 1",
+                        "fallback negative prompt 2",
+                    ],
+                }
+            )
+        )
+        input_kwargs = adapter._extract_input(
+            [
+                "a prompt from a string",
+                {"prompt": "a prompt from a dict"},
+                {
+                    "prompt": "a prompt with its own negative prompt",
+                    "negative_prompt": "request negative prompt",
+                },
+            ]
+        )
+        assert input_kwargs["prompt"] == [
+            "a prompt from a string",
+            "a prompt from a dict",
+            "a prompt with its own negative prompt",
+        ]
+        assert input_kwargs["negative_prompt"] == [
+            "fallback negative prompt 0",
+            "fallback negative prompt 1",
+            "request negative prompt",
+        ]
+
+        # 2. test with diffusers_call_kwargs.negative_prompt is a single str
+        adapter = DiffusersAdapterPipeline(
+            od_config=_make_od_config(diffusers_call_kwargs={"negative_prompt": "fallback negative prompt"})
+        )
+        input_kwargs = adapter._extract_input(
+            [
+                "a prompt from a string",
+                {"prompt": "a prompt from a dict"},
+                {
+                    "prompt": "a prompt with its own negative prompt",
+                    "negative_prompt": "request negative prompt",
+                },
+            ]
+        )
+        assert input_kwargs["prompt"] == [
+            "a prompt from a string",
+            "a prompt from a dict",
+            "a prompt with its own negative prompt",
+        ]
+        assert input_kwargs["negative_prompt"] == [
+            "fallback negative prompt",
+            "fallback negative prompt",
+            "request negative prompt",
+        ]
+
+        # 3. test with diffusers_call_kwargs.negative_prompt is None
+        adapter = DiffusersAdapterPipeline(od_config=_make_od_config(diffusers_call_kwargs={}))
+        input_kwargs = adapter._extract_input(
+            [
+                "a prompt from a string",
+                {"prompt": "a prompt from a dict"},
+                {
+                    "prompt": "a prompt with its own negative prompt",
+                    "negative_prompt": "request negative prompt",
+                },
+            ]
+        )
+        assert input_kwargs["prompt"] == [
+            "a prompt from a string",
+            "a prompt from a dict",
+            "a prompt with its own negative prompt",
+        ]
+        assert input_kwargs["negative_prompt"] == ["", "", "request negative prompt"]
+
+        # 4. test with diffusers_call_kwargs.negative_prompt is a list[str] but its length is less than the number of prompts
+        adapter = DiffusersAdapterPipeline(
+            od_config=_make_od_config(
+                diffusers_call_kwargs={
+                    "negative_prompt": [
+                        "fallback negative prompt 0",
+                    ]
+                }
+            )
+        )
+        with pytest.raises(ValueError):
+            adapter._extract_input(
+                [
+                    "a prompt from a string",
+                    {"prompt": "a prompt from a dict"},
+                    {
+                        "prompt": "a prompt with its own negative prompt",
+                        "negative_prompt": "request negative prompt",
+                    },
+                ]
+            )
+
+        # 5. test with diffusers_call_kwargs.negative_prompt is a list[str] but its length is greater than the number of prompts
+        adapter = DiffusersAdapterPipeline(
+            od_config=_make_od_config(
+                diffusers_call_kwargs={
+                    "negative_prompt": [
+                        "fallback negative prompt 0",
+                        "fallback negative prompt 1",
+                        "fallback negative prompt 2",
+                        "fallback negative prompt 3",
+                    ]
+                }
+            )
+        )
+        input_kwargs = adapter._extract_input(
+            [
+                "a prompt from a string",
+                {"prompt": "a prompt from a dict"},
+                {
+                    "prompt": "a prompt with its own negative prompt",
+                    "negative_prompt": "request negative prompt",
+                },
+            ]
+        )
+        assert input_kwargs["prompt"] == [
+            "a prompt from a string",
+            "a prompt from a dict",
+            "a prompt with its own negative prompt",
+        ]
+        assert input_kwargs["negative_prompt"] == [
+            "fallback negative prompt 0",
+            "fallback negative prompt 1",
+            "request negative prompt",
+        ]
+
+        # 6. test when no negative prompt is provided
+        adapter = DiffusersAdapterPipeline(od_config=_make_od_config())
+        input_kwargs = adapter._extract_input(
+            [
+                "a prompt from a string",
+                {"prompt": "a prompt from a dict"},
+            ]
+        )
+        assert input_kwargs["prompt"] == [
+            "a prompt from a string",
+            "a prompt from a dict",
+        ]
+        assert "negative_prompt" not in input_kwargs
 
 
 @pytest.mark.advanced_model

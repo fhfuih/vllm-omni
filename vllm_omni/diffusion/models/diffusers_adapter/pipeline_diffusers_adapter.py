@@ -367,8 +367,7 @@ class DiffusersAdapterPipeline(nn.Module, DiffusionPipelineProfilerMixin):
 
         return kwargs
 
-    @staticmethod
-    def _extract_input(prompt_obj: list[OmniPromptType]) -> dict[str, Any]:
+    def _extract_input(self, prompt_obj: list[OmniPromptType]) -> dict[str, Any]:
         """Extract the text prompts and negative prompts from a list of prompt objects."""
         if len(prompt_obj) == 1:
             if isinstance(prompt_obj[0], str):
@@ -408,24 +407,48 @@ class DiffusersAdapterPipeline(nn.Module, DiffusionPipelineProfilerMixin):
                     )
 
         input_kwargs = {"prompt": [], **{key: [] for key in multi_modal_data_fields}}
-        has_negative_prompt = False
-        if any(isinstance(p, dict) and p.get("negative_prompt") is not None for p in prompt_obj):
+
+        # Negative prompt rule:
+        # - If any OmniTextPrompt has a negative prompt, or diffusers_call_kwargs has `negative_prompt`,
+        #     enforce a negative prompt input (list[str]) -> `kwargs_should_contain_negative_prompt=true`
+        #     (Because the negative prompt must be str, list[str], or None. It cannot be list[str|None])
+        # -   Further in this case, try:
+        # -   1. negative prompt in this OmniTextPrompt (typed dict)
+        # -   2. fallback negative prompt from diffusers_call_kwargs (single str or the i-th item in list[str])
+        # -   3. empty string ""
+        # - Otherwise, `kwargs_should_contain_negative_prompt=False`. Do not add "negative_prompt" key to input_kwargs.
+        has_negative_prompt = any(isinstance(p, dict) and p.get("negative_prompt") is not None for p in prompt_obj)
+        fallback_negative_prompt = self.od_config.diffusers_call_kwargs.get("negative_prompt")
+        kwargs_should_contain_negative_prompt = has_negative_prompt or fallback_negative_prompt is not None
+        if kwargs_should_contain_negative_prompt:
             input_kwargs["negative_prompt"] = []
-            has_negative_prompt = True
 
         for i, prompt in enumerate(prompt_obj):
+            this_fallback_negative_prompt = ""
+            if isinstance(fallback_negative_prompt, str):
+                this_fallback_negative_prompt = fallback_negative_prompt
+            elif isinstance(fallback_negative_prompt, list):
+                try:
+                    this_fallback_negative_prompt = fallback_negative_prompt[i]
+                except IndexError:
+                    raise ValueError(
+                        "The fallback negative_prompt in diffusers_call_kwargs is a list, but its length "
+                        f"({len(fallback_negative_prompt)}) is less than the number of prompts ({len(prompt_obj)}). "
+                        "Please provide a list with the same length as the number of prompts."
+                    )
+
             if isinstance(prompt, str):
                 input_kwargs["prompt"].append(prompt)
-                if has_negative_prompt:
-                    input_kwargs["negative_prompt"].append("")
+                if kwargs_should_contain_negative_prompt:
+                    input_kwargs["negative_prompt"].append(this_fallback_negative_prompt)
                 for key in multi_modal_data_fields:
                     input_kwargs[key].append(None)
             else:
                 obj = cast(OmniTextPrompt, prompt)
                 input_kwargs["prompt"].append(obj.get("prompt", ""))
 
-                if has_negative_prompt:
-                    negative_prompt: str = obj.get("negative_prompt", "")
+                if kwargs_should_contain_negative_prompt:
+                    negative_prompt: str = obj.get("negative_prompt", this_fallback_negative_prompt)
                     input_kwargs["negative_prompt"].append(negative_prompt)
 
                 multi_modal_data = obj.get("multi_modal_data") or {}
