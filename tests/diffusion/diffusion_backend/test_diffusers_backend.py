@@ -337,6 +337,32 @@ class TestPipelineArgumentsHandling:
         ]
         assert "negative_prompt" not in input_kwargs
 
+    def test_adapter_load_weights_uses_registered_pipeline_utils(self, mocker):
+        class WanImageToVideoPipeline:
+            pass
+
+        class MockPipeline:
+            def __call__(self, prompt=None):
+                return None
+
+            def to(self, device):
+                return self
+
+        od_config = _make_od_config(
+            diffusers_pipeline_cls=WanImageToVideoPipeline,
+            boundary_ratio=0.875,
+        )
+        mock_from_pretrained = mocker.patch(
+            "vllm_omni.diffusion.models.diffusers_adapter.pipeline_diffusers_adapter.DiffusionPipeline.from_pretrained",
+            return_value=MockPipeline(),
+        )
+
+        DiffusersAdapterPipeline(od_config=od_config).load_weights()
+
+        mock_from_pretrained.assert_called_once()
+        _, kwargs = mock_from_pretrained.call_args
+        assert kwargs["boundary_ratio"] == 0.875
+
 
 @pytest.mark.advanced_model
 @hardware_test(res={"cuda": "L4"}, num_cards=1)

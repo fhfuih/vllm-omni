@@ -24,6 +24,7 @@ from diffusers.pipelines.pipeline_utils import DiffusionPipeline
 from torch import nn
 
 from vllm_omni.diffusion.data import DiffusionOutput, OmniDiffusionConfig
+from vllm_omni.diffusion.models.diffusers_adapter.pipeline_utils import BasePipelineUtils, get_pipeline_utils
 from vllm_omni.diffusion.profiler.diffusion_pipeline_profiler import DiffusionPipelineProfilerMixin
 from vllm_omni.diffusion.request import OmniDiffusionRequest
 from vllm_omni.inputs.data import OmniPromptType, OmniTextPrompt
@@ -55,6 +56,7 @@ class DiffusersAdapterPipeline(nn.Module, DiffusionPipelineProfilerMixin):
         self.od_config = od_config
         self.device = device
         self._capabilities: dict[str, Any] = {}
+        self._pipeline_utils: BasePipelineUtils = BasePipelineUtils()
         self._raise_unsupported_features()
 
         self.setup_diffusion_pipeline_profiler(
@@ -80,26 +82,13 @@ class DiffusersAdapterPipeline(nn.Module, DiffusionPipelineProfilerMixin):
         }
         logger.debug(f"Loading diffusers pipeline with kwargs: {load_kwargs}")
 
-        # Dirty load model-specific weights
-        is_wan = False
         pipeline_class = self.od_config.diffusers_pipeline_cls
-        if pipeline_class is not None:
-            pipeline_class_name = pipeline_class.__name__
-            is_wan = pipeline_class_name.startswith("Wan")
-        if is_wan:
-            if self.od_config.boundary_ratio is not None:
-                load_kwargs["boundary_ratio"] = self.od_config.boundary_ratio
+        pipeline_class_name = pipeline_class.__name__ if pipeline_class is not None else None
+        self._pipeline_utils = get_pipeline_utils(pipeline_class_name)
+        self._pipeline_utils.update_load_kwargs(self.od_config, load_kwargs)
 
         self._pipeline = DiffusionPipeline.from_pretrained(model_id, **load_kwargs)
-
-        # Dirty post-set model-specific attributes
-        if is_wan:
-            if self.od_config.flow_shift is not None:
-                from diffusers.schedulers.scheduling_unipc_multistep import UniPCMultistepScheduler
-
-                self._pipeline.scheduler = UniPCMultistepScheduler.from_config(
-                    self._pipeline.scheduler.config, flow_shift=self.od_config.flow_shift
-                )
+        self._pipeline_utils.apply_post_load_updates(self._pipeline, self.od_config)
 
         self._pipeline.to(self.device)
 
@@ -296,22 +285,7 @@ class DiffusersAdapterPipeline(nn.Module, DiffusionPipelineProfilerMixin):
         sampling = req.sampling_params
         input_kwargs = self._extract_input(req.prompts)
 
-        # Dirty validate incompatible sampling params
-        is_wan = False
-        if self.od_config.diffusers_pipeline_cls is not None:
-            pipeline_class_name = self.od_config.diffusers_pipeline_cls.__name__
-            is_wan = pipeline_class_name.startswith("Wan")
-        if is_wan:
-            if sampling.boundary_ratio is not None:
-                raise ValueError(
-                    "Boundary ratio is not supported at runtime with the diffusers backend for Wan models. Please set "
-                    "it at model loading time using the `boundary_ratio` kwarg or `--diffusers-load-kwargs` JSON."
-                )
-            if sampling.extra_args.get("flow_shift") is not None:
-                raise ValueError(
-                    "Flow shift is not supported at runtime with the diffusers backend for Wan models. Please set "
-                    "it at model loading time using the `flow_shift` kwarg."
-                )
+        self._pipeline_utils.validate_runtime_sampling_params(sampling)
 
         # Merge user-provided call kwargs from stage/CLI defaults.
         # Load time defaults -> input kwargs (prompts, neg prompts, images...) -> request-time sampling params
@@ -455,13 +429,6 @@ class DiffusersAdapterPipeline(nn.Module, DiffusionPipelineProfilerMixin):
                 for key in multi_modal_data_fields:
                     input_kwargs[key].append(multi_modal_data.get(key))
         return input_kwargs
-
-    @staticmethod
-    def _extract_negative_prompt(prompt_obj: Any) -> str | None:
-        """Extract the negative prompt from a prompt object, if present."""
-        if isinstance(prompt_obj, dict):
-            return prompt_obj.get("negative_prompt")
-        return getattr(prompt_obj, "negative_prompt", None)
 
     def _wrap_output(self, output: Any) -> DiffusionOutput:
         """Convert diffusers pipeline output to ``DiffusionOutput``.
