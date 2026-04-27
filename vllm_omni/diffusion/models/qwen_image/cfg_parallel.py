@@ -9,6 +9,7 @@ Shared by
 """
 
 import logging
+import os
 from typing import Any
 
 import torch
@@ -18,6 +19,30 @@ from vllm_omni.diffusion.distributed.parallel_state import get_classifier_free_g
 from vllm_omni.diffusion.models.progress_bar import ProgressBarMixin
 
 logger = logging.getLogger(__name__)
+
+
+def _debug_dump(name: str, value: Any) -> None:
+    debug_dir = os.environ.get("QWEN_EDIT_DEBUG_DIR")
+    if not debug_dir:
+        return
+
+    try:
+        os.makedirs(debug_dir, exist_ok=True)
+        safe_name = name.replace("/", "_")
+        path = os.path.join(debug_dir, f"vllm_{safe_name}")
+        if torch.is_tensor(value):
+            torch.save(value.detach().float().cpu(), f"{path}.pt")
+            with open(f"{path}.txt", "w") as f:
+                f.write(
+                    f"shape={tuple(value.shape)} dtype={value.dtype} device={value.device} "
+                    f"min={value.min().item() if value.numel() else 'empty'} "
+                    f"max={value.max().item() if value.numel() else 'empty'}"
+                )
+        else:
+            with open(f"{path}.txt", "w") as f:
+                f.write(repr(value))
+    except Exception:
+        logger.exception("Failed to write Qwen CFG debug dump %s", name)
 
 
 class QwenImageCFGParallelMixin(CFGParallelMixin, ProgressBarMixin):
@@ -83,6 +108,22 @@ class QwenImageCFGParallelMixin(CFGParallelMixin, ProgressBarMixin):
                 latent_model_input = latents
                 if image_latents is not None:
                     latent_model_input = torch.cat([latents, image_latents], dim=1)
+                if i == 0:
+                    _debug_dump(
+                        "diffuse_step0_inputs",
+                        {
+                            "timestep": t.detach().cpu().tolist(),
+                            "latent_model_input_shape": tuple(latent_model_input.shape),
+                            "latents_shape": tuple(latents.shape),
+                            "image_latents_shape": tuple(image_latents.shape) if image_latents is not None else None,
+                            "img_shapes": img_shapes,
+                            "txt_seq_lens": txt_seq_lens,
+                            "negative_txt_seq_lens": negative_txt_seq_lens,
+                            "do_true_cfg": do_true_cfg,
+                            "true_cfg_scale": true_cfg_scale,
+                        },
+                    )
+                    _debug_dump("diffuse_step0_latent_model_input", latent_model_input)
 
                 positive_kwargs = {
                     "hidden_states": latent_model_input,
@@ -120,9 +161,13 @@ class QwenImageCFGParallelMixin(CFGParallelMixin, ProgressBarMixin):
                     cfg_normalize,
                     output_slice,
                 )
+                if i == 0:
+                    _debug_dump("diffuse_step0_noise_pred", noise_pred)
 
                 # Compute the previous noisy sample x_t -> x_t-1 with automatic CFG sync
                 latents = self.scheduler_step_maybe_with_cfg(noise_pred, t, latents, do_true_cfg)
+                if i == 0:
+                    _debug_dump("diffuse_step0_latents_after_scheduler", latents)
 
                 pbar.update()
 

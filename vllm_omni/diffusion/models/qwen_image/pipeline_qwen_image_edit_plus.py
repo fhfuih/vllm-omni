@@ -65,6 +65,65 @@ VAE_IMAGE_SIZE = 1024 * 1024
 MAX_QWEN_IMAGE_EDIT_PLUS_INPUT_IMAGES = QWEN_IMAGE_EDIT_PLUS_MAX_INPUT_IMAGES
 
 
+def _debug_dump(name: str, value: Any) -> None:
+    debug_dir = os.environ.get("QWEN_EDIT_DEBUG_DIR")
+    if not debug_dir:
+        return
+
+    try:
+        os.makedirs(debug_dir, exist_ok=True)
+        safe_name = name.replace("/", "_")
+        path = os.path.join(debug_dir, f"vllm_{safe_name}")
+        if torch.is_tensor(value):
+            torch.save(value.detach().float().cpu(), f"{path}.pt")
+            with open(f"{path}.txt", "w") as f:
+                f.write(
+                    f"shape={tuple(value.shape)} dtype={value.dtype} device={value.device} "
+                    f"min={value.min().item() if value.numel() else 'empty'} "
+                    f"max={value.max().item() if value.numel() else 'empty'}"
+                )
+        elif isinstance(value, (list, tuple)) and all(torch.is_tensor(item) for item in value):
+            torch.save([item.detach().float().cpu() for item in value], f"{path}.pt")
+            with open(f"{path}.txt", "w") as f:
+                f.write(
+                    repr(
+                        [
+                            {
+                                "shape": tuple(item.shape),
+                                "dtype": str(item.dtype),
+                                "device": str(item.device),
+                            }
+                            for item in value
+                        ]
+                    )
+                )
+        elif isinstance(value, PIL.Image.Image):
+            value.save(f"{path}.png")
+            with open(f"{path}.txt", "w") as f:
+                f.write(f"size={value.size} mode={value.mode}")
+        else:
+            with open(f"{path}.txt", "w") as f:
+                f.write(repr(value))
+    except Exception:
+        logger.exception("Failed to write Qwen Image Edit Plus debug dump %s", name)
+
+
+def _debug_image_summaries(images: list[Any] | None) -> list[dict[str, Any]]:
+    if images is None:
+        return []
+    summaries = []
+    for image in images:
+        if isinstance(image, PIL.Image.Image):
+            summaries.append({"type": "PIL", "size": image.size, "mode": image.mode})
+        elif torch.is_tensor(image):
+            summaries.append({"type": "tensor", "shape": tuple(image.shape), "dtype": str(image.dtype)})
+        elif isinstance(image, np.ndarray):
+            summaries.append({"type": "ndarray", "shape": image.shape, "dtype": str(image.dtype)})
+        else:
+            summaries.append({"type": type(image).__name__})
+    return summaries
+
+
 def get_qwen_image_edit_plus_pre_process_func(
     od_config: OmniDiffusionConfig,
 ):
@@ -100,6 +159,13 @@ def get_qwen_image_edit_plus_pre_process_func(
 
             if not isinstance(raw_image, list):
                 raw_image = [raw_image]
+            _debug_dump(
+                "preprocess_raw_images",
+                {
+                    "count": len(raw_image),
+                    "types": [type(im).__name__ for im in raw_image],
+                },
+            )
             if len(raw_image) > MAX_QWEN_IMAGE_EDIT_PLUS_INPUT_IMAGES:
                 raise ValueError(
                     f"Received {len(raw_image)} input images. "
@@ -109,6 +175,7 @@ def get_qwen_image_edit_plus_pre_process_func(
                 PIL.Image.open(im) if isinstance(im, str) else cast(PIL.Image.Image | np.ndarray | torch.Tensor, im)
                 for im in raw_image
             ]
+            _debug_dump("preprocess_raw_image_summaries", _debug_image_summaries(image))
 
             # Calculate dimensions based on first image
             image_size = image[0].size
@@ -153,6 +220,20 @@ def get_qwen_image_edit_plus_pre_process_func(
             prompt["additional_information"]["vae_images"] = vae_images
             prompt["additional_information"]["condition_image_sizes"] = condition_image_sizes
             prompt["additional_information"]["vae_image_sizes"] = vae_image_sizes
+            _debug_dump(
+                "preprocess_outputs",
+                {
+                    "height": height,
+                    "width": width,
+                    "calculated_height": calculated_height,
+                    "calculated_width": calculated_width,
+                    "condition_image_sizes": condition_image_sizes,
+                    "vae_image_sizes": vae_image_sizes,
+                    "condition_images": _debug_image_summaries(condition_images),
+                    "vae_image_shapes": [tuple(t.shape) for t in vae_images],
+                },
+            )
+            _debug_dump("preprocess_vae_images", vae_images)
             request.prompts[i] = prompt
         return request
 
@@ -246,6 +327,18 @@ class QwenImageEditPlusPipeline(
         self.setup_diffusion_pipeline_profiler(
             enable_diffusion_pipeline_profiler=self.od_config.enable_diffusion_pipeline_profiler
         )
+        _debug_dump(
+            "transformer_config",
+            {
+                "model": model,
+                "transformer_kwargs": transformer_kwargs,
+                "guidance_embeds": self.transformer.guidance_embeds,
+                "in_channels": self.transformer.in_channels,
+                "zero_cond_t": getattr(self.transformer, "zero_cond_t", None),
+                "vae_scale_factor": self.vae_scale_factor,
+                "latent_channels": self.latent_channels,
+            },
+        )
 
     def check_inputs(
         self,
@@ -338,6 +431,14 @@ class QwenImageEditPlusPipeline(
         template = self.prompt_template_encode
         drop_idx = self.prompt_template_encode_start_idx
         txt = [template.format(base_img_prompt + e) for e in prompt]
+        _debug_dump(
+            f"{prompt_name}_text_inputs",
+            {
+                "base_img_prompt": base_img_prompt,
+                "texts": txt,
+                "image_summaries": _debug_image_summaries(image if isinstance(image, list) else [image]),
+            },
+        )
         txt_tokens = self.tokenizer(
             txt,
             padding=True,
@@ -372,6 +473,10 @@ class QwenImageEditPlusPipeline(
             padding=True,
             return_tensors="pt",
         ).to(self.device)
+        _debug_dump(f"{prompt_name}_input_ids", model_inputs.input_ids)
+        _debug_dump(f"{prompt_name}_attention_mask", model_inputs.attention_mask)
+        _debug_dump(f"{prompt_name}_pixel_values", model_inputs.pixel_values)
+        _debug_dump(f"{prompt_name}_image_grid_thw", model_inputs.image_grid_thw)
 
         outputs = self.text_encoder(
             input_ids=model_inputs.input_ids,
@@ -394,6 +499,8 @@ class QwenImageEditPlusPipeline(
         )
 
         prompt_embeds = prompt_embeds.to(dtype=dtype)
+        _debug_dump(f"{prompt_name}_prompt_embeds", prompt_embeds)
+        _debug_dump(f"{prompt_name}_prompt_embeds_mask", encoder_attention_mask)
 
         return prompt_embeds, encoder_attention_mask
 
@@ -533,6 +640,7 @@ class QwenImageEditPlusPipeline(
                     image_latents, batch_size, num_channels_latents, image_latent_height, image_latent_width
                 )
                 all_image_latents.append(image_latents)
+                _debug_dump(f"prepare_latents_image_{len(all_image_latents) - 1}", image_latents)
             # Concatenate all image latents along dimension 1
             image_latents = torch.cat(all_image_latents, dim=1)
 
@@ -547,6 +655,8 @@ class QwenImageEditPlusPipeline(
         else:
             latents = latents.to(device=device, dtype=dtype)
 
+        _debug_dump("prepare_latents_noise", latents)
+        _debug_dump("prepare_latents_image_concat", image_latents)
         return latents, image_latents
 
     def prepare_timesteps(self, num_inference_steps, sigmas, image_seq_len):
@@ -643,6 +753,19 @@ class QwenImageEditPlusPipeline(
             calculated_width = additional_information.get("calculated_width")
             height = req.sampling_params.height
             width = req.sampling_params.width
+            _debug_dump(
+                "forward_preprocessed_inputs",
+                {
+                    "condition_image_count": len(condition_images or []),
+                    "vae_image_count": len(vae_images or []),
+                    "condition_image_sizes": condition_image_sizes,
+                    "vae_image_sizes": vae_image_sizes,
+                    "height": height,
+                    "width": width,
+                    "calculated_height": calculated_height,
+                    "calculated_width": calculated_width,
+                },
+            )
         else:
             # fallback to run pre-processing in pipeline (debug only)
             if image is None:
@@ -787,6 +910,26 @@ class QwenImageEditPlusPipeline(
         negative_txt_seq_lens = (
             negative_prompt_embeds_mask.sum(dim=1).tolist() if negative_prompt_embeds_mask is not None else None
         )
+        _debug_dump(
+            "forward_denoise_inputs",
+            {
+                "batch_size": batch_size,
+                "num_images_per_prompt": num_images_per_prompt,
+                "do_true_cfg": do_true_cfg,
+                "true_cfg_scale": true_cfg_scale,
+                "guidance_scale": guidance_scale,
+                "height": height,
+                "width": width,
+                "img_shapes": img_shapes,
+                "txt_seq_lens": txt_seq_lens,
+                "negative_txt_seq_lens": negative_txt_seq_lens,
+                "timesteps": timesteps.detach().cpu().tolist(),
+            },
+        )
+        _debug_dump("forward_prompt_embeds", prompt_embeds)
+        _debug_dump("forward_negative_prompt_embeds", negative_prompt_embeds)
+        _debug_dump("forward_latents_initial", latents)
+        _debug_dump("forward_image_latents", image_latents)
 
         latents = self.diffuse(
             prompt_embeds,

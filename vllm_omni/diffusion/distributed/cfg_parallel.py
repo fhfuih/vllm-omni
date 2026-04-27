@@ -5,6 +5,7 @@
 Base pipeline class for Diffusion models with shared CFG functionality.
 """
 
+import os
 from abc import ABCMeta
 from typing import Any
 
@@ -33,6 +34,22 @@ def _unwrap(pred: tuple[torch.Tensor, ...]) -> torch.Tensor | tuple[torch.Tensor
 def _slice_pred(pred: tuple[torch.Tensor, ...], output_slice: int) -> tuple[torch.Tensor, ...]:
     """Slice each element along dim 1."""
     return tuple(p[:, :output_slice] for p in pred)
+
+
+def _debug_dump(name: str, value: torch.Tensor | tuple[torch.Tensor, ...]) -> None:
+    debug_dir = os.environ.get("QWEN_EDIT_DEBUG_DIR")
+    if not debug_dir:
+        return
+
+    try:
+        os.makedirs(debug_dir, exist_ok=True)
+        path = os.path.join(debug_dir, f"vllm_{name}")
+        if torch.is_tensor(value):
+            torch.save(value.detach().float().cpu(), f"{path}.pt")
+        else:
+            torch.save([item.detach().float().cpu() for item in value], f"{path}.pt")
+    except Exception:
+        logger.exception("Failed to write CFG debug dump %s", name)
 
 
 def _dispatch_branches(n_branches: int, n_ranks: int) -> list[list[int]]:
@@ -136,6 +153,11 @@ class CFGParallelMixin(metaclass=ABCMeta):
                 if output_slice is not None:
                     positive_noise_pred = _slice_pred(positive_noise_pred, output_slice)
                     negative_noise_pred = _slice_pred(negative_noise_pred, output_slice)
+
+                if not getattr(self, "_qwen_edit_debug_dumped_cfg_pred", False):
+                    _debug_dump("diffuse_step0_positive_noise_pred", positive_noise_pred)
+                    _debug_dump("diffuse_step0_negative_noise_pred", negative_noise_pred)
+                    self._qwen_edit_debug_dumped_cfg_pred = True
 
                 return self.combine_cfg_noise(
                     positive_noise_pred,

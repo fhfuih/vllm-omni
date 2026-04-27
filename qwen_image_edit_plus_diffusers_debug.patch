@@ -1,0 +1,244 @@
+--- a/diffusers/pipelines/qwenimage/pipeline_qwenimage_edit_plus.py
++++ b/diffusers/pipelines/qwenimage/pipeline_qwenimage_edit_plus.py
+@@ -14,6 +14,7 @@
+
+ import inspect
+ import math
++import os
+ from typing import Any, Callable, Dict, List, Optional, Union
+
+ import numpy as np
+@@ -67,6 +68,63 @@
+ VAE_IMAGE_SIZE = 1024 * 1024
+
+
++def _debug_dump(name: str, value: Any) -> None:
++    debug_dir = os.environ.get("QWEN_EDIT_DEBUG_DIR")
++    if not debug_dir:
++        return
++
++    try:
++        os.makedirs(debug_dir, exist_ok=True)
++        safe_name = name.replace("/", "_")
++        path = os.path.join(debug_dir, f"diffusers_{safe_name}")
++        if torch.is_tensor(value):
++            torch.save(value.detach().float().cpu(), f"{path}.pt")
++            with open(f"{path}.txt", "w") as f:
++                f.write(
++                    f"shape={tuple(value.shape)} dtype={value.dtype} device={value.device} "
++                    f"min={value.min().item() if value.numel() else 'empty'} "
++                    f"max={value.max().item() if value.numel() else 'empty'}"
++                )
++        elif isinstance(value, (list, tuple)) and all(torch.is_tensor(item) for item in value):
++            torch.save([item.detach().float().cpu() for item in value], f"{path}.pt")
++            with open(f"{path}.txt", "w") as f:
++                f.write(
++                    repr(
++                        [
++                            {
++                                "shape": tuple(item.shape),
++                                "dtype": str(item.dtype),
++                                "device": str(item.device),
++                            }
++                            for item in value
++                        ]
++                    )
++                )
++        else:
++            with open(f"{path}.txt", "w") as f:
++                f.write(repr(value))
++    except Exception:
++        logger.exception("Failed to write Qwen Image Edit Plus diffusers debug dump %s", name)
++
++
++def _debug_image_summaries(images):
++    if images is None:
++        return []
++    if not isinstance(images, list):
++        images = [images]
++    summaries = []
++    for image in images:
++        if hasattr(image, "size") and hasattr(image, "mode"):
++            summaries.append({"type": "PIL", "size": image.size, "mode": image.mode})
++        elif torch.is_tensor(image):
++            summaries.append({"type": "tensor", "shape": tuple(image.shape), "dtype": str(image.dtype)})
++        elif isinstance(image, np.ndarray):
++            summaries.append({"type": "ndarray", "shape": image.shape, "dtype": str(image.dtype)})
++        else:
++            summaries.append({"type": type(image).__name__})
++    return summaries
++
++
+ # Copied from diffusers.pipelines.qwenimage.pipeline_qwenimage.calculate_shift
+ def calculate_shift(
+     image_seq_len,
+@@ -251,6 +309,14 @@
+
+         drop_idx = self.prompt_template_encode_start_idx
+         txt = [template.format(base_img_prompt + e) for e in prompt]
++        _debug_dump(
++            "prompt_text_inputs",
++            {
++                "base_img_prompt": base_img_prompt,
++                "texts": txt,
++                "image_summaries": _debug_image_summaries(image),
++            },
++        )
+
+         model_inputs = self.processor(
+             text=txt,
+@@ -258,6 +324,10 @@
+             padding=True,
+             return_tensors="pt",
+         ).to(device)
++        _debug_dump("prompt_input_ids", model_inputs.input_ids)
++        _debug_dump("prompt_attention_mask", model_inputs.attention_mask)
++        _debug_dump("prompt_pixel_values", model_inputs.pixel_values)
++        _debug_dump("prompt_image_grid_thw", model_inputs.image_grid_thw)
+
+         outputs = self.text_encoder(
+             input_ids=model_inputs.input_ids,
+@@ -280,6 +350,8 @@
+         )
+
+         prompt_embeds = prompt_embeds.to(dtype=dtype, device=device)
++        _debug_dump("prompt_embeds", prompt_embeds)
++        _debug_dump("prompt_embeds_mask", encoder_attention_mask)
+
+         return prompt_embeds, encoder_attention_mask
+
+@@ -477,6 +549,7 @@
+                     image_latents, batch_size, num_channels_latents, image_latent_height, image_latent_width
+                 )
+                 all_image_latents.append(image_latents)
++                _debug_dump(f"prepare_latents_image_{len(all_image_latents) - 1}", image_latents)
+             image_latents = torch.cat(all_image_latents, dim=1)
+
+         if isinstance(generator, list) and len(generator) != batch_size:
+@@ -490,6 +563,8 @@
+         else:
+             latents = latents.to(device=device, dtype=dtype)
+
++        _debug_dump("prepare_latents_noise", latents)
++        _debug_dump("prepare_latents_image_concat", image_latents)
+         return latents, image_latents
+
+     @property
+@@ -631,6 +706,19 @@
+         calculated_width, calculated_height = calculate_dimensions(1024 * 1024, image_size[0] / image_size[1])
+         height = height or calculated_height
+         width = width or calculated_width
++        _debug_dump(
++            "call_inputs",
++            {
++                "image_summaries": _debug_image_summaries(image),
++                "prompt": prompt,
++                "negative_prompt": negative_prompt,
++                "height": height,
++                "width": width,
++                "num_inference_steps": num_inference_steps,
++                "true_cfg_scale": true_cfg_scale,
++                "guidance_scale": guidance_scale,
++            },
++        )
+
+         multiple_of = self.vae_scale_factor * 2
+         width = width // multiple_of * multiple_of
+@@ -682,6 +770,16 @@
+                 vae_image_sizes.append((vae_width, vae_height))
+                 condition_images.append(self.image_processor.resize(img, condition_height, condition_width))
+                 vae_images.append(self.image_processor.preprocess(img, vae_height, vae_width).unsqueeze(2))
++            _debug_dump(
++                "preprocess_outputs",
++                {
++                    "condition_image_sizes": condition_image_sizes,
++                    "vae_image_sizes": vae_image_sizes,
++                    "condition_images": _debug_image_summaries(condition_images),
++                    "vae_image_shapes": [tuple(t.shape) for t in vae_images],
++                },
++            )
++            _debug_dump("preprocess_vae_images", vae_images)
+
+         has_neg_prompt = negative_prompt is not None or (
+             negative_prompt_embeds is not None and negative_prompt_embeds_mask is not None
+@@ -781,6 +879,26 @@
+         negative_txt_seq_lens = (
+             negative_prompt_embeds_mask.sum(dim=1).tolist() if negative_prompt_embeds_mask is not None else None
+         )
++        _debug_dump(
++            "forward_denoise_inputs",
++            {
++                "batch_size": batch_size,
++                "num_images_per_prompt": num_images_per_prompt,
++                "do_true_cfg": do_true_cfg,
++                "true_cfg_scale": true_cfg_scale,
++                "guidance_scale": guidance_scale,
++                "height": height,
++                "width": width,
++                "img_shapes": img_shapes,
++                "txt_seq_lens": txt_seq_lens,
++                "negative_txt_seq_lens": negative_txt_seq_lens,
++                "timesteps": timesteps.detach().cpu().tolist(),
++            },
++        )
++        _debug_dump("forward_prompt_embeds", prompt_embeds)
++        _debug_dump("forward_negative_prompt_embeds", negative_prompt_embeds)
++        _debug_dump("forward_latents_initial", latents)
++        _debug_dump("forward_image_latents", image_latents)
+
+         # 6. Denoising loop
+         self.scheduler.set_begin_index(0)
+@@ -794,6 +912,22 @@
+                 latent_model_input = latents
+                 if image_latents is not None:
+                     latent_model_input = torch.cat([latents, image_latents], dim=1)
++                if i == 0:
++                    _debug_dump(
++                        "diffuse_step0_inputs",
++                        {
++                            "timestep": t.detach().cpu().tolist(),
++                            "latent_model_input_shape": tuple(latent_model_input.shape),
++                            "latents_shape": tuple(latents.shape),
++                            "image_latents_shape": tuple(image_latents.shape) if image_latents is not None else None,
++                            "img_shapes": img_shapes,
++                            "txt_seq_lens": txt_seq_lens,
++                            "negative_txt_seq_lens": negative_txt_seq_lens,
++                            "do_true_cfg": do_true_cfg,
++                            "true_cfg_scale": true_cfg_scale,
++                        },
++                    )
++                    _debug_dump("diffuse_step0_latent_model_input", latent_model_input)
+
+                 # broadcast to batch dimension in a way that's compatible with ONNX/Core ML
+                 timestep = t.expand(latents.shape[0]).to(latents.dtype)
+@@ -810,6 +944,8 @@
+                         return_dict=False,
+                     )[0]
+                     noise_pred = noise_pred[:, : latents.size(1)]
++                    if i == 0:
++                        _debug_dump("diffuse_step0_positive_noise_pred", noise_pred)
+
+                 if do_true_cfg:
+                     with self.transformer.cache_context("uncond"):
+@@ -825,15 +961,21 @@
+                             return_dict=False,
+                         )[0]
+                     neg_noise_pred = neg_noise_pred[:, : latents.size(1)]
++                    if i == 0:
++                        _debug_dump("diffuse_step0_negative_noise_pred", neg_noise_pred)
+                     comb_pred = neg_noise_pred + true_cfg_scale * (noise_pred - neg_noise_pred)
+
+                     cond_norm = torch.norm(noise_pred, dim=-1, keepdim=True)
+                     noise_norm = torch.norm(comb_pred, dim=-1, keepdim=True)
+                     noise_pred = comb_pred * (cond_norm / noise_norm)
++                    if i == 0:
++                        _debug_dump("diffuse_step0_cfg_noise_pred", noise_pred)
+
+                 # compute the previous noisy sample x_t -> x_t-1
+                 latents_dtype = latents.dtype
+                 latents = self.scheduler.step(noise_pred, t, latents, return_dict=False)[0]
++                if i == 0:
++                    _debug_dump("diffuse_step0_latents_after_scheduler", latents)
+
+                 if latents.dtype != latents_dtype:
+                     if torch.backends.mps.is_available():

@@ -134,6 +134,24 @@ MAX_UINT32_SEED = 2**32 - 1
 profiler_router = APIRouter()
 
 
+def _debug_dump_qwen_image_edit(name: str, value: Any) -> None:
+    debug_dir = os.environ.get("QWEN_EDIT_DEBUG_DIR")
+    if not debug_dir:
+        return
+
+    try:
+        os.makedirs(debug_dir, exist_ok=True)
+        safe_name = name.replace("/", "_")
+        with open(os.path.join(debug_dir, f"vllm_api_{safe_name}.txt"), "w") as f:
+            f.write(repr(value))
+    except Exception:
+        logger.exception("Failed to write Qwen image edit API debug dump %s", name)
+
+
+def _debug_pil_image_summaries(images: list[Image.Image]) -> list[dict[str, Any]]:
+    return [{"size": image.size, "mode": image.mode} for image in images]
+
+
 def _should_enable_profiler_endpoints(stage_configs: list | None) -> bool:
     """Check if any stage has profiler_config set in its engine_args."""
     if not stage_configs:
@@ -1679,10 +1697,43 @@ async def edit_images(
             input_images_list.extend(urls)
         if not input_images_list:
             raise HTTPException(status_code=422, detail="Field 'image' or 'url' is required")
+        _debug_dump_qwen_image_edit(
+            "edit_request_inputs",
+            {
+                "image_count": len(images or []),
+                "image_array_count": len(image_array or []),
+                "url_count": len(urls or []),
+                "url_array_count": len(url_array or []),
+                "input_images_list_count": len(input_images_list),
+                "input_types": [type(item).__name__ for item in input_images_list],
+                "model_name": model_name,
+                "requested_model": model,
+                "size": size,
+                "n": n,
+                "num_inference_steps": num_inference_steps,
+                "true_cfg_scale": true_cfg_scale,
+                "seed": seed,
+            },
+        )
         # Reject oversized multi-image edit requests before fetching or decoding
         # any inputs. This keeps over-limit URL requests from burning network,
         # CPU, and memory on work that will be rejected anyway.
         max_input_images = _get_max_edit_input_images(raw_request, engine_client)
+        od_config = _get_diffusion_od_config(raw_request, engine_client)
+        _debug_dump_qwen_image_edit(
+            "edit_request_model_capabilities",
+            {
+                "max_input_images": max_input_images,
+                "od_config_type": type(od_config).__name__ if od_config is not None else None,
+                "model_class_name": getattr(od_config, "model_class_name", None) if od_config is not None else None,
+                "supports_multimodal_inputs": getattr(od_config, "supports_multimodal_inputs", None)
+                if od_config is not None
+                else None,
+                "max_multimodal_image_inputs": getattr(od_config, "max_multimodal_image_inputs", None)
+                if od_config is not None
+                else None,
+            },
+        )
         if max_input_images is not None and len(input_images_list) > max_input_images:
             detail = (
                 "Received multiple input images. Only a single image is supported by this model."
@@ -1697,6 +1748,10 @@ async def edit_images(
                 detail=detail,
             )
         pil_images = await _load_input_images(input_images_list)
+        _debug_dump_qwen_image_edit(
+            "edit_request_loaded_images",
+            {"count": len(pil_images), "images": _debug_pil_image_summaries(pil_images)},
+        )
         prompt["multi_modal_data"] = {}
         prompt["multi_modal_data"]["image"] = pil_images
 
