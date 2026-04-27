@@ -68,6 +68,11 @@ This is suitable for sampling parameters not available through the vLLM-Omni int
 When a parameter is available in the vLLM-Omni interface, it will be adapted here.
 But if that parameter is simultaneously set in both the vLLM-Omni interface and `diffusers_call_kwargs`, the **former** will take precedence (because it is set at request time).
 
+!!! note
+    In vLLM-Omni, the default values for some sampling parameters may be different from diffusers.
+    Consider referring to [`OmniDiffusionSamplingParams`](../../../vllm_omni/inputs/data.py) for the default sampling parameters in the vLLM-Omni interface,
+    and the corresponding [diffusers pipeline](https://huggingface.co/docs/diffusers/main/en/api/pipelines/overview)'s `__call__` function documentation.
+
 ### Attention Backends
 
 The diffusers backend converts
