@@ -194,6 +194,7 @@ def qwen_bear_image(accuracy_artifact_root: Path):
         image = Image.open(image_path).convert("RGB")
         yield image
         image.close()
+        return
     response = requests.get(QWEN_BEAR_IMAGE_URL, timeout=60)
     response.raise_for_status()
     image = Image.open(BytesIO(response.content)).convert("RGB")
@@ -211,6 +212,7 @@ def rabbit_image(accuracy_artifact_root: Path):
         image = Image.open(image_path).convert("RGB")
         yield image
         image.close()
+        return
     response = requests.get(RABBIT_IMAGE_URL, timeout=60)
     response.raise_for_status()
     image = Image.open(BytesIO(response.content)).convert("RGB")
