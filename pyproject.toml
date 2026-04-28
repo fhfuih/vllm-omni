@@ -61,6 +61,7 @@ dev = [
     "zhconv>=1.4.2",
     "scipy>=1.10.0",
     "funasr>=1.0.0",
+    "ftfy>=6.3.0", # for diffusers backend tests, required by diffusers' Wan pipelines
 ]
 
 demo = [
