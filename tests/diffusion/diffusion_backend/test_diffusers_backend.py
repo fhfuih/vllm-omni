@@ -388,11 +388,21 @@ class TestPipelineArgumentsHandling:
             return_value=MockPipeline(),
         )
 
-        DiffusersAdapterPipeline(od_config=od_config).load_weights()
+        pipeline = DiffusersAdapterPipeline(od_config=od_config)
+        pipeline.load_weights()
 
         mock_from_pretrained.assert_called_once()
         _, kwargs = mock_from_pretrained.call_args
         assert kwargs["boundary_ratio"] == 0.875
+
+        problematic_request = _make_request(
+            prompt="a prompt from a string",
+            sampling_params=OmniDiffusionSamplingParams(
+                boundary_ratio=0.875,
+            ),
+        )
+        with pytest.raises(ValueError):
+            pipeline.forward(problematic_request)
 
 
 @pytest.mark.advanced_model
