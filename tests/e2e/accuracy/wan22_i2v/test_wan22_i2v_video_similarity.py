@@ -22,10 +22,9 @@ import torch
 from diffusers import UniPCMultistepScheduler
 from PIL import Image
 
+from tests.e2e.accuracy.helpers import IdentityFtfy, ensure_ftfy_fallback
 from tests.e2e.accuracy.wan22_i2v.run_wan22_i2v_diffusers_cp import (
     _configure_scheduler,
-    _ensure_wan_ftfy_fallback,
-    _IdentityFtfy,
     _offline_cuda_device,
     _resize_to_target,
 )
@@ -186,10 +185,10 @@ def test_ensure_wan_ftfy_fallback_sets_identity(monkeypatch: pytest.MonkeyPatch)
     from diffusers.pipelines.wan import pipeline_wan_i2v as wan_i2v_module
 
     monkeypatch.delattr(wan_i2v_module, "ftfy", raising=False)
-    _ensure_wan_ftfy_fallback()
+    ensure_ftfy_fallback(wan_i2v_module=wan_i2v_module)
 
     assert hasattr(wan_i2v_module, "ftfy")
-    assert isinstance(wan_i2v_module.ftfy, _IdentityFtfy)
+    assert isinstance(wan_i2v_module.ftfy, IdentityFtfy)
     assert wan_i2v_module.ftfy.fix_text("abc") == "abc"
 
 

@@ -9,10 +9,10 @@ from pathlib import Path
 import requests
 import torch
 from diffusers import UniPCMultistepScheduler, WanImageToVideoPipeline
-from diffusers.pipelines.wan import pipeline_wan_i2v as wan_i2v_module
 from diffusers.utils import export_to_video, load_image
 from PIL import Image
 
+from tests.e2e.accuracy.helpers import ensure_ftfy_fallback
 from tests.e2e.accuracy.wan22_i2v.wan22_i2v_video_similarity_common import BOUNDARY_RATIO
 
 
@@ -38,17 +38,6 @@ def _parse_args() -> argparse.Namespace:
 def _parse_size(size: str) -> tuple[int, int]:
     width_str, height_str = size.lower().split("x", 1)
     return int(width_str), int(height_str)
-
-
-class _IdentityFtfy:
-    @staticmethod
-    def fix_text(text: str) -> str:
-        return text
-
-
-def _ensure_wan_ftfy_fallback() -> None:
-    if not hasattr(wan_i2v_module, "ftfy"):
-        wan_i2v_module.ftfy = _IdentityFtfy()
 
 
 def _offline_cuda_device() -> torch.device:
@@ -124,7 +113,7 @@ def main() -> int:
     args = _parse_args()
     device = _offline_cuda_device()
     torch.cuda.set_device(device)
-    _ensure_wan_ftfy_fallback()
+    ensure_ftfy_fallback()
 
     pipe = WanImageToVideoPipeline.from_pretrained(args.model, torch_dtype=torch.bfloat16)
     pipe.register_to_config(boundary_ratio=BOUNDARY_RATIO)

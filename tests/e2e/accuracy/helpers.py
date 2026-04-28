@@ -1,10 +1,36 @@
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 import pytest
 import torch
 from PIL import Image
 from torchmetrics.image import PeakSignalNoiseRatio, StructuralSimilarityIndexMeasure
+
+
+class IdentityFtfy:
+    @staticmethod
+    def fix_text(text: str) -> str:
+        return text
+
+
+def ensure_ftfy_fallback(*, wan_i2v_module: Any | None = None) -> None:
+    """
+    Ensure the presence of an ftfy implementation.
+    ftfy is a text encoding sanitizer and it is implicitly required by diffusers' WanImageToVideoPipeline.
+    And this pipeline is used in several accuracy tests.
+
+    .. note::
+       If installing the real ftfy library, the relevant tests may fail the similarity assertion.
+    """
+    if wan_i2v_module is None:
+        from diffusers.pipelines.wan import pipeline_wan_i2v as wan_i2v_module
+
+    if not hasattr(wan_i2v_module, "ftfy"):
+        wan_i2v_module.ftfy = IdentityFtfy()
+        print("ftfy (text encoding sanitizer) is not installed. Using mock ftfy implementation (identity function)")
+    else:
+        print("ftfy (text encoding sanitizer) is installed. Using actual ftfy implementation.")
 
 
 def reset_artifact_dir(path: Path) -> Path:

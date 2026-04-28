@@ -24,7 +24,7 @@ from diffusers.utils import export_to_video  # pyright: ignore[reportPrivateImpo
 from PIL import Image
 
 from benchmarks.accuracy.common import pil_to_base64
-from tests.e2e.accuracy.helpers import assert_similarity, model_output_dir
+from tests.e2e.accuracy.helpers import assert_similarity, ensure_ftfy_fallback, model_output_dir
 from tests.e2e.accuracy.wan22_i2v.test_wan22_i2v_video_similarity import (
     _parse_psnr_score,
     _parse_ssim_score,
@@ -114,6 +114,7 @@ def _run_diffusers_wan22_i2v(*, model: str, output_path: Path, conditioning_imag
     from diffusers import WanImageToVideoPipeline  # pyright: ignore[reportPrivateImportUsage]
 
     run_pre_test_cleanup(enable_force=True)
+    ensure_ftfy_fallback()
     pipe: WanImageToVideoPipeline | None = None
     try:
         pipe = WanImageToVideoPipeline.from_pretrained(
