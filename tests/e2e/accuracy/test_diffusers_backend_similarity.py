@@ -128,20 +128,21 @@ def _run_diffusers_wan22_i2v(*, model: str, output_path: Path, conditioning_imag
         _diffusers_dummy_run(pipe)
 
         generator = torch.Generator(device="cuda").manual_seed(SEED)
-        start_time = time.perf_counter()
-        result = pipe(
-            image=conditioning_image,
-            prompt=VIDEO_PROMPT,
-            negative_prompt=NEGATIVE_PROMPT,
-            height=VIDEO_HEIGHT,
-            width=VIDEO_WIDTH,
-            num_inference_steps=VIDEO_NUM_INFERENCE_STEPS,
-            num_frames=NUM_FRAMES,
-            guidance_scale=GUIDANCE_SCALE,
-            guidance_scale_2=GUIDANCE_SCALE_2,
-            generator=generator,
-        )
-        end_time = time.perf_counter()
+        with torch.inference_mode():
+            start_time = time.perf_counter()
+            result = pipe(
+                image=conditioning_image,
+                prompt=VIDEO_PROMPT,
+                negative_prompt=NEGATIVE_PROMPT,
+                height=VIDEO_HEIGHT,
+                width=VIDEO_WIDTH,
+                num_inference_steps=VIDEO_NUM_INFERENCE_STEPS,
+                num_frames=NUM_FRAMES,
+                guidance_scale=GUIDANCE_SCALE,
+                guidance_scale_2=GUIDANCE_SCALE_2,
+                generator=generator,
+            )
+            end_time = time.perf_counter()
         e2e_latency = end_time - start_time
         frames = result.frames[0]  # pyright: ignore[reportAttributeAccessIssue]
         export_to_video(frames, str(output_path), fps=FPS)  # pyright: ignore[reportArgumentType]
@@ -210,17 +211,18 @@ def _run_diffusers_qwen_image(*, model: str, output_path: Path) -> tuple[Image.I
         _diffusers_dummy_run(pipe)
 
         generator = torch.Generator(device="cuda").manual_seed(SEED)
-        start_time = time.perf_counter()
-        result = pipe(  # pyright: ignore[reportCallIssue]
-            prompt=PROMPT,
-            negative_prompt=NEGATIVE_PROMPT,
-            width=WIDTH,
-            height=HEIGHT,
-            num_inference_steps=NUM_INFERENCE_STEPS,
-            true_cfg_scale=TRUE_CFG_SCALE,
-            generator=generator,
-        )
-        end_time = time.perf_counter()
+        with torch.inference_mode():
+            start_time = time.perf_counter()
+            result = pipe(  # pyright: ignore[reportCallIssue]
+                prompt=PROMPT,
+                negative_prompt=NEGATIVE_PROMPT,
+                width=WIDTH,
+                height=HEIGHT,
+                num_inference_steps=NUM_INFERENCE_STEPS,
+                true_cfg_scale=TRUE_CFG_SCALE,
+                generator=generator,
+            )
+            end_time = time.perf_counter()
         e2e_latency = end_time - start_time
         output_image = result.images[0].convert("RGB")
         output_image.save(output_path)
@@ -342,4 +344,5 @@ def _diffusers_dummy_run(pipe: DiffusionPipeline) -> None:
         audio_sr = 16000
         dummy_audio = np.random.randn(audio_sr * 2).astype(np.float32)
         kwargs["audio"] = dummy_audio
-    pipe(**kwargs)  # pyright: ignore[reportCallIssue]
+    with torch.inference_mode():
+        pipe(**kwargs)  # pyright: ignore[reportCallIssue]
