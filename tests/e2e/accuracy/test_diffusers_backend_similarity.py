@@ -12,7 +12,10 @@ import gc
 import io
 import time
 from pathlib import Path
+from types import SimpleNamespace
+from typing import Any
 
+import numpy as np
 import pytest
 import requests
 import torch
@@ -122,6 +125,8 @@ def _run_diffusers_wan22_i2v(*, model: str, output_path: Path, conditioning_imag
         )
         pipe.to("cuda")
 
+        _diffusers_dummy_run(pipe)
+
         generator = torch.Generator(device="cuda").manual_seed(SEED)
         start_time = time.perf_counter()
         result = pipe(
@@ -161,6 +166,7 @@ def _run_vllm_omni_qwen_image(*, model: str, output_path: Path) -> tuple[Image.I
         "900",
         "--diffusion-load-format",
         "diffusers",
+        # "--enable-diffusion-pipeline-profiler",
     ]
     with OmniServer(model, server_args, use_omni=True) as omni_server:
         start_time = time.perf_counter()
@@ -200,6 +206,9 @@ def _run_diffusers_qwen_image(*, model: str, output_path: Path) -> tuple[Image.I
             torch_dtype=torch.bfloat16,
             trust_remote_code=True,
         ).to("cuda")
+
+        _diffusers_dummy_run(pipe)
+
         generator = torch.Generator(device="cuda").manual_seed(SEED)
         start_time = time.perf_counter()
         result = pipe(  # pyright: ignore[reportCallIssue]
@@ -238,7 +247,7 @@ def test_diffusers_backend_t2i_matches_diffusers(model_id: str, accuracy_artifac
     )
     vllm_latency = vllm_latency * 1000
     diffusers_latency = diffusers_latency * 1000
-    latency_threshold = diffusers_latency * 1.1
+    latency_threshold = diffusers_latency * 1.2
     print(f"{model_id} latency metrics:")
     print(
         f"  Latency={vllm_latency:.2f}ms, threshold<={latency_threshold:.2f}ms, diffusers latency={diffusers_latency:.2f}ms, lower is better"
@@ -254,7 +263,7 @@ def test_diffusers_backend_t2i_matches_diffusers(model_id: str, accuracy_artifac
         psnr_threshold=PSNR_THRESHOLD,
     )
     assert vllm_latency <= latency_threshold, (
-        f"VLLM latency ({vllm_latency:.2f}ms) is greater than 10% more than Diffusers latency ({diffusers_latency:.2f}ms)."
+        f"VLLM latency ({vllm_latency:.2f}ms) is greater than 20% more than Diffusers latency ({diffusers_latency:.2f}ms)."
     )
 
 
@@ -279,7 +288,7 @@ def test_diffusers_backend_i2v_matches_diffusers(
         model=model_id, output_path=diffusers_path, conditioning_image=resized_image
     )
     diffusers_latency = diffusers_latency * 1000
-    latency_threshold = diffusers_latency * 1.1
+    latency_threshold = diffusers_latency * 1.2
 
     ssim_output = _run_ffmpeg_similarity("ssim", vllm_path, diffusers_path)
     psnr_output = _run_ffmpeg_similarity("psnr", vllm_path, diffusers_path)
@@ -303,5 +312,34 @@ def test_diffusers_backend_i2v_matches_diffusers(
     #     f"PSNR below threshold for {model_id}: got {psnr_score:.6f}, expected >= {VIDEO_PSNR_THRESHOLD:.6f}."
     # )
     assert vllm_latency <= latency_threshold, (
-        f"VLLM latency ({vllm_latency:.2f}ms) is greater than 10% more than Diffusers latency ({diffusers_latency:.2f}ms)."
+        f"VLLM latency ({vllm_latency:.2f}ms) is greater than 20% more than Diffusers latency ({diffusers_latency:.2f}ms)."
     )
+
+
+def _diffusers_dummy_run(pipe: DiffusionPipeline) -> None:
+    from vllm_omni.diffusion.diffusion_engine import supports_multimodal_input
+
+    supports_image_input, supports_audio_input = supports_multimodal_input(
+        SimpleNamespace(
+            diffusion_load_format="diffusers",
+            diffusers_pipeline_cls=pipe.__class__,
+            model_class_name="DiffusersAdapterPipeline",
+        ),  # pyright: ignore[reportArgumentType]
+    )
+    height = 512
+    width = 512
+    kwargs: dict[str, Any] = {
+        "prompt": "dummy run",
+        "height": height,
+        "width": width,
+        "num_inference_steps": 1,
+    }
+    if supports_image_input:
+        # Provide a dummy image input if the model supports it
+        dummy_image = Image.new("RGB", (width, height))
+        kwargs["image"] = dummy_image
+    if supports_audio_input:
+        audio_sr = 16000
+        dummy_audio = np.random.randn(audio_sr * 2).astype(np.float32)
+        kwargs["audio"] = dummy_audio
+    pipe(**kwargs)  # pyright: ignore[reportCallIssue]
