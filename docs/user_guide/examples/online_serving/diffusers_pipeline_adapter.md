@@ -25,7 +25,7 @@ Any model loadable via `DiffusionPipeline.from_pretrained()` should run, includi
 However, as we strive to ensure output similarity between vLLM-Omni's diffuser backend and plain diffusers library, the following models are particularly verified:
 
 - Qwen/Qwen-Image
-- TODO
+- Tongyi-MAI/Z-Image-Turbo
 
 Meanwhile, the following models may produce different outputs from running diffusers model directly, provided the same set of sampling parameters:
 
@@ -33,7 +33,7 @@ Meanwhile, the following models may produce different outputs from running diffu
 - Wan2.2-T2V-A14B-Diffusers
 
 If you find that a model not listed above also produces different outputs from running diffusers model directly.
-Please consider file an issue or submit a PR to fix.
+Please consider file an issue.
 
 ## Usage
 
