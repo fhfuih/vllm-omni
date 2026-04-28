@@ -149,7 +149,33 @@ class TestPipelineArgumentsHandling:
         assert isinstance(output, DiffusionOutput)
         assert output.output == raw_output
 
-    def test_adapter_build_call_kwargs(self):
+    def test_adapter_build_call_kwargs(self, mocker):
+        class MockPipeline:
+            def __call__(
+                self,
+                prompt=None,
+                negative_prompt=None,
+                num_inference_steps=None,
+                # guidance_scale=None, # deliberately not included
+                height=None,
+                width=None,
+                num_frames=None,
+                num_images_per_prompt=None,
+                num_videos_per_prompt=None,
+                output_type=None,
+                generator=None,
+            ):
+                """Need to make the signature match the actual DiffusionPipeline.__call__, because inspect.signature() is used"""
+                return None
+
+            def to(self, device):
+                return self
+
+        mock_from_pretrained = mocker.patch(
+            "vllm_omni.diffusion.models.diffusers_adapter.pipeline_diffusers_adapter.DiffusionPipeline.from_pretrained",
+            return_value=MockPipeline(),
+        )
+
         adapter = DiffusersAdapterPipeline(
             od_config=_make_od_config(
                 diffusers_call_kwargs={
@@ -159,6 +185,10 @@ class TestPipelineArgumentsHandling:
                 }
             )
         )
+
+        adapter.load_weights()
+        mock_from_pretrained.assert_called_once()
+
         req = _make_request(
             prompt="a cat on mars",
             negative_prompt="low quality",
@@ -179,11 +209,12 @@ class TestPipelineArgumentsHandling:
         assert kwargs["prompt"] == "a cat on mars"
         assert kwargs["negative_prompt"] == "low quality"
         assert kwargs["num_inference_steps"] == 9
-        assert kwargs["guidance_scale"] == 8.0
+        assert "guidance_scale" not in kwargs
         assert kwargs["height"] == 320
         assert kwargs["width"] == 640
         assert kwargs["num_frames"] == 8
         assert kwargs["num_images_per_prompt"] == 2
+        assert kwargs["num_videos_per_prompt"] == 2
         assert kwargs["output_type"] == "pil"
         assert isinstance(kwargs["generator"], torch.Generator)
         assert kwargs["generator"].device.type == "cpu"
