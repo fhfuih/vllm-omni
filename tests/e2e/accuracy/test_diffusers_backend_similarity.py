@@ -1,3 +1,12 @@
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: Copyright contributors to the vLLM project
+
+"""
+Run vLLM-Omni with diffusers backend, then run diffusers directly. Compare the output similarity.
+Also, do a quick performance check on the end-to-end latency.
+The latency check is not put under /tests/dfx/perf/ because this is not a complete performance check to be monitored.
+"""
+
 import base64
 import gc
 import io
