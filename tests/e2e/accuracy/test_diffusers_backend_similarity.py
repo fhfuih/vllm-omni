@@ -62,8 +62,8 @@ GUIDANCE_SCALE = 4.0
 GUIDANCE_SCALE_2 = 1.0
 BOUNDARY_RATIO = 0.875
 FLOW_SHIFT = 12.0
-VIDEO_SSIM_THRESHOLD = 0.92
-VIDEO_PSNR_THRESHOLD = 26.0
+VIDEO_SSIM_THRESHOLD = 0.95
+VIDEO_PSNR_THRESHOLD = 30.0
 
 
 def _run_vllm_omni_wan22_i2v(
@@ -307,19 +307,18 @@ def test_diffusers_backend_i2v_matches_diffusers(
     print(
         f"  Latency={vllm_latency:.2f}ms, threshold<={latency_threshold:.2f}ms, diffusers latency={diffusers_latency:.2f}ms, lower is better"
     )
-    print(f"{model_id} similarity metrics (temporarily skip similarity assertion before #3116 is resolved):")
+    print(f"{model_id} similarity metrics:")
     print(f"  SSIM: value={ssim_score:.6f}, threshold>={VIDEO_SSIM_THRESHOLD:.6f}, range=[-1, 1], higher is better")
     print(
         f"  PSNR: value={psnr_score:.6f} dB, threshold>={VIDEO_PSNR_THRESHOLD:.6f} dB, range=[0, +inf), higher is better"
     )
 
-    # [NOTE] Temporarily skip similarity assertion before #3116 is resolved.
-    # assert ssim_score >= VIDEO_SSIM_THRESHOLD, (
-    #     f"SSIM below threshold for {model_id}: got {ssim_score:.6f}, expected >= {VIDEO_SSIM_THRESHOLD:.6f}."
-    # )
-    # assert psnr_score >= VIDEO_PSNR_THRESHOLD, (
-    #     f"PSNR below threshold for {model_id}: got {psnr_score:.6f}, expected >= {VIDEO_PSNR_THRESHOLD:.6f}."
-    # )
+    assert ssim_score >= VIDEO_SSIM_THRESHOLD, (
+        f"SSIM below threshold for {model_id}: got {ssim_score:.6f}, expected >= {VIDEO_SSIM_THRESHOLD:.6f}."
+    )
+    assert psnr_score >= VIDEO_PSNR_THRESHOLD, (
+        f"PSNR below threshold for {model_id}: got {psnr_score:.6f}, expected >= {VIDEO_PSNR_THRESHOLD:.6f}."
+    )
     assert vllm_latency <= latency_threshold, (
         f"VLLM latency ({vllm_latency:.2f}ms) is greater than 20% more than Diffusers latency ({diffusers_latency:.2f}ms)."
     )
