@@ -117,6 +117,7 @@ def _run_vllm_omni_wan22_i2v(
 
 def _run_diffusers_wan22_i2v(*, model: str, output_path: Path, conditioning_image: Image.Image) -> float:
     from diffusers import WanImageToVideoPipeline  # pyright: ignore[reportPrivateImportUsage]
+    from diffusers.schedulers.scheduling_unipc_multistep import UniPCMultistepScheduler
 
     run_pre_test_cleanup(enable_force=True)
     apply_ftfy_mock()
@@ -127,8 +128,8 @@ def _run_diffusers_wan22_i2v(*, model: str, output_path: Path, conditioning_imag
             torch_dtype=torch.bfloat16,
             trust_remote_code=True,
             boundary_ratio=BOUNDARY_RATIO,
-            flow_shift=FLOW_SHIFT,
         )
+        pipe.scheduler = UniPCMultistepScheduler.from_config(pipe.scheduler.config, flow_shift=FLOW_SHIFT)
         pipe.to("cuda")
 
         _diffusers_dummy_run(pipe)
