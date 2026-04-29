@@ -23,7 +23,6 @@ However, as we strive to ensure output similarity between vLLM-Omni's diffuser b
 
 - Qwen/Qwen-Image
 - Tongyi-MAI/Z-Image-Turbo
-- black-forest-labs/FLUX.2-klein-4B
 - Wan2.2-I2V-A14B-Diffusers
 
 If you find that a model not listed above also produces different outputs from running diffusers model directly.
