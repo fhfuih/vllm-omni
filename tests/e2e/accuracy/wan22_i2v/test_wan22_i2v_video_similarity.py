@@ -243,7 +243,6 @@ SERVER_CASES = [
                 "--hsdp-shard-size",
                 "2",
             ],
-            env_dict=env_to_apply_ftfy_mock_in_subproc(),
             use_omni=True,
         ),
         id="wan22_i2v_usp2_hsdp2",
