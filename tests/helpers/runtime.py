@@ -1027,7 +1027,6 @@ class OpenAIClientHandler:
                 normalized_form_data["image_reference"] = json.dumps({"image_url": image_reference})
 
         result = DiffusionResponse()
-        start_time = time.perf_counter()
         create_url = self._build_url("/v1/videos")
         response = requests.post(
             create_url,
@@ -1036,14 +1035,16 @@ class OpenAIClientHandler:
             headers={"Accept": "application/json"},
             timeout=60,
         )
+        start_time = time.perf_counter()
         response.raise_for_status()
         job_data = response.json()
         video_id = job_data["id"]
         self._wait_until_video_completed(video_id)
+        end_time = time.perf_counter()
         video_content = self._download_video_content(video_id)
         result.success = True
         result.videos = [video_content]
-        result.e2e_latency = time.perf_counter() - start_time
+        result.e2e_latency = end_time - start_time
         assert_diffusion_response(result, request_config, run_level=self.run_level)
         return [result]
 
