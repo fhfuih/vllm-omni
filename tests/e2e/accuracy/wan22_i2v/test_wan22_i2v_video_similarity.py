@@ -22,9 +22,10 @@ import torch
 from diffusers import UniPCMultistepScheduler
 from PIL import Image
 
-from tests.e2e.accuracy.helpers import IdentityFtfy, apply_ftfy_mock, env_to_apply_ftfy_mock_in_subproc
 from tests.e2e.accuracy.wan22_i2v.run_wan22_i2v_diffusers_cp import (
     _configure_scheduler,
+    _ensure_wan_ftfy_fallback,
+    _IdentityFtfy,
     _offline_cuda_device,
     _resize_to_target,
 )
@@ -181,28 +182,15 @@ def test_offline_cuda_device_uses_indexed_cuda_device() -> None:
     assert _offline_cuda_device() == torch.device("cuda:0")
 
 
-def test_wan_ftfy_mock_applied(monkeypatch: pytest.MonkeyPatch) -> None:
-    """ftfy library mock is correctly applied to diffusers' WanImageToVideoPipeline in the main process"""
+def test_ensure_wan_ftfy_fallback_sets_identity(monkeypatch: pytest.MonkeyPatch) -> None:
     from diffusers.pipelines.wan import pipeline_wan_i2v as wan_i2v_module
 
     monkeypatch.delattr(wan_i2v_module, "ftfy", raising=False)
-    apply_ftfy_mock(wan_i2v_module=wan_i2v_module)
+    _ensure_wan_ftfy_fallback()
 
     assert hasattr(wan_i2v_module, "ftfy")
-    assert isinstance(wan_i2v_module.ftfy, IdentityFtfy)
+    assert isinstance(wan_i2v_module.ftfy, _IdentityFtfy)
     assert wan_i2v_module.ftfy.fix_text("abc") == "abc"
-
-
-def test_ftfy_mock_applied_to_sitecustomize(monkeypatch: pytest.MonkeyPatch) -> None:
-    """ftfy library mock is correctly applied to diffusers' WanImageToVideoPipeline in subprocesses"""
-    monkeypatch.setenv("PYTHONPATH", "existing-path")
-
-    env = env_to_apply_ftfy_mock_in_subproc({"OTHER_ENV": "1"})
-
-    pythonpath_entries = env["PYTHONPATH"].split(os.pathsep)
-    assert pythonpath_entries[0].endswith("ftfy_mock")
-    assert pythonpath_entries[1] == "existing-path"
-    assert env["OTHER_ENV"] == "1"
 
 
 def test_resize_to_target_matches_requested_dimensions() -> None:
