@@ -12,7 +12,7 @@ from diffusers import UniPCMultistepScheduler, WanImageToVideoPipeline
 from diffusers.utils import export_to_video, load_image
 from PIL import Image
 
-from tests.e2e.accuracy.helpers import ensure_ftfy_fallback
+from tests.e2e.accuracy.helpers import apply_ftfy_mock
 from tests.e2e.accuracy.wan22_i2v.wan22_i2v_video_similarity_common import BOUNDARY_RATIO
 
 
@@ -113,7 +113,7 @@ def main() -> int:
     args = _parse_args()
     device = _offline_cuda_device()
     torch.cuda.set_device(device)
-    ensure_ftfy_fallback()
+    apply_ftfy_mock()
 
     pipe = WanImageToVideoPipeline.from_pretrained(args.model, torch_dtype=torch.bfloat16)
     pipe.register_to_config(boundary_ratio=BOUNDARY_RATIO)

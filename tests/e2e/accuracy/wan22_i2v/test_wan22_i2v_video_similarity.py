@@ -22,7 +22,7 @@ import torch
 from diffusers import UniPCMultistepScheduler
 from PIL import Image
 
-from tests.e2e.accuracy.helpers import IdentityFtfy, ensure_ftfy_fallback
+from tests.e2e.accuracy.helpers import IdentityFtfy, apply_ftfy_mock, env_to_apply_ftfy_mock_in_subproc
 from tests.e2e.accuracy.wan22_i2v.run_wan22_i2v_diffusers_cp import (
     _configure_scheduler,
     _offline_cuda_device,
@@ -181,15 +181,28 @@ def test_offline_cuda_device_uses_indexed_cuda_device() -> None:
     assert _offline_cuda_device() == torch.device("cuda:0")
 
 
-def test_ensure_wan_ftfy_fallback_sets_identity(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_wan_ftfy_mock_applied(monkeypatch: pytest.MonkeyPatch) -> None:
+    """ftfy library mock is correctly applied to diffusers' WanImageToVideoPipeline in the main process"""
     from diffusers.pipelines.wan import pipeline_wan_i2v as wan_i2v_module
 
     monkeypatch.delattr(wan_i2v_module, "ftfy", raising=False)
-    ensure_ftfy_fallback(wan_i2v_module=wan_i2v_module)
+    apply_ftfy_mock(wan_i2v_module=wan_i2v_module)
 
     assert hasattr(wan_i2v_module, "ftfy")
     assert isinstance(wan_i2v_module.ftfy, IdentityFtfy)
     assert wan_i2v_module.ftfy.fix_text("abc") == "abc"
+
+
+def test_ftfy_mock_applied_to_sitecustomize(monkeypatch: pytest.MonkeyPatch) -> None:
+    """ftfy library mock is correctly applied to diffusers' WanImageToVideoPipeline in subprocesses"""
+    monkeypatch.setenv("PYTHONPATH", "existing-path")
+
+    env = env_to_apply_ftfy_mock_in_subproc({"OTHER_ENV": "1"})
+
+    pythonpath_entries = env["PYTHONPATH"].split(os.pathsep)
+    assert pythonpath_entries[0].endswith("ftfy_mock")
+    assert pythonpath_entries[1] == "existing-path"
+    assert env["OTHER_ENV"] == "1"
 
 
 def test_resize_to_target_matches_requested_dimensions() -> None:
@@ -230,6 +243,7 @@ SERVER_CASES = [
                 "--hsdp-shard-size",
                 "2",
             ],
+            env_dict=env_to_apply_ftfy_mock_in_subproc(),
             use_omni=True,
         ),
         id="wan22_i2v_usp2_hsdp2",

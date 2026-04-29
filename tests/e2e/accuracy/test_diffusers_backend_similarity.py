@@ -24,7 +24,12 @@ from diffusers.utils import export_to_video  # pyright: ignore[reportPrivateImpo
 from PIL import Image
 
 from benchmarks.accuracy.common import pil_to_base64
-from tests.e2e.accuracy.helpers import assert_similarity, ensure_ftfy_fallback, model_output_dir
+from tests.e2e.accuracy.helpers import (
+    apply_ftfy_mock,
+    assert_similarity,
+    env_to_apply_ftfy_mock_in_subproc,
+    model_output_dir,
+)
 from tests.e2e.accuracy.wan22_i2v.test_wan22_i2v_video_similarity import (
     _parse_psnr_score,
     _parse_ssim_score,
@@ -93,7 +98,7 @@ def _run_vllm_omni_wan22_i2v(
         "guidance_scale_2": GUIDANCE_SCALE_2,
         "seed": SEED,
     }
-    with OmniServer(model, server_args, use_omni=True) as omni_server:
+    with OmniServer(model, server_args, env_dict=env_to_apply_ftfy_mock_in_subproc(), use_omni=True) as omni_server:
         client = OpenAIClientHandler(
             host=omni_server.host,
             port=omni_server.port,
@@ -114,7 +119,7 @@ def _run_diffusers_wan22_i2v(*, model: str, output_path: Path, conditioning_imag
     from diffusers import WanImageToVideoPipeline  # pyright: ignore[reportPrivateImportUsage]
 
     run_pre_test_cleanup(enable_force=True)
-    ensure_ftfy_fallback()
+    apply_ftfy_mock()
     pipe: WanImageToVideoPipeline | None = None
     try:
         pipe = WanImageToVideoPipeline.from_pretrained(
