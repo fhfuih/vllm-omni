@@ -1,17 +1,21 @@
---- a/diffusers/pipelines/qwenimage/pipeline_qwenimage_edit_plus.py
-+++ b/diffusers/pipelines/qwenimage/pipeline_qwenimage_edit_plus.py
+diff --git a/home/h00965334/workspace/vllm-omni/.venv/lib/python3.12/site-packages/diffusers/pipelines/qwenimage/pipeline_qwenimage_edit_plus_0.36.0.py b/home/h00965334/workspace/vllm-omni/.venv/lib/python3.12/site-packages/diffusers/pipelines/qwenimage/pipeline_qwenimage_edit_plus.py
+old mode 100755
+new mode 100644
+index ec203edf..36386b6b
+--- a/home/h00965334/workspace/vllm-omni/.venv/lib/python3.12/site-packages/diffusers/pipelines/qwenimage/pipeline_qwenimage_edit_plus_0.36.0.py
++++ b/home/h00965334/workspace/vllm-omni/.venv/lib/python3.12/site-packages/diffusers/pipelines/qwenimage/pipeline_qwenimage_edit_plus.py
 @@ -14,6 +14,7 @@
-
+ 
  import inspect
  import math
 +import os
  from typing import Any, Callable, Dict, List, Optional, Union
-
+ 
  import numpy as np
-@@ -67,6 +68,63 @@
+@@ -67,6 +68,63 @@ CONDITION_IMAGE_SIZE = 384 * 384
  VAE_IMAGE_SIZE = 1024 * 1024
-
-
+ 
+ 
 +def _debug_dump(name: str, value: Any) -> None:
 +    debug_dir = os.environ.get("QWEN_EDIT_DEBUG_DIR")
 +    if not debug_dir:
@@ -72,59 +76,86 @@
  # Copied from diffusers.pipelines.qwenimage.pipeline_qwenimage.calculate_shift
  def calculate_shift(
      image_seq_len,
-@@ -251,6 +309,14 @@
-
+@@ -232,6 +290,7 @@ class QwenImageEditPlusPipeline(DiffusionPipeline, QwenImageLoraLoaderMixin):
+         image: Optional[torch.Tensor] = None,
+         device: Optional[torch.device] = None,
+         dtype: Optional[torch.dtype] = None,
++        prompt_name: str = "prompt",
+     ):
+         device = device or self._execution_device
+         dtype = dtype or self.text_encoder.dtype
+@@ -251,6 +310,14 @@ class QwenImageEditPlusPipeline(DiffusionPipeline, QwenImageLoraLoaderMixin):
+ 
          drop_idx = self.prompt_template_encode_start_idx
          txt = [template.format(base_img_prompt + e) for e in prompt]
 +        _debug_dump(
-+            "prompt_text_inputs",
++            f"{prompt_name}_text_inputs",
 +            {
 +                "base_img_prompt": base_img_prompt,
 +                "texts": txt,
 +                "image_summaries": _debug_image_summaries(image),
 +            },
 +        )
-
+ 
          model_inputs = self.processor(
              text=txt,
-@@ -258,6 +324,10 @@
+@@ -258,6 +325,10 @@ class QwenImageEditPlusPipeline(DiffusionPipeline, QwenImageLoraLoaderMixin):
              padding=True,
              return_tensors="pt",
          ).to(device)
-+        _debug_dump("prompt_input_ids", model_inputs.input_ids)
-+        _debug_dump("prompt_attention_mask", model_inputs.attention_mask)
-+        _debug_dump("prompt_pixel_values", model_inputs.pixel_values)
-+        _debug_dump("prompt_image_grid_thw", model_inputs.image_grid_thw)
-
++        _debug_dump(f"{prompt_name}_input_ids", model_inputs.input_ids)
++        _debug_dump(f"{prompt_name}_attention_mask", model_inputs.attention_mask)
++        _debug_dump(f"{prompt_name}_pixel_values", model_inputs.pixel_values)
++        _debug_dump(f"{prompt_name}_image_grid_thw", model_inputs.image_grid_thw)
+ 
          outputs = self.text_encoder(
              input_ids=model_inputs.input_ids,
-@@ -280,6 +350,8 @@
+@@ -280,6 +351,8 @@ class QwenImageEditPlusPipeline(DiffusionPipeline, QwenImageLoraLoaderMixin):
          )
-
+ 
          prompt_embeds = prompt_embeds.to(dtype=dtype, device=device)
-+        _debug_dump("prompt_embeds", prompt_embeds)
-+        _debug_dump("prompt_embeds_mask", encoder_attention_mask)
-
++        _debug_dump(f"{prompt_name}_embeds", prompt_embeds)
++        _debug_dump(f"{prompt_name}_embeds_mask", encoder_attention_mask)
+ 
          return prompt_embeds, encoder_attention_mask
-
-@@ -477,6 +549,7 @@
+ 
+@@ -293,6 +366,7 @@ class QwenImageEditPlusPipeline(DiffusionPipeline, QwenImageLoraLoaderMixin):
+         prompt_embeds: Optional[torch.Tensor] = None,
+         prompt_embeds_mask: Optional[torch.Tensor] = None,
+         max_sequence_length: int = 1024,
++        prompt_name: str = "prompt",
+     ):
+         r"""
+ 
+@@ -315,7 +389,9 @@ class QwenImageEditPlusPipeline(DiffusionPipeline, QwenImageLoraLoaderMixin):
+         batch_size = len(prompt) if prompt_embeds is None else prompt_embeds.shape[0]
+ 
+         if prompt_embeds is None:
+-            prompt_embeds, prompt_embeds_mask = self._get_qwen_prompt_embeds(prompt, image, device)
++            prompt_embeds, prompt_embeds_mask = self._get_qwen_prompt_embeds(
++                prompt, image, device, prompt_name=prompt_name
++            )
+ 
+         _, seq_len, _ = prompt_embeds.shape
+         prompt_embeds = prompt_embeds.repeat(1, num_images_per_prompt, 1)
+@@ -477,6 +553,7 @@ class QwenImageEditPlusPipeline(DiffusionPipeline, QwenImageLoraLoaderMixin):
                      image_latents, batch_size, num_channels_latents, image_latent_height, image_latent_width
                  )
                  all_image_latents.append(image_latents)
 +                _debug_dump(f"prepare_latents_image_{len(all_image_latents) - 1}", image_latents)
              image_latents = torch.cat(all_image_latents, dim=1)
-
+ 
          if isinstance(generator, list) and len(generator) != batch_size:
-@@ -490,6 +563,8 @@
+@@ -490,6 +567,8 @@ class QwenImageEditPlusPipeline(DiffusionPipeline, QwenImageLoraLoaderMixin):
          else:
              latents = latents.to(device=device, dtype=dtype)
-
+ 
 +        _debug_dump("prepare_latents_noise", latents)
 +        _debug_dump("prepare_latents_image_concat", image_latents)
          return latents, image_latents
-
+ 
      @property
-@@ -631,6 +706,19 @@
+@@ -631,6 +710,19 @@ class QwenImageEditPlusPipeline(DiffusionPipeline, QwenImageLoraLoaderMixin):
          calculated_width, calculated_height = calculate_dimensions(1024 * 1024, image_size[0] / image_size[1])
          height = height or calculated_height
          width = width or calculated_width
@@ -141,10 +172,10 @@
 +                "guidance_scale": guidance_scale,
 +            },
 +        )
-
+ 
          multiple_of = self.vae_scale_factor * 2
          width = width // multiple_of * multiple_of
-@@ -682,6 +770,16 @@
+@@ -682,6 +774,16 @@ class QwenImageEditPlusPipeline(DiffusionPipeline, QwenImageLoraLoaderMixin):
                  vae_image_sizes.append((vae_width, vae_height))
                  condition_images.append(self.image_processor.resize(img, condition_height, condition_width))
                  vae_images.append(self.image_processor.preprocess(img, vae_height, vae_width).unsqueeze(2))
@@ -158,10 +189,18 @@
 +                },
 +            )
 +            _debug_dump("preprocess_vae_images", vae_images)
-
+ 
          has_neg_prompt = negative_prompt is not None or (
              negative_prompt_embeds is not None and negative_prompt_embeds_mask is not None
-@@ -781,6 +879,26 @@
+@@ -715,6 +817,7 @@ class QwenImageEditPlusPipeline(DiffusionPipeline, QwenImageLoraLoaderMixin):
+                 device=device,
+                 num_images_per_prompt=num_images_per_prompt,
+                 max_sequence_length=max_sequence_length,
++                prompt_name="negative_prompt",
+             )
+ 
+         # 4. Prepare latent variables
+@@ -781,6 +884,26 @@ class QwenImageEditPlusPipeline(DiffusionPipeline, QwenImageLoraLoaderMixin):
          negative_txt_seq_lens = (
              negative_prompt_embeds_mask.sum(dim=1).tolist() if negative_prompt_embeds_mask is not None else None
          )
@@ -185,10 +224,10 @@
 +        _debug_dump("forward_negative_prompt_embeds", negative_prompt_embeds)
 +        _debug_dump("forward_latents_initial", latents)
 +        _debug_dump("forward_image_latents", image_latents)
-
+ 
          # 6. Denoising loop
          self.scheduler.set_begin_index(0)
-@@ -794,6 +912,22 @@
+@@ -794,6 +917,22 @@ class QwenImageEditPlusPipeline(DiffusionPipeline, QwenImageLoraLoaderMixin):
                  latent_model_input = latents
                  if image_latents is not None:
                      latent_model_input = torch.cat([latents, image_latents], dim=1)
@@ -208,37 +247,37 @@
 +                        },
 +                    )
 +                    _debug_dump("diffuse_step0_latent_model_input", latent_model_input)
-
+ 
                  # broadcast to batch dimension in a way that's compatible with ONNX/Core ML
                  timestep = t.expand(latents.shape[0]).to(latents.dtype)
-@@ -810,6 +944,8 @@
+@@ -810,6 +949,8 @@ class QwenImageEditPlusPipeline(DiffusionPipeline, QwenImageLoraLoaderMixin):
                          return_dict=False,
                      )[0]
                      noise_pred = noise_pred[:, : latents.size(1)]
 +                    if i == 0:
 +                        _debug_dump("diffuse_step0_positive_noise_pred", noise_pred)
-
+ 
                  if do_true_cfg:
                      with self.transformer.cache_context("uncond"):
-@@ -825,15 +961,21 @@
+@@ -825,15 +966,21 @@ class QwenImageEditPlusPipeline(DiffusionPipeline, QwenImageLoraLoaderMixin):
                              return_dict=False,
                          )[0]
                      neg_noise_pred = neg_noise_pred[:, : latents.size(1)]
 +                    if i == 0:
 +                        _debug_dump("diffuse_step0_negative_noise_pred", neg_noise_pred)
                      comb_pred = neg_noise_pred + true_cfg_scale * (noise_pred - neg_noise_pred)
-
+ 
                      cond_norm = torch.norm(noise_pred, dim=-1, keepdim=True)
                      noise_norm = torch.norm(comb_pred, dim=-1, keepdim=True)
                      noise_pred = comb_pred * (cond_norm / noise_norm)
 +                    if i == 0:
 +                        _debug_dump("diffuse_step0_cfg_noise_pred", noise_pred)
-
+ 
                  # compute the previous noisy sample x_t -> x_t-1
                  latents_dtype = latents.dtype
                  latents = self.scheduler.step(noise_pred, t, latents, return_dict=False)[0]
 +                if i == 0:
 +                    _debug_dump("diffuse_step0_latents_after_scheduler", latents)
-
+ 
                  if latents.dtype != latents_dtype:
                      if torch.backends.mps.is_available():

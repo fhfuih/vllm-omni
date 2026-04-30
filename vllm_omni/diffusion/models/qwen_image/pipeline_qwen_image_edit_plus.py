@@ -499,8 +499,8 @@ class QwenImageEditPlusPipeline(
         )
 
         prompt_embeds = prompt_embeds.to(dtype=dtype)
-        _debug_dump(f"{prompt_name}_prompt_embeds", prompt_embeds)
-        _debug_dump(f"{prompt_name}_prompt_embeds_mask", encoder_attention_mask)
+        _debug_dump(f"{prompt_name}_embeds", prompt_embeds)
+        _debug_dump(f"{prompt_name}_embeds_mask", encoder_attention_mask)
 
         return prompt_embeds, encoder_attention_mask
 
