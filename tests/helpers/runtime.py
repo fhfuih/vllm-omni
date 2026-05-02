@@ -216,6 +216,7 @@ class OmniServer:
         port: int | None = None,
         env_dict: dict[str, str] | None = None,
         use_omni: bool = True,
+        start_timeout: int | None = 1200,
     ) -> None:
         run_forced_gpu_cleanup_round()
         cleanup_dist_env_and_memory()
@@ -226,6 +227,7 @@ class OmniServer:
         self.proc: subprocess.Popen | None = None
         self.host = "127.0.0.1"
         self.port = get_open_port() if port is None else port
+        self.start_timeout = start_timeout
 
     def _start_server(self) -> None:
         env = os.environ.copy()
@@ -248,14 +250,14 @@ class OmniServer:
             cmd.append("--omni")
         cmd += self.serve_args
 
-        print(f"Launching OmniServer with: {' '.join(cmd)}")
+        print(f"Launching OmniServer (timeout {self.start_timeout}s) with: {' '.join(cmd)}")
         self.proc = subprocess.Popen(
             cmd,
             env=env,
             cwd=_omni_subprocess_cwd(),
         )
 
-        max_wait = 1200
+        max_wait = self.start_timeout or float("inf")
         start_time = time.time()
         while time.time() - start_time < max_wait:
             ret = self.proc.poll()
@@ -265,6 +267,9 @@ class OmniServer:
                 sock.settimeout(1)
                 if sock.connect_ex((self.host, self.port)) == 0:
                     print(f"Server ready on {self.host}:{self.port}")
+                    if not self.start_timeout:
+                        end_time = time.time()
+                        print(f"Server startup time: {end_time - start_time:.2f} seconds")
                     return
             time.sleep(2)
         raise RuntimeError(f"Server failed to start within {max_wait} seconds")
