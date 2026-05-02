@@ -85,6 +85,9 @@ def _run_vllm_omni_wan22_i2v(
         str(BOUNDARY_RATIO),
         "--flow-shift",
         str(FLOW_SHIFT),
+        # Speed up server startup time https://huggingface.co/docs/diffusers/using-diffusers/loading#parallel-loading
+        "--diffusers-load-kwargs",
+        '{"device_map": "cuda"}',
     ]
     form_data = {
         "prompt": VIDEO_PROMPT,
@@ -98,7 +101,15 @@ def _run_vllm_omni_wan22_i2v(
         "guidance_scale_2": GUIDANCE_SCALE_2,
         "seed": SEED,
     }
-    with OmniServer(model, server_args, env_dict=env_to_apply_ftfy_mock_in_subproc(), use_omni=True) as omni_server:
+    with OmniServer(
+        model,
+        server_args,
+        env_dict={
+            **env_to_apply_ftfy_mock_in_subproc(),
+            # Speed up server startup time https://huggingface.co/docs/diffusers/using-diffusers/loading#parallel-loading
+            "HF_ENABLE_PARALLEL_LOADING": "YES",
+        },
+    ) as omni_server:
         client = OpenAIClientHandler(
             host=omni_server.host,
             port=omni_server.port,
