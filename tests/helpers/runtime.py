@@ -235,6 +235,7 @@ class OmniServer:
 
         cmd = [
             sys.executable,
+            "-u",  # unbuffered output so CI outputs real-time log even if startup times out
             "-m",
             "vllm_omni.entrypoints.cli.main",
             "serve",
@@ -257,17 +258,23 @@ class OmniServer:
 
         max_wait = 1200
         start_time = time.time()
-        while time.time() - start_time < max_wait:
-            ret = self.proc.poll()
-            if ret is not None:
-                raise RuntimeError(f"Server processes exited with code {ret} before becoming ready.")
-            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
-                sock.settimeout(1)
-                if sock.connect_ex((self.host, self.port)) == 0:
-                    print(f"Server ready on {self.host}:{self.port}")
-                    return
-            time.sleep(2)
-        raise RuntimeError(f"Server failed to start within {max_wait} seconds")
+        try:
+            while time.time() - start_time < max_wait:
+                ret = self.proc.poll()
+                if ret is not None:
+                    raise RuntimeError(f"Server processes exited with code {ret} before becoming ready.")
+                with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+                    sock.settimeout(1)
+                    if sock.connect_ex((self.host, self.port)) == 0:
+                        print(f"Server ready on {self.host}:{self.port}")
+                        return
+                time.sleep(2)
+            raise RuntimeError(f"Server failed to start within {max_wait} seconds")
+        except Exception as e:
+            print("Terminating server process due to startup failure...")
+            self.proc.terminate()
+            self.proc.wait()
+            raise e
 
     def _kill_process_tree(self, pid):
         try:
