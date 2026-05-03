@@ -109,7 +109,6 @@ def _run_vllm_omni_wan22_i2v(
             # Speed up server startup time https://huggingface.co/docs/diffusers/using-diffusers/loading#parallel-loading
             "HF_ENABLE_PARALLEL_LOADING": "YES",
         },
-        start_timeout=None,  # The model may take a long time to load on CI with diffusers backend.
     ) as omni_server:
         client = OpenAIClientHandler(
             host=omni_server.host,
