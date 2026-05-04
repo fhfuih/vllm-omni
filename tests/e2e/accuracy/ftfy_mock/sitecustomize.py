@@ -17,6 +17,18 @@ This is the only way to inject mocks into the subprocess.
    Hence, we must hack diffusers' Wan pipelines to not use ftfy either.
 """
 
+import threading
+
+print("[sitecustomize] started", flush=True)
+threading.Timer(
+    30.0,
+    lambda: print("[sitecustomize] diffusers import still in progress after 30s", flush=True),
+).start()
+threading.Timer(
+    120.0,
+    lambda: print("[sitecustomize] diffusers import still in progress after 2 minutes", flush=True),
+).start()
+
 
 class _IdentityFtfy:
     @staticmethod
@@ -26,8 +38,12 @@ class _IdentityFtfy:
 
 def _ensure_wan_ftfy_fallback() -> None:
     try:
+        print("[sitecustomize] starting to pre-import diffusers.pipelines.wan.pipeline_wan_i2v", flush=True)
         from diffusers.pipelines.wan import pipeline_wan_i2v as wan_i2v_module
+
+        print("[sitecustomize] finished importing diffusers.pipelines.wan.pipeline_wan_i2v", flush=True)
     except ImportError:
+        print("[sitecustomize] diffusers import raised ImportError", flush=True)
         return
 
     if not hasattr(wan_i2v_module, "ftfy"):
