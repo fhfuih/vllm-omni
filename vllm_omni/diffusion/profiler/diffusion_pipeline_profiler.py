@@ -36,6 +36,39 @@ def profiler(name: str, func: Callable, instance: Any) -> Callable:
     return wrapper
 
 
+def profiler_generator(name: str, func: Callable, instance: Any) -> Callable:
+    """Timing a generator execution."""
+
+    @functools.wraps(func)
+    def wrapper(*args, **kwargs) -> Any:
+        if name == f"{instance.__class__.__name__}.forward":
+            instance.clear_profiler_records()
+        if current_omni_platform.is_available():
+            current_omni_platform.synchronize()
+        start_time = time.perf_counter()
+        try:
+            generator = func(*args, **kwargs)
+            chunk_start_time = start_time
+            for i, output in enumerate(generator):
+                if current_omni_platform.is_available():
+                    current_omni_platform.synchronize()
+                chunk_end_time = time.perf_counter()
+                duration = chunk_end_time - chunk_start_time
+                logger.info(f"[DiffusionPipelineProfiler] {name} (generator) {i}-th chunk took {duration:.6f}s")
+                chunk_start_time = chunk_end_time
+                yield output
+        finally:
+            if current_omni_platform.is_available():
+                current_omni_platform.synchronize()
+            total_duration = time.perf_counter() - start_time
+            logger.info(f"[DiffusionPipelineProfiler] {name} (generator) in total took {total_duration:.6f}s")
+            # record the profiling data: duration of stages
+            with instance._profiler_lock:
+                instance._stage_durations[name] = instance._stage_durations.get(name, 0.0) + total_duration
+
+    return wrapper
+
+
 def _parse_part(part: str) -> tuple[str, int | None]:
     """Parse 'att[num]' into ('att', num)."""
     if m := re.compile(r"(\w+)\[(\d+)\]").fullmatch(part):
@@ -60,7 +93,7 @@ def _get_attribute_by_path(obj: Any, path: str) -> tuple[Any, str]:
     return current, parts[-1]
 
 
-def wrap_methods_by_paths(root_obj: Any, method_paths: list[str]) -> None:
+def wrap_methods_by_paths(root_obj: Any, method_paths: list[str], streaming_output: bool) -> None:
     """Wrap specified methods of an object with profiler."""
     for path in method_paths:
         obj, method_name = _get_attribute_by_path(root_obj, path)
@@ -74,14 +107,19 @@ def wrap_methods_by_paths(root_obj: Any, method_paths: list[str]) -> None:
             continue
 
         profiler_name = f"{root_obj.__class__.__name__}.{path}"
-        setattr(obj, method_name, profiler(profiler_name, original_method, root_obj))
+        is_generator = path == "forward" and streaming_output
+        wrapper = profiler_generator if is_generator else profiler
+        setattr(obj, method_name, wrapper(profiler_name, original_method, root_obj))
 
 
 class DiffusionPipelineProfilerMixin:
     _PROFILER_TARGETS = ["vae.encode", "vae.decode", "diffuse", "text_encoder.forward", "tokenizer.forward"]
 
     def setup_diffusion_pipeline_profiler(
-        self, profiler_targets: list[str] | None = None, enable_diffusion_pipeline_profiler: bool = False
+        self,
+        profiler_targets: list[str] | None = None,
+        enable_diffusion_pipeline_profiler: bool = False,
+        streaming_output: bool = False,
     ) -> None:
         self.enable_diffusion_pipeline_profiler = enable_diffusion_pipeline_profiler
         if not enable_diffusion_pipeline_profiler:
@@ -101,6 +139,7 @@ class DiffusionPipelineProfilerMixin:
         wrap_methods_by_paths(
             self,
             targets,
+            streaming_output,
         )
 
     @property

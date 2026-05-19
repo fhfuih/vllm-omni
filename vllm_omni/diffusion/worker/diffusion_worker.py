@@ -11,7 +11,7 @@ to DiffusionModelRunner.
 import gc
 import multiprocessing as mp
 import os
-from collections.abc import Iterable, Iterator
+from collections.abc import Generator, Iterable, Iterator
 from contextlib import AbstractContextManager, contextmanager, nullcontext
 from dataclasses import dataclass
 from typing import Any
@@ -325,7 +325,7 @@ class DiffusionWorker:
             lora_scale=self.od_config.lora_scale,
         )
 
-    def generate(self, request: OmniDiffusionRequest) -> DiffusionOutput:
+    def generate(self, request: OmniDiffusionRequest) -> DiffusionOutput | Generator[DiffusionOutput, None, None]:
         """Generate output for the given requests."""
         return self.execute_model(request, self.od_config)
 
@@ -350,7 +350,9 @@ class DiffusionWorker:
         else:
             profiler.stop()
 
-    def execute_model(self, req: OmniDiffusionRequest, od_config: OmniDiffusionConfig) -> DiffusionOutput:
+    def execute_model(
+        self, req: OmniDiffusionRequest, od_config: OmniDiffusionConfig
+    ) -> DiffusionOutput | Generator[DiffusionOutput, None, None]:
         """Execute a forward pass by delegating to the model runner."""
         assert self.model_runner is not None, "Model runner not initialized"
         if self.lora_manager is not None:
@@ -362,11 +364,26 @@ class DiffusionWorker:
                 logger.warning("LoRA activation skipped: %s", exc)
         profiler = self._get_profiler()
         ctx = profiler.annotate_context_manager("diffusion_forward") if profiler else nullcontext()
+        if od_config.streaming_output:
+            return self._execute_model_streaming(req, ctx, profiler)
+
         with ctx:
-            output = self.model_runner.execute_model(req)
+            output = self.model_runner.execute_model(req)  # pyright: ignore[reportAssignmentType]
         if profiler:
             profiler.step()
         return output
+
+    def _execute_model_streaming(
+        self,
+        req: OmniDiffusionRequest,
+        ctx: AbstractContextManager,
+        profiler: WorkerProfiler | None,
+    ) -> Generator[DiffusionOutput, None, None]:
+        with ctx:
+            generator: Generator[DiffusionOutput, None, None] = self.model_runner.execute_model(req)  # pyright: ignore[reportAssignmentType]
+            yield from generator
+        if profiler:
+            profiler.step()
 
     def execute_stepwise(self, scheduler_output: DiffusionSchedulerOutput) -> BaseRunnerOutput:
         """Execute one diffusion step by delegating to the model runner."""
@@ -783,7 +800,12 @@ class WorkerProc:
                 try:
                     result, should_reply = self.execute_rpc(msg)
                     if should_reply:
-                        self.return_result(result)
+                        # Handle streaming output of generation request. This branch is for _dummy_run
+                        if self.od_config.streaming_output and (msg.get("method") in ("execute_model", "generate")):
+                            for output in result:
+                                self.return_result(output)
+                        else:
+                            self.return_result(result)
                 except Exception as e:
                     logger.error(f"Error processing RPC: {e}", exc_info=True)
                     if self.result_mq is not None:
@@ -796,20 +818,40 @@ class WorkerProc:
 
             else:
                 # Handle generation request
-                try:
-                    output = self.worker.execute_model(msg, self.od_config)
-                except Exception as e:
-                    logger.error(
-                        f"Error executing forward in event loop: {e}",
-                        exc_info=True,
-                    )
-                    output = DiffusionOutput(error=str(e))
+                if not self.od_config.streaming_output:
+                    try:
+                        output = self.worker.execute_model(msg, self.od_config)
+                    except Exception as e:
+                        logger.error(
+                            f"Error executing forward in event loop: {e}",
+                            exc_info=True,
+                        )
+                        output = DiffusionOutput(error=str(e))
 
-                try:
-                    self.return_result(output)
-                except zmq.ZMQError as e:
-                    logger.error(f"ZMQ error sending reply: {e}")
-                    continue
+                    try:
+                        self.return_result(output)
+                    except zmq.ZMQError as e:
+                        logger.error(f"ZMQ error sending reply: {e}")
+                        continue
+                else:
+                    generator: Generator[DiffusionOutput, None, None] = self.worker.execute_model(msg, self.od_config)  # pyright: ignore[reportAssignmentType]
+                    try:
+                        for output in generator:
+                            try:
+                                self.return_result(output)
+                            except zmq.ZMQError as e:
+                                logger.error(f"ZMQ error sending reply: {e}")
+                                continue
+                    except Exception as e:
+                        logger.error(
+                            f"Error executing forward in event loop: {e}",
+                            exc_info=True,
+                        )
+                        try:
+                            self.return_result(DiffusionOutput(error=str(e)))
+                        except zmq.ZMQError as e:
+                            logger.error(f"ZMQ error sending reply: {e}")
+                            continue
 
         logger.info("event loop terminated.")
         try:
@@ -957,7 +999,9 @@ class WorkerWrapperBase:
 
         return worker_class
 
-    def generate(self, requests: list[OmniDiffusionRequest]) -> DiffusionOutput:
+    def generate(
+        self, requests: list[OmniDiffusionRequest]
+    ) -> DiffusionOutput | Generator[DiffusionOutput, None, None]:
         """
         Generate output for the given requests.
 
@@ -969,7 +1013,9 @@ class WorkerWrapperBase:
         """
         return self.worker.generate(requests)
 
-    def execute_model(self, reqs: list[OmniDiffusionRequest], od_config: OmniDiffusionConfig) -> DiffusionOutput:
+    def execute_model(
+        self, reqs: list[OmniDiffusionRequest], od_config: OmniDiffusionConfig
+    ) -> DiffusionOutput | Generator[DiffusionOutput, None, None]:
         """
         Execute a forward pass.
 

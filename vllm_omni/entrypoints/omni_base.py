@@ -457,6 +457,7 @@ class OmniBase(PDDisaggregationMixin):
             _custom_output=getattr(engine_outputs, "_custom_output", {}),
             stage_durations=stage_durations,
             peak_memory_mb=peak_memory_mb,
+            finished=finished,
         )
 
     def shutdown(self) -> None:

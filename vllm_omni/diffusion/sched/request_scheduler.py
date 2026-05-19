@@ -44,7 +44,7 @@ class RequestScheduler(_BaseScheduler):
             elif result.error:
                 terminal_statuses[sched_req_id] = DiffusionRequestStatus.FINISHED_ERROR
                 terminal_errors[sched_req_id] = result.error
-            else:
+            elif result.finished:
                 terminal_statuses[sched_req_id] = DiffusionRequestStatus.FINISHED_COMPLETED
                 terminal_errors[sched_req_id] = None
 

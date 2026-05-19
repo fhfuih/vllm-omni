@@ -1,4 +1,9 @@
+import json
 import os
+import re
+import shutil
+import subprocess
+from fractions import Fraction
 from io import BytesIO
 from pathlib import Path
 from typing import Any
@@ -11,6 +16,8 @@ from PIL import Image
 from torchmetrics.image import PeakSignalNoiseRatio, StructuralSimilarityIndexMeasure
 
 FTFY_SITECUSTOMIZE_MOCK_DIR = Path(__file__).with_name("ftfy_mock")
+_SSIM_RE = re.compile(r"All:(?P<score>[0-9.]+)")
+_PSNR_RE = re.compile(r"average:(?P<score>[0-9.]+)")
 
 
 class IdentityFtfy:
@@ -210,6 +217,152 @@ def compute_image_ssim_psnr(
     ssim_value = float(ssim_metric(pred_tensor, ref_tensor).item())
     psnr_value = float(psnr_metric(pred_tensor, ref_tensor).item())
     return ssim_value, psnr_value
+
+
+def compute_video_ssim_psnr(prediction: Path, reference: Path) -> tuple[float, float]:
+    """Compute video SSIM and PSNR by running ffmpeg's built-in filters."""
+    ssim_output = _run_ffmpeg_similarity("ssim", prediction, reference)
+    psnr_output = _run_ffmpeg_similarity("psnr", prediction, reference)
+    return _parse_ssim_score(ssim_output), _parse_psnr_score(psnr_output)
+
+
+def assert_video_similarity(
+    *,
+    model_name: str,
+    prediction: Path,
+    reference: Path,
+    ssim_threshold: float,
+    psnr_threshold: float,
+) -> tuple[float, float]:
+    prediction_metadata = _probe_video(prediction)
+    reference_metadata = _probe_video(reference)
+    assert prediction_metadata == reference_metadata, (
+        f"Video metadata mismatch for {model_name}:\n"
+        f"prediction={prediction_metadata}\n"
+        f"reference={reference_metadata}\n"
+        f"prediction_path={prediction}\n"
+        f"reference_path={reference}"
+    )
+
+    ssim_score, psnr_score = compute_video_ssim_psnr(prediction, reference)
+
+    print(f"{model_name} video similarity metrics:")
+    print(
+        "  SSIM:"
+        f" value={ssim_score:.6f},"
+        f" threshold>={ssim_threshold:.6f},"
+        " range=[0, 1],"
+        " higher_is_better=True,"
+        " interpretation=structural_similarity"
+    )
+    print(
+        "  PSNR:"
+        f" value={psnr_score:.6f} dB,"
+        f" threshold>={psnr_threshold:.6f} dB,"
+        " range=[0, +inf),"
+        " higher_is_better=True,"
+        " interpretation=pixel_error_in_decibels"
+    )
+    print(f"prediction_video={prediction}")
+    print(f"reference_video={reference}")
+
+    assert ssim_score >= ssim_threshold, (
+        f"SSIM below threshold for {model_name}: got {ssim_score:.6f}, expected >= {ssim_threshold:.6f}. "
+        f"prediction={prediction} reference={reference}"
+    )
+    assert psnr_score >= psnr_threshold, (
+        f"PSNR below threshold for {model_name}: got {psnr_score:.6f}, expected >= {psnr_threshold:.6f}. "
+        f"prediction={prediction} reference={reference}"
+    )
+    return ssim_score, psnr_score
+
+
+def _parse_video_metadata(payload: dict[str, Any]) -> dict[str, int | float]:
+    streams = payload.get("streams")
+    if not isinstance(streams, list) or not streams:
+        raise ValueError(f"ffprobe payload did not include video streams: {payload}")
+
+    stream = streams[0]
+    width = int(stream["width"])
+    height = int(stream["height"])
+    fps = float(Fraction(stream["avg_frame_rate"]))
+    frame_count_value = stream.get("nb_read_frames") or stream.get("nb_frames")
+    if frame_count_value is None:
+        raise ValueError(f"ffprobe payload did not include frame count: {payload}")
+    frame_count = int(frame_count_value)
+    return {
+        "width": width,
+        "height": height,
+        "fps": fps,
+        "frame_count": frame_count,
+    }
+
+
+def _parse_ssim_score(output: str) -> float:
+    match = _SSIM_RE.search(output)
+    if match is None:
+        raise ValueError(f"Could not parse SSIM score from ffmpeg output:\n{output}")
+    return float(match.group("score"))
+
+
+def _parse_psnr_score(output: str) -> float:
+    match = _PSNR_RE.search(output)
+    if match is None:
+        raise ValueError(f"Could not parse PSNR score from ffmpeg output:\n{output}")
+    return float(match.group("score"))
+
+
+def _probe_binary(binary: str) -> str:
+    resolved = shutil.which(binary)
+    if resolved is None:
+        pytest.skip(f"{binary} is required for video similarity e2e tests.")
+    return resolved
+
+
+def _probe_video(path: Path) -> dict[str, int | float]:
+    _probe_binary("ffprobe")
+    result = subprocess.run(
+        [
+            "ffprobe",
+            "-v",
+            "error",
+            "-select_streams",
+            "v:0",
+            "-count_frames",
+            "-show_entries",
+            "stream=width,height,avg_frame_rate,nb_read_frames",
+            "-of",
+            "json",
+            str(path),
+        ],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    return _parse_video_metadata(json.loads(result.stdout))
+
+
+def _run_ffmpeg_similarity(filter_name: str, first: Path, second: Path) -> str:
+    _probe_binary("ffmpeg")
+    result = subprocess.run(
+        [
+            "ffmpeg",
+            "-hide_banner",
+            "-i",
+            str(first),
+            "-i",
+            str(second),
+            "-lavfi",
+            f"[0:v][1:v]{filter_name}",
+            "-f",
+            "null",
+            "-",
+        ],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    return result.stderr
 
 
 class CLIPScorer:

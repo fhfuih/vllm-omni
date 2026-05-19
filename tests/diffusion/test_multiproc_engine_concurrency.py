@@ -47,7 +47,7 @@ def _make_executor(num_gpus: int = 1):
 
     Returns ``(executor, request_queue, result_queue)``.
     """
-    od_cfg = SimpleNamespace(num_gpus=num_gpus)
+    od_cfg = SimpleNamespace(num_gpus=num_gpus, streaming_output=False)
     monkeypatch = pytest.MonkeyPatch()
     monkeypatch.setattr(MultiprocDiffusionExecutor, "_init_executor", lambda self: None)
     executor = MultiprocDiffusionExecutor(od_cfg)
@@ -394,6 +394,66 @@ class TestMultiprocExecutorRaisesEngineDeadError:
                 unique_reply_rank=0,
                 exec_all_ranks=True,
             )
+
+
+class TestMultiprocExecutorStreamingOutput:
+    """MultiprocExecutor plays well with streaming output mode"""
+
+    def test_collective_rpc_returns_single_response_even_when_streaming_enabled(self):
+        """Streaming request handling lives in execute_streaming_request(), not collective_rpc()."""
+        executor, req_q, res_q = _make_executor()
+        executor.od_config.streaming_output = True
+        chunks = [
+            DiffusionOutput(output=torch.tensor([0]), finished=False, chunk_index=0, total_chunks=2),
+            DiffusionOutput(output=torch.tensor([1]), finished=True, chunk_index=1, total_chunks=2),
+        ]
+
+        def _worker():
+            req_q.get(timeout=10)
+            for chunk in chunks:
+                res_q.put(chunk)
+                time.sleep(0.1)
+
+        thread = threading.Thread(target=_worker, daemon=True)
+        thread.start()
+
+        result = executor.collective_rpc("execute_model", args=(MagicMock(),), unique_reply_rank=0, exec_all_ranks=True)
+
+        assert result == chunks[0]
+        thread.join(timeout=2)
+
+    def test_execute_streaming_request_wraps_each_chunk_as_runner_output(self):
+        """In streaming mode, executer correctly converts DiffusionOutput chunks/streams to RunnerOutput."""
+        executor, req_q, res_q = _make_executor()
+        executor.od_config = SimpleNamespace(streaming_output=True)  # pyright: ignore[reportAttributeAccessIssue]
+        chunks = [
+            DiffusionOutput(output="chunk-0", finished=False, chunk_index=0, total_chunks=2),
+            DiffusionOutput(output="chunk-1", finished=True, chunk_index=1, total_chunks=2),
+        ]
+        scheduler_output = SimpleNamespace(
+            num_scheduled_reqs=1,
+            scheduled_new_reqs=[
+                SimpleNamespace(
+                    sched_req_id="sched-stream",
+                    req=MagicMock(),
+                )
+            ],
+        )
+
+        def _worker():
+            req_q.get(timeout=10)
+            for chunk in chunks:
+                res_q.put(chunk)
+
+        thread = threading.Thread(target=_worker, daemon=True)
+        thread.start()
+
+        outputs = list(MultiprocDiffusionExecutor.execute_streaming_request(executor, scheduler_output))  # pyright: ignore[reportArgumentType]
+
+        assert [out.req_id for out in outputs] == ["sched-stream", "sched-stream"]
+        assert [out.finished for out in outputs] == [False, True]
+        assert [out.result for out in outputs] == chunks
+        thread.join(timeout=2)
 
 
 class TestDiffusionEngineDeadErrorPassthrough:

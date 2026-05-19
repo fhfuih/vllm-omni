@@ -2,6 +2,7 @@
 # SPDX-FileCopyrightText: Copyright contributors to the vLLM project
 from __future__ import annotations
 
+from collections.abc import Generator
 from typing import (
     TYPE_CHECKING,
     Any,
@@ -59,6 +60,26 @@ class SupportsStepExecution(Protocol):
 
 
 @runtime_checkable
+class SupportsStreamingOutput(Protocol):
+    """Pipeline supports streaming output given an initial request.
+
+    This is typically used for video generation models: output is produced in chunks of frames.
+    In such models, the `forward()` function returns either the full output or
+    a generator of outputs, depending on `OmniDiffusionConfig.streaming_output`.
+
+    And since a function is always a generator when `yield` is present in its body, the overloaded
+    `forward()` return value is only possible when we define a `_forward_generator()` method. This
+    method is always a generator. But it determines whether to yield the full result at once or in
+    chunks. Then, `forward()` can overload by re-wrapping the yielded value(s).
+    """
+
+    supports_streaming_output: ClassVar[bool] = True
+
+    def _forward_generator(self, *args: Any, **kwargs: Any) -> Generator[DiffusionOutput, None, None]:
+        """Forward pass generator."""
+
+
+@runtime_checkable
 class SupportsComponentDiscovery(Protocol):
     """Declares which submodules serve as pipeline components.
 
@@ -87,3 +108,9 @@ def supports_step_execution(pipeline: object) -> bool:
     """Return whether `pipeline` implements :class:`SupportsStepExecution`."""
 
     return isinstance(pipeline, SupportsStepExecution)
+
+
+def supports_streaming_output(pipeline: object) -> bool:
+    """Return whether `pipeline` implements :class:`SupportsStreamingOutput`."""
+
+    return isinstance(pipeline, SupportsStreamingOutput)

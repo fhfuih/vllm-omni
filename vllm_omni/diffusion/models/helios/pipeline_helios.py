@@ -8,8 +8,8 @@ import json
 import logging
 import math
 import os
-from collections.abc import Iterable
-from typing import TYPE_CHECKING, Any
+from collections.abc import Generator, Iterable
+from typing import TYPE_CHECKING, Any, ClassVar
 
 import numpy as np
 import torch
@@ -158,6 +158,8 @@ class HeliosPipeline(nn.Module, CFGParallelMixin, ProgressBarMixin, DiffusionPip
     Implements chunked video generation with multi-term memory history context.
     """
 
+    supports_streaming_output: ClassVar[bool] = True
+
     def __init__(
         self,
         *,
@@ -241,7 +243,8 @@ class HeliosPipeline(nn.Module, CFGParallelMixin, ProgressBarMixin, DiffusionPip
         self._num_timesteps = None
         self._current_timestep = None
         self.setup_diffusion_pipeline_profiler(
-            enable_diffusion_pipeline_profiler=self.od_config.enable_diffusion_pipeline_profiler
+            enable_diffusion_pipeline_profiler=self.od_config.enable_diffusion_pipeline_profiler,
+            streaming_output=self.od_config.streaming_output,
         )
 
     @property
@@ -261,6 +264,25 @@ class HeliosPipeline(nn.Module, CFGParallelMixin, ProgressBarMixin, DiffusionPip
         return self._current_timestep
 
     def forward(
+        self,
+        *args: Any,
+        **kwargs: Any,
+    ) -> DiffusionOutput | Generator[DiffusionOutput, None, None]:
+        output_generator = self._forward_generator(*args, **kwargs)
+        if self.od_config.streaming_output:
+            return output_generator
+
+        try:
+            while True:
+                output: DiffusionOutput = next(output_generator)
+                if output.finished:
+                    return output
+        except StopIteration:
+            raise RuntimeError(
+                "Streaming output is not enabled, and the pipeline exits before returning a final output."
+            )
+
+    def _forward_generator(
         self,
         req: OmniDiffusionRequest,
         prompt: str | None = None,
@@ -301,7 +323,14 @@ class HeliosPipeline(nn.Module, CFGParallelMixin, ProgressBarMixin, DiffusionPip
         use_zero_init: bool = True,
         zero_steps: int = 1,
         **kwargs,
-    ) -> DiffusionOutput:
+    ) -> Generator[DiffusionOutput, None, None]:
+        """The actual forward implementation to overload streaming and non-streaming mode.
+
+        Returns:
+            Generator[DiffusionOutput, None, DiffusionOutput]: A generator that yields DiffusionOutput objects.
+            If streaming output is enabled, the generator yields DiffusionOutput objects for each chunk.
+            If streaming output is not enabled, the generator yields the final DiffusionOutput object.
+        """
         if pyramid_num_inference_steps_list is None:
             pyramid_num_inference_steps_list = [10, 10, 10]
         if history_sizes is None:
@@ -536,6 +565,7 @@ class HeliosPipeline(nn.Module, CFGParallelMixin, ProgressBarMixin, DiffusionPip
         for k in range(num_latent_chunk):
             is_first_chunk = k == 0
             is_second_chunk = k == 1
+            is_last_chunk = k == num_latent_chunk - 1
 
             if keep_first_frame:
                 latents_history_long, latents_history_mid, latents_history_1x = history_latents[
@@ -653,18 +683,31 @@ class HeliosPipeline(nn.Module, CFGParallelMixin, ProgressBarMixin, DiffusionPip
             else:
                 history_video = torch.cat([history_video, current_video], dim=2)
 
+            if self.od_config.streaming_output:
+                yield DiffusionOutput(
+                    output=current_latents if output_type == "latent" else current_video,
+                    stage_durations=self.stage_durations if hasattr(self, "stage_durations") else {},
+                    chunk_index=k,
+                    total_chunks=num_latent_chunk,
+                    finished=is_last_chunk,
+                )
+
         if current_omni_platform.is_available():
             current_omni_platform.empty_cache()
         self._current_timestep = None
 
-        if output_type == "latent":
-            output = real_history_latents
-        else:
-            output = history_video
+        # In streaming mode, all outputs have been yielded by now.
+        # So only yield the complete final output if not streaming.
+        if not self.od_config.streaming_output:
+            if output_type == "latent":
+                output = real_history_latents
+            else:
+                output = history_video
 
-        return DiffusionOutput(
-            output=output, stage_durations=self.stage_durations if hasattr(self, "stage_durations") else None
-        )
+            yield DiffusionOutput(
+                output=output,
+                stage_durations=self.stage_durations if hasattr(self, "stage_durations") else {},
+            )
 
     def _stage1_sample(
         self,

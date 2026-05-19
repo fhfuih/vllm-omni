@@ -630,6 +630,13 @@ class OmniServeCommand(CLISubcommand):
             type=int,
             help="The max size of generate image (height * width).",
         )
+        # Diffusion model (mainly video generation models) streaming output mode
+        omni_config_group.add_argument(
+            "--streaming-output",
+            action="store_true",
+            default=False,
+            help="Enable chunked streaming output for diffusion (mainly video generation) models that support it.",
+        )
 
         # TTS-specific parameters
         omni_config_group.add_argument(

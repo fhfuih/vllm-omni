@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import copy
 import time
-from collections.abc import Iterable
+from collections.abc import Generator, Iterable
 from contextlib import nullcontext
 from typing import Any
 
@@ -28,7 +28,7 @@ from vllm_omni.diffusion.compile import regionally_compile
 from vllm_omni.diffusion.data import DiffusionOutput, OmniDiffusionConfig
 from vllm_omni.diffusion.forward_context import set_forward_context
 from vllm_omni.diffusion.model_loader.diffusers_loader import DiffusersPipelineLoader
-from vllm_omni.diffusion.models.interface import supports_step_execution
+from vllm_omni.diffusion.models.interface import supports_step_execution, supports_streaming_output
 from vllm_omni.diffusion.offloader import get_offload_backend
 from vllm_omni.diffusion.registry import _NO_CACHE_ACCELERATION
 from vllm_omni.diffusion.request import OmniDiffusionRequest
@@ -154,6 +154,12 @@ class DiffusionModelRunner(OmniConnectorModelRunnerMixin):
                 "prepare_encode(), denoise_step(), step_scheduler(), and post_decode(); "
                 f"{self.od_config.model_class_name} does not support that contract."
             )
+        if self.od_config.streaming_output and not supports_streaming_output(self.pipeline):
+            raise ValueError(
+                "streaming_output=True requires a pipeline implementing "
+                "_forward_generator(); "
+                f"{self.od_config.model_class_name} does not support that contract."
+            )
 
         # Apply CPU offloading
         self.offload_backend = get_offload_backend(self.od_config, device=self.device)
@@ -220,7 +226,7 @@ class DiffusionModelRunner(OmniConnectorModelRunnerMixin):
             pool_overhead_gb / peak_reserved_gb * 100 if peak_reserved_gb > 0 else 0.0,
         )
 
-    def execute_model(self, req: OmniDiffusionRequest) -> DiffusionOutput:
+    def execute_model(self, req: OmniDiffusionRequest) -> DiffusionOutput | Generator[DiffusionOutput, None, None]:
         """
         Execute a forward pass for the given requests.
 
@@ -292,23 +298,52 @@ class DiffusionModelRunner(OmniConnectorModelRunnerMixin):
             if is_primary:
                 current_omni_platform.reset_peak_memory_stats()
 
+            if self.od_config.streaming_output:
+                return self._execute_model_streaming(req, grad_context, is_primary)
+
             with set_forward_context(vllm_config=self.vllm_config, omni_diffusion_config=self.od_config):
                 with record_function("pipeline_forward"):
+                    # Normally, only save the returned output. Do memory and cache summary later.
                     output = self.pipeline.forward(req)
 
             if is_primary:
                 self._record_peak_memory(output)
 
-            # NOTE:
-            if (
-                self.cache_backend is not None
-                and self.cache_backend.is_enabled()
-                and self.od_config.cache_backend == "cache_dit"
-                and self.od_config.enable_cache_dit_summary
-            ):
-                cache_summary(self.pipeline, details=True)
-
+            self._summarize_cache()
             return output
+
+    def _execute_model_streaming(
+        self,
+        req: OmniDiffusionRequest,
+        grad_context: torch.no_grad | torch.inference_mode,
+        is_primary: bool,
+    ) -> Generator[DiffusionOutput, None, None]:
+        # [NOTE] Although the caller wraps a grad_context, that only ensures the context before the
+        # generator itself is created and returned, not during the actual generation (inference).
+        # Thus, we still need to wrap the grad_context within the generator.
+        with grad_context:
+            with set_forward_context(vllm_config=self.vllm_config, omni_diffusion_config=self.od_config):
+                with record_function("pipeline_forward"):
+                    generator: Generator[DiffusionOutput, None, None] = self.pipeline.forward(req)
+                    for output in generator:
+                        # Record peak memory without reset_peak_memory_stats.
+                        # Every streamed chunk's peak memory is the peak since the forward() call.
+                        if is_primary:
+                            self._record_peak_memory(output)
+                        yield output
+
+        # Summarize after the entire forward() call is complete.
+        self._summarize_cache()
+
+    def _summarize_cache(self) -> None:
+        # NOTE:
+        if (
+            self.cache_backend is not None
+            and self.cache_backend.is_enabled()
+            and self.od_config.cache_backend == "cache_dit"
+            and self.od_config.enable_cache_dit_summary
+        ):
+            cache_summary(self.pipeline, details=True)
 
     # ------------------------------------------------------------------
     # Step-wise execution

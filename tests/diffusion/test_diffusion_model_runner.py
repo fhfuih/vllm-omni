@@ -9,6 +9,7 @@ import torch
 
 import vllm_omni.diffusion.worker.diffusion_model_runner as model_runner_module
 from tests.helpers.mark import hardware_test
+from vllm_omni.diffusion.data import DiffusionOutput
 from vllm_omni.diffusion.worker.diffusion_model_runner import DiffusionModelRunner
 
 pytestmark = [pytest.mark.diffusion]
@@ -29,6 +30,19 @@ class _DummyPipeline:
         del req
         self.forward_calls += 1
         return self._output
+
+
+class _StreamingPipeline:
+    device = torch.device("cpu")
+
+    def __init__(self, outputs):
+        self._outputs = outputs
+        self.forward_calls = 0
+
+    def forward(self, req):
+        del req
+        self.forward_calls += 1
+        yield from self._outputs
 
 
 def _make_request(skip_cache_refresh: bool = True):
@@ -56,6 +70,7 @@ def _make_runner(cache_backend, cache_backend_name: str, enable_cache_dit_summar
         cache_backend=cache_backend_name,
         enable_cache_dit_summary=enable_cache_dit_summary,
         parallel_config=SimpleNamespace(use_hsdp=False),
+        streaming_output=False,
     )
     runner.kv_transfer_manager = SimpleNamespace(
         receive_kv_cache=lambda req, target_device=None: None,
@@ -63,6 +78,30 @@ def _make_runner(cache_backend, cache_backend_name: str, enable_cache_dit_summar
         receive_multi_kv_cache_distributed=lambda req, cfg_kv_collect_func=None, target_device=None: None,
     )
     return runner
+
+
+@pytest.mark.core_model
+@pytest.mark.cpu
+def test_execute_model_streaming_yields_pipeline_chunks(monkeypatch):
+    """In streaming output mode, ensure that the chunks yielded by the pipeline are forwarded to DiffusionModelRunner"""
+    chunks = [
+        DiffusionOutput(output="chunk-0", finished=False, chunk_index=0, total_chunks=2),
+        DiffusionOutput(output="chunk-1", finished=True, chunk_index=1, total_chunks=2),
+    ]
+    runner = _make_runner(cache_backend=None, cache_backend_name="cache_dit")
+    runner.pipeline = _StreamingPipeline(chunks)
+    runner.od_config.streaming_output = True
+    req = _make_request(skip_cache_refresh=True)
+
+    monkeypatch.setattr(model_runner_module, "set_forward_context", _noop_forward_context)
+    monkeypatch.setattr(model_runner_module.current_omni_platform, "reset_peak_memory_stats", lambda: None)
+    monkeypatch.setattr(model_runner_module.current_omni_platform, "max_memory_reserved", lambda: 0)
+    monkeypatch.setattr(model_runner_module.current_omni_platform, "max_memory_allocated", lambda: 0)
+
+    outputs = list(DiffusionModelRunner.execute_model(runner, req))
+
+    assert outputs == chunks
+    assert runner.pipeline.forward_calls == 1
 
 
 @pytest.mark.core_model
