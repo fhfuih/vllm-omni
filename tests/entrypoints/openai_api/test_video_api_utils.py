@@ -100,7 +100,7 @@ def test_create_streaming_video_encoder_selects_requested_format():
 
 
 def test_finalize_streaming_mp4_bytes_produces_progressive_mp4():
-    """Fragment MP4 chuns are remuxed into decodable progressive MP4 bytes."""
+    """Fragment MP4 chunks are remuxed into decodable progressive MP4 bytes."""
     import numpy as np
 
     from vllm_omni.diffusion.utils.media_utils import FragmentedMP4Muxer

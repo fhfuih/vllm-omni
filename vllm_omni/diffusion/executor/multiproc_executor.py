@@ -321,8 +321,8 @@ class MultiprocDiffusionExecutor(DiffusionExecutor):
         self,
         scheduler_output: DiffusionSchedulerOutput,
     ) -> Generator[BaseRunnerOutput, None, None]:
-        """Mirrors `execute_request` but for streaming output mode. Don't reuse `collective_rpc()` because it waits for
-        all output before returning."""
+        """Mirrors `execute_request` but for streaming output mode. It doesn't reuse existing `collective_rpc()` helper
+        because that function waits for all outputs before returning."""
         from vllm_omni.diffusion.worker.utils import RunnerOutput
 
         self._ensure_open()
