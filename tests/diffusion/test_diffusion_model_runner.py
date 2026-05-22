@@ -195,6 +195,7 @@ def test_load_model_clears_cache_backend_for_unsupported_pipeline(monkeypatch):
         cache_config={},
         model_class_name="NextStep11Pipeline",
         enforce_eager=True,
+        streaming_output=False,
     )
 
     monkeypatch.setattr(model_runner_module, "LoadConfig", lambda: object())

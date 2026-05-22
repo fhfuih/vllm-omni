@@ -73,6 +73,7 @@ def _make_engine(num_gpus: int = 1):
     """Create a lightweight ``DiffusionEngine`` wired to mocked executor."""
     executor, req_q, res_q = _make_executor(num_gpus)
     engine = DiffusionEngine.__new__(DiffusionEngine)
+    engine.od_config = SimpleNamespace(streaming_output=False)
     sched = RequestScheduler()
     sched.initialize(SimpleNamespace())
     engine.scheduler = sched
