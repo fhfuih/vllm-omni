@@ -226,9 +226,10 @@ class DiffusionEngine:
             preprocess_time = time.perf_counter() - preprocess_start_time
             logger.debug("Pre-processing completed in %.4f seconds", preprocess_time)
 
+        exec_start_time = time.perf_counter()
         generator = self.async_add_req_and_stream_response(request)
         async for output in generator:
-            exec_total_time = time.perf_counter() - diffusion_engine_start_time
+            exec_total_time = time.perf_counter() - exec_start_time
             yield self.postprocess_output(
                 request, output, diffusion_engine_start_time, preprocess_time, exec_total_time
             )
