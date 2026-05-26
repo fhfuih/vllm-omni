@@ -609,8 +609,17 @@ class HeliosPipeline(nn.Module, CFGParallelMixin, ProgressBarMixin, DiffusionPip
         extra["stage2_start_point_list"] = [state.latents] if self.is_distilled else None
         extra["stage_index"] = 0
         extra["stage_step_index"] = 0
-        state.chunk_num_steps = sum(int(v) for v in extra["pyramid_num_inference_steps_list"])
+        amplify_first_chunk = extra["is_amplify_first_chunk"] and extra["is_first_chunk"]
+        state.chunk_num_steps = sum(
+            self._stage2_effective_num_steps(int(num_steps), amplify_first_chunk)
+            for num_steps in extra["pyramid_num_inference_steps_list"]
+        )
         self._set_stage2_timesteps(state)
+
+    def _stage2_effective_num_steps(self, num_steps: int, is_amplify_first_chunk: bool) -> int:
+        if self.is_distilled and is_amplify_first_chunk:
+            return num_steps * 2
+        return num_steps
 
     def _set_stage2_timesteps(self, state: DiffusionRequestState) -> None:
         extra = state.extra
