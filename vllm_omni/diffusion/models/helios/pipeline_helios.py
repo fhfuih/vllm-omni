@@ -562,6 +562,7 @@ class HeliosPipeline(nn.Module, CFGParallelMixin, ProgressBarMixin, DiffusionPip
             generator=extra["generator"],
             latents=None,
         )
+        extra["stage1_start_latents"] = state.latents
         extra.update(
             {
                 "is_first_chunk": is_first_chunk,
@@ -757,7 +758,20 @@ class HeliosPipeline(nn.Module, CFGParallelMixin, ProgressBarMixin, DiffusionPip
         else:
             t = state.current_timestep
             assert t is not None
-            state.latents = self.scheduler_step_maybe_with_cfg(noise_pred, t, state.latents, state.do_true_cfg)
+            if self.is_distilled:
+                state.latents = self.scheduler.step(
+                    noise_pred,
+                    t,
+                    state.latents,
+                    return_dict=False,
+                    cur_sampling_step=state.step_in_chunk,
+                    dmd_noisy_tensor=state.extra["stage1_start_latents"],
+                    dmd_sigmas=self.scheduler.sigmas,
+                    dmd_timesteps=self.scheduler.timesteps,
+                    all_timesteps=state.timesteps,
+                )[0]
+            else:
+                state.latents = self.scheduler_step_maybe_with_cfg(noise_pred, t, state.latents, state.do_true_cfg)
             state.step_in_chunk += 1
             state.step_index = state.step_in_chunk
 
