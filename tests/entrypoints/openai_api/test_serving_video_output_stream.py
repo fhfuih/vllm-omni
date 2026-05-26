@@ -4,6 +4,8 @@
 
 from __future__ import annotations
 
+import asyncio
+import json
 from collections.abc import AsyncGenerator, Callable
 from types import SimpleNamespace
 from unittest.mock import MagicMock
@@ -31,6 +33,7 @@ def _build_test_app(
     streaming_chunks: list[tuple[bytes, bool]],
     mock_generate: Callable[..., AsyncGenerator[OmniRequestOutput, None]],
     final_chunk: bytes = b"",
+    stall_timeout: float = 5.0,
 ) -> tuple[FastAPI, OmniStreamingVideoOutputHandler, MagicMock]:
     engine_client = mocker.MagicMock()
     engine_client.abort = mocker.AsyncMock()
@@ -77,7 +80,7 @@ def _build_test_app(
         engine_client=engine_client,
         model_name="test-model",
         stage_configs=engine_client.stage_configs,
-        idle_timeout=5.0,
+        stall_timeout=stall_timeout,
         start_timeout=5.0,
     )
     app = FastAPI()
@@ -215,4 +218,229 @@ class TestStreamingVideoOutputWebSocket:
                 assert err["type"] == "error"
                 assert error_message in err["message"]
 
+        engine_client.abort.assert_not_called()
+
+
+class _MockVideoOutputWebSocket:
+    """Feeds scripted client messages and records server sends."""
+
+    def __init__(self, messages: list[str]) -> None:
+        self._messages: asyncio.Queue[str] = asyncio.Queue()
+        for message in messages:
+            self._messages.put_nowait(message)
+        self.sent: list[dict | bytes] = []
+
+    def enqueue(self, message: str) -> None:
+        self._messages.put_nowait(message)
+
+    async def accept(self) -> None:
+        return None
+
+    async def receive_text(self) -> str:
+        return await self._messages.get()
+
+    async def send_json(self, data: dict) -> None:
+        self.sent.append(data)
+
+    async def send_bytes(self, data: bytes) -> None:
+        self.sent.append(data)
+
+    @property
+    def sent_json(self) -> list[dict]:
+        return [m for m in self.sent if isinstance(m, dict)]
+
+
+def _build_handler_for_async_tests(
+    mocker: MockerFixture,
+    *,
+    mock_generate: Callable[..., AsyncGenerator[OmniRequestOutput, None]],
+    streaming_chunks: list[tuple[bytes, bool]] | None = None,
+    stall_timeout: float = 5.0,
+) -> tuple[OmniStreamingVideoOutputHandler, MagicMock, _MockVideoOutputWebSocket]:
+    engine_client = mocker.MagicMock()
+    engine_client.abort = mocker.AsyncMock()
+    engine_client.default_sampling_params_list = [OmniDiffusionSamplingParams()]
+    engine_client.stage_configs = [SimpleNamespace(stage_type="diffusion")]
+    engine_client.generate = mock_generate
+
+    chunks = streaming_chunks or [(b"mp4-chunk-0", True)]
+
+    class FakeStreamingVideoEncoder:
+        def __init__(self) -> None:
+            self.encode_calls = 0
+
+        def encode(self, video):
+            del video
+            idx = self.encode_calls
+            self.encode_calls += 1
+            return chunks[idx][0]
+
+        def close(self):
+            return b""
+
+    encoder_factory = mocker.MagicMock(side_effect=lambda **_: FakeStreamingVideoEncoder())
+    mocker.patch(
+        "vllm_omni.entrypoints.openai.serving_video_output_stream.create_streaming_video_encoder",
+        encoder_factory,
+    )
+    mocker.patch(
+        "vllm_omni.entrypoints.openai.serving_video_output_stream.get_stage_type",
+        return_value="diffusion",
+    )
+    mocker.patch(
+        "vllm_omni.entrypoints.openai.serving_video_output_stream.build_stage_sampling_params_list",
+        return_value=[OmniDiffusionSamplingParams()],
+    )
+    mocker.patch(
+        "vllm_omni.entrypoints.openai.serving_video_output_stream.get_default_sampling_params_list",
+        return_value=[OmniDiffusionSamplingParams()],
+    )
+
+    handler = OmniStreamingVideoOutputHandler(
+        engine_client=engine_client,
+        model_name="test-model",
+        stage_configs=engine_client.stage_configs,
+        stall_timeout=stall_timeout,
+        start_timeout=5.0,
+    )
+    start_msg = json.dumps({"type": "session.start", "prompt": "async test"})
+    ws = _MockVideoOutputWebSocket([start_msg])
+    return handler, engine_client, ws
+
+
+class TestStreamingVideoOutputStallTimeout:
+    """Stall-timeout and session.ping behavior."""
+
+    def test_long_generation_without_client_messages_succeeds(self, mocker: MockerFixture):
+        """Engine progress between yields keeps the session alive without client pings."""
+
+        async def mock_generate(*_args, **_kwargs):
+            yield OmniRequestOutput.from_diffusion(
+                request_id="req-ws",
+                images=[_fake_video_frames(2)],
+                final_output_type="image",
+                finished=False,
+            )
+            await asyncio.sleep(0.3)
+            yield OmniRequestOutput.from_diffusion(
+                request_id="req-ws",
+                images=[_fake_video_frames(2)],
+                final_output_type="image",
+                finished=True,
+            )
+
+        app, _handler, engine_client = _build_test_app(
+            mocker=mocker,
+            streaming_chunks=[(b"mp4-chunk-0", False), (b"mp4-chunk-1", True)],
+            mock_generate=mock_generate,
+            stall_timeout=0.5,
+        )
+
+        with TestClient(app) as client:
+            with client.websocket_connect("/v1/videos/stream") as ws:
+                ws.send_json({"type": "session.start", "prompt": "slow generation"})
+                assert ws.receive_json()["type"] == "video.start"
+                assert ws.receive_bytes() == b"mp4-chunk-0"
+                assert ws.receive_bytes() == b"mp4-chunk-1"
+                done = ws.receive_json()
+                assert done["type"] == "session.done"
+                assert done["stopped"] is False
+
+        engine_client.abort.assert_not_called()
+
+    def test_stall_timeout_aborts_when_engine_silent(self, mocker: MockerFixture):
+        """No engine output for longer than stall_timeout aborts the request."""
+
+        async def mock_generate(*_args, **_kwargs):
+            await asyncio.sleep(1.0)
+            yield OmniRequestOutput.from_diffusion(
+                request_id="req-ws",
+                images=[_fake_video_frames(2)],
+                final_output_type="image",
+                finished=True,
+            )
+
+        app, _handler, engine_client = _build_test_app(
+            mocker=mocker,
+            streaming_chunks=[(b"mp4-chunk-0", True)],
+            mock_generate=mock_generate,
+            stall_timeout=0.2,
+        )
+
+        with TestClient(app) as client:
+            with client.websocket_connect("/v1/videos/stream") as ws:
+                ws.send_json({"type": "session.start", "prompt": "stalled"})
+                assert ws.receive_json()["type"] == "video.start"
+                err = ws.receive_json()
+                assert err["type"] == "error"
+                assert "Stall timeout" in err["message"]
+
+        engine_client.abort.assert_called()
+
+    @pytest.mark.asyncio
+    async def test_session_ping_returns_pong(self, mocker: MockerFixture):
+        """session.ping during generation receives session.pong."""
+
+        async def mock_generate(*_args, **_kwargs):
+            await asyncio.sleep(0.5)
+            yield OmniRequestOutput.from_diffusion(
+                request_id="req-ws",
+                images=[_fake_video_frames(2)],
+                final_output_type="image",
+                finished=True,
+            )
+
+        handler, _engine_client, ws = _build_handler_for_async_tests(
+            mocker,
+            mock_generate=mock_generate,
+            stall_timeout=5.0,
+        )
+
+        async def _send_ping_after_delay() -> None:
+            await asyncio.sleep(0.05)
+            ws.enqueue(json.dumps({"type": "session.ping"}))
+
+        ping_task = asyncio.create_task(_send_ping_after_delay())
+        await handler.handle_session(ws)  # type: ignore[arg-type]
+        await ping_task
+
+        assert any(m.get("type") == "session.pong" for m in ws.sent_json)
+
+    @pytest.mark.asyncio
+    async def test_ping_prevents_stall_during_silent_engine(self, mocker: MockerFixture):
+        """Client pings refresh the stall clock while the engine produces no output."""
+
+        release = asyncio.Event()
+
+        async def mock_generate(*_args, **_kwargs):
+            await release.wait()
+            yield OmniRequestOutput.from_diffusion(
+                request_id="req-ws",
+                images=[_fake_video_frames(2)],
+                final_output_type="image",
+                finished=True,
+            )
+
+        handler, engine_client, ws = _build_handler_for_async_tests(
+            mocker,
+            mock_generate=mock_generate,
+            stall_timeout=0.3,
+        )
+
+        async def _pinger() -> None:
+            while not release.is_set():
+                ws.enqueue(json.dumps({"type": "session.ping"}))
+                await asyncio.sleep(0.1)
+
+        pinger_task = asyncio.create_task(_pinger())
+        session_task = asyncio.create_task(handler.handle_session(ws))  # type: ignore[arg-type]
+        await asyncio.sleep(0.8)
+        release.set()
+        await session_task
+        await pinger_task
+
+        errors = [m for m in ws.sent_json if m.get("type") == "error"]
+        assert not any("Stall timeout" in m.get("message", "") for m in errors)
+        assert any(m.get("type") == "session.pong" for m in ws.sent_json)
+        assert any(m.get("type") == "session.done" for m in ws.sent_json)
         engine_client.abort.assert_not_called()

@@ -301,7 +301,7 @@ class TestPipelineStreamingOutputToEntrypoint:
             engine_client=omni,
             model_name="test-model",
             stage_configs=bridge_engine.stage_configs,
-            idle_timeout=5.0,
+            stall_timeout=5.0,
             start_timeout=5.0,
         )
         app = FastAPI()

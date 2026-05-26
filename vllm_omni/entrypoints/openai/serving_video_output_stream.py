@@ -7,11 +7,13 @@ Protocol:
         {"type": "session.start", "model": "...", "prompt": "...", "format": "m4s", ...}
         {"type": "session.prompt_update", "prompt": "..."}  # currently unsupported
         {"type": "session.stop"}
+        {"type": "session.ping"}  # optional; refreshes stall clock
 
     Server -> Client:
         {"type": "video.start", "request_id": "...", "config": {...}, "format": "m4s"}
         <binary frame: fragmented MP4 bytes>
         {"type": "session.done", ...}
+        {"type": "session.pong"}  # reply to session.ping
         {"type": "error", "message": "..."}
 """
 
@@ -21,6 +23,7 @@ import asyncio
 import copy
 import inspect
 import json
+import time
 import uuid
 from collections.abc import AsyncGenerator
 from http import HTTPStatus
@@ -42,10 +45,24 @@ from vllm_omni.inputs.data import OmniDiffusionSamplingParams, OmniTextPrompt
 
 logger = init_logger(__name__)
 
-_DEFAULT_IDLE_TIMEOUT = 60.0
+_DEFAULT_STALL_TIMEOUT = 60.0
 _DEFAULT_START_TIMEOUT = 10.0
+_CONTROL_POLL_INTERVAL = 1.0
 _MAX_START_MESSAGE_SIZE = 4 * 1024 * 1024
 _MAX_CONTROL_MESSAGE_SIZE = 128 * 1024
+
+
+class _SessionProgress:
+    """Tracks last server-side progress for stall-timeout enforcement."""
+
+    def __init__(self) -> None:
+        self._last_at = time.monotonic()
+
+    def touch(self) -> None:
+        self._last_at = time.monotonic()
+
+    def stalled_for(self, stall_timeout: float) -> bool:
+        return time.monotonic() - self._last_at > stall_timeout
 
 
 class OmniStreamingVideoOutputHandler:
@@ -56,13 +73,13 @@ class OmniStreamingVideoOutputHandler:
         engine_client: EngineClient,
         model_name: str | None = None,
         stage_configs: list[Any] | None = None,
-        idle_timeout: float = _DEFAULT_IDLE_TIMEOUT,
+        stall_timeout: float = _DEFAULT_STALL_TIMEOUT,
         start_timeout: float = _DEFAULT_START_TIMEOUT,
     ) -> None:
         self._engine_client = engine_client
         self._model_name = model_name
         self._stage_configs = stage_configs
-        self._idle_timeout = idle_timeout
+        self._stall_timeout = stall_timeout
         self._start_timeout = start_timeout
 
     async def handle_session(self, websocket: WebSocket) -> None:
@@ -82,6 +99,7 @@ class OmniStreamingVideoOutputHandler:
             request, output_format = start
 
             request_id = f"video_stream-{uuid.uuid4().hex}"
+            progress = _SessionProgress()
             async with send_lock:
                 await websocket.send_json(
                     {
@@ -91,15 +109,19 @@ class OmniStreamingVideoOutputHandler:
                         "config": request.model_dump(exclude_none=True),
                     }
                 )
+            progress.touch()
 
-            control_task = asyncio.create_task(self._control_loop(websocket, request_id, stop_event, send_lock))
-            async for chunk in self._stream_video_bytes(request, request_id, output_format):
+            control_task = asyncio.create_task(
+                self._control_loop(websocket, request_id, stop_event, send_lock, progress)
+            )
+            async for chunk in self._stream_video_bytes(request, request_id, output_format, progress):
                 if stop_event.is_set():
                     stopped = True
                     break
                 async with send_lock:
                     await websocket.send_bytes(chunk)
                 chunks_sent += 1
+                progress.touch()
 
             async with send_lock:
                 await websocket.send_json(
@@ -211,15 +233,27 @@ class OmniStreamingVideoOutputHandler:
         request_id: str,
         stop_event: asyncio.Event,
         send_lock: asyncio.Lock,
+        progress: _SessionProgress,
     ) -> None:
         while not stop_event.is_set():
-            try:
-                raw = await asyncio.wait_for(websocket.receive_text(), timeout=self._idle_timeout)
-            except asyncio.TimeoutError:
-                await self._send_error(websocket, "Idle timeout", send_lock=send_lock)
+            if progress.stalled_for(self._stall_timeout):
+                await self._send_error(
+                    websocket,
+                    "Stall timeout: no generation progress",
+                    send_lock=send_lock,
+                )
                 await self._abort_request(request_id)
                 stop_event.set()
                 return
+
+            poll_timeout = min(_CONTROL_POLL_INTERVAL, self._stall_timeout)
+            try:
+                raw = await asyncio.wait_for(
+                    websocket.receive_text(),
+                    timeout=poll_timeout,
+                )
+            except asyncio.TimeoutError:
+                continue
 
             if len(raw) > _MAX_CONTROL_MESSAGE_SIZE:
                 await self._send_error(websocket, "control message too large", send_lock=send_lock)
@@ -240,6 +274,14 @@ class OmniStreamingVideoOutputHandler:
                 await self._abort_request(request_id)
                 stop_event.set()
                 return
+            if msg_type == "session.ping":
+                progress.touch()
+                try:
+                    async with send_lock:
+                        await websocket.send_json({"type": "session.pong"})
+                except Exception:
+                    pass
+                continue
             if msg_type == "session.prompt_update":
                 await self._send_error(
                     websocket,
@@ -264,6 +306,7 @@ class OmniStreamingVideoOutputHandler:
         request: VideoGenerationRequest,
         request_id: str,
         output_format: StreamingVideoFormat,
+        progress: _SessionProgress,
     ) -> AsyncGenerator[bytes, None]:
         """Yield encoded video bytes from diffusion streaming outputs."""
         prompt, gen_params, vp = self._build_prompt_and_sampling_params(request)
@@ -279,7 +322,7 @@ class OmniStreamingVideoOutputHandler:
         )
         completed = False
         try:
-            async for result in self._iter_generation_outputs(prompt, gen_params, request_id):
+            async for result in self._iter_generation_outputs(prompt, gen_params, request_id, progress):
                 if error := getattr(result, "error", None):
                     raise RuntimeError(str(error))
                 videos = self._extract_video_outputs(result)
@@ -373,6 +416,7 @@ class OmniStreamingVideoOutputHandler:
         prompt: OmniTextPrompt,
         gen_params: OmniDiffusionSamplingParams,
         request_id: str,
+        progress: _SessionProgress,
     ) -> AsyncGenerator[Any, None]:
         stage_configs = self._stage_configs or getattr(self._engine_client, "stage_configs", None)
         if not stage_configs:
@@ -402,6 +446,7 @@ class OmniStreamingVideoOutputHandler:
             request_id=request_id,
             sampling_params_list=sampling_params_list,
         ):
+            progress.touch()
             yield output
 
     @staticmethod
