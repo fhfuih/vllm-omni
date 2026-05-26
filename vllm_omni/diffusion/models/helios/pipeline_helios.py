@@ -787,6 +787,9 @@ class HeliosPipeline(nn.Module, CFGParallelMixin, ProgressBarMixin, DiffusionPip
             return_dict=False,
             cur_sampling_step=extra["stage_step_index"],
             dmd_noisy_tensor=start_points[extra["stage_index"]] if start_points is not None else None,
+            dmd_sigmas=self.scheduler.sigmas,
+            dmd_timesteps=self.scheduler.timesteps,
+            all_timesteps=state.timesteps,
         )[0]
         extra["stage_step_index"] += 1
         state.step_in_chunk += 1
