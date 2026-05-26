@@ -245,31 +245,33 @@ class TestRequestScheduler:
         assert self.scheduler.get_request_state(req_id).status == DiffusionRequestStatus.FINISHED_COMPLETED
 
     def test_streaming_output_keeps_request_running_until_final_chunk(self) -> None:
-        req_id = self.scheduler.add_request(_make_request("stream"))
+        scheduler = StepScheduler()
+        scheduler.initialize(SimpleNamespace())
+        req_id = scheduler.add_request(_make_request("stream"))
 
-        sched_output = self.scheduler.schedule()
+        sched_output = scheduler.schedule()
         chunk = RunnerOutput(
             req_id=req_id,
-            step_index=None,
+            step_index=1,
             finished=False,
             result=DiffusionOutput(output="chunk-0", finished=False, chunk_index=0, total_chunks=2),
         )
-        finished = self.scheduler.update_from_output(sched_output, chunk)
+        finished = scheduler.update_from_output(sched_output, chunk)
 
         assert finished == set()
-        assert self.scheduler.get_request_state(req_id).status == DiffusionRequestStatus.RUNNING
-        assert self.scheduler.has_requests() is True
+        assert scheduler.get_request_state(req_id).status == DiffusionRequestStatus.RUNNING
+        assert scheduler.has_requests() is True
 
         final_chunk = RunnerOutput(
             req_id=req_id,
-            step_index=None,
+            step_index=2,
             finished=True,
             result=DiffusionOutput(output="chunk-1", finished=True, chunk_index=1, total_chunks=2),
         )
-        finished = self.scheduler.update_from_output(sched_output, final_chunk)
+        finished = scheduler.update_from_output(sched_output, final_chunk)
 
         assert finished == {req_id}
-        assert self.scheduler.get_request_state(req_id).status == DiffusionRequestStatus.FINISHED_COMPLETED
+        assert scheduler.get_request_state(req_id).status == DiffusionRequestStatus.FINISHED_COMPLETED
 
     def test_fifo_single_request_scheduling(self) -> None:
         req_id_a = self.scheduler.add_request(_make_request("a"))
@@ -543,7 +545,7 @@ class TestDiffusionEngine:
 
     def test_finalize_finished_request_returns_aborted_output(self) -> None:
         engine = DiffusionEngine.__new__(DiffusionEngine)
-        engine.scheduler = RequestScheduler()
+        engine.scheduler = StepScheduler()
         engine.scheduler.initialize(SimpleNamespace())
 
         req_id = engine.scheduler.add_request(_make_request("req-finalize"))
@@ -557,7 +559,7 @@ class TestDiffusionEngine:
     @pytest.mark.asyncio
     async def test_streaming_runner_output_notifies_each_chunk(self) -> None:
         engine = DiffusionEngine.__new__(DiffusionEngine)
-        engine.scheduler = RequestScheduler()
+        engine.scheduler = StepScheduler()
         engine.scheduler.initialize(SimpleNamespace())
         engine._rpc_lock = threading.RLock()
         engine._cv = threading.Condition(engine._rpc_lock)
@@ -571,7 +573,7 @@ class TestDiffusionEngine:
 
         chunk = RunnerOutput(
             req_id=req_id,
-            step_index=None,
+            step_index=1,
             finished=False,
             result=DiffusionOutput(output="chunk-0", finished=False, chunk_index=0, total_chunks=2),
         )
@@ -585,7 +587,7 @@ class TestDiffusionEngine:
 
         final_chunk = RunnerOutput(
             req_id=req_id,
-            step_index=None,
+            step_index=2,
             finished=True,
             result=DiffusionOutput(output="chunk-1", finished=True, chunk_index=1, total_chunks=2),
         )

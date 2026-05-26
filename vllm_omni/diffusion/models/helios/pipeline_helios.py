@@ -263,6 +263,13 @@ class HeliosPipeline(nn.Module, CFGParallelMixin, ProgressBarMixin, DiffusionPip
     def current_timestep(self):
         return self._current_timestep
 
+    def _stage1_sigmas(self, num_steps: int) -> np.ndarray:
+        # DMD drops the last timestep in set_timesteps(). Only compensate for
+        # the one-step dummy-run edge case; otherwise preserve the historical
+        # stage-1 schedule used by request-level forward().
+        sigma_count = num_steps + 2 if self.is_distilled and num_steps == 1 else num_steps + 1
+        return np.linspace(0.999, 0.0, sigma_count)[:-1]
+
     def prepare_encode(
         self,
         state: DiffusionRequestState,
@@ -570,7 +577,7 @@ class HeliosPipeline(nn.Module, CFGParallelMixin, ProgressBarMixin, DiffusionPip
             image_seq_len = (state.latents.shape[-1] * state.latents.shape[-2] * state.latents.shape[-3]) // (
                 patch_size[0] * patch_size[1] * patch_size[2]
             )
-            sigmas = np.linspace(0.999, 0.0, extra["num_steps"] + 1)[:-1]
+            sigmas = self._stage1_sigmas(extra["num_steps"])
             mu = calculate_shift(image_seq_len)
             self.scheduler.set_timesteps(extra["num_steps"], device=self.device, sigmas=sigmas, mu=mu)
             state.timesteps = self.scheduler.timesteps
@@ -1182,7 +1189,7 @@ class HeliosPipeline(nn.Module, CFGParallelMixin, ProgressBarMixin, DiffusionPip
                 image_seq_len = (latents.shape[-1] * latents.shape[-2] * latents.shape[-3]) // (
                     patch_size[0] * patch_size[1] * patch_size[2]
                 )
-                sigmas = np.linspace(0.999, 0.0, num_steps + 1)[:-1]
+                sigmas = self._stage1_sigmas(num_steps)
                 mu = calculate_shift(image_seq_len)
                 self.scheduler.set_timesteps(num_steps, device=device, sigmas=sigmas, mu=mu)
                 timesteps = self.scheduler.timesteps
