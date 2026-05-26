@@ -32,17 +32,43 @@ class _DummyPipeline:
         return self._output
 
 
-class _StreamingPipeline:
+class _ChunkStepPipeline:
     device = torch.device("cpu")
+    supports_step_execution = True
 
     def __init__(self, outputs):
         self._outputs = outputs
-        self.forward_calls = 0
+        self.prepare_calls = 0
+        self.decode_calls = 0
 
-    def forward(self, req):
-        del req
-        self.forward_calls += 1
-        yield from self._outputs
+    def prepare_encode(self, state):
+        self.prepare_calls += 1
+        state.prompt_embeds = torch.zeros(1, 1, 1)
+        state.latents = torch.zeros(1, 1)
+        state.timesteps = torch.tensor([1.0, 0.0])
+        state.step_index = 0
+        state.step_in_chunk = 0
+        state.chunk_num_steps = 2
+        state.total_chunks = len(self._outputs)
+        return state
+
+    def denoise_step(self, input_batch):
+        return torch.ones_like(input_batch.latents)
+
+    def step_scheduler(self, state, noise_pred):
+        state.latents = noise_pred
+        state.step_index += 1
+        state.step_in_chunk += 1
+
+    def post_decode(self, state):
+        output = self._outputs[self.decode_calls]
+        self.decode_calls += 1
+        state.chunk_index += 1
+        state.step_index = 0
+        state.step_in_chunk = 0
+        if not state.request_denoise_completed:
+            state.latents = torch.zeros(1, 1)
+        return output
 
 
 def _make_request(skip_cache_refresh: bool = True):
@@ -66,6 +92,7 @@ def _make_runner(cache_backend, cache_backend_name: str, enable_cache_dit_summar
     runner.pipeline = _DummyPipeline(output=SimpleNamespace(output="ok"))
     runner.cache_backend = cache_backend
     runner.offload_backend = None
+    runner.state_cache = {}
     runner.od_config = SimpleNamespace(
         cache_backend=cache_backend_name,
         enable_cache_dit_summary=enable_cache_dit_summary,
@@ -82,26 +109,45 @@ def _make_runner(cache_backend, cache_backend_name: str, enable_cache_dit_summar
 
 @pytest.mark.core_model
 @pytest.mark.cpu
-def test_execute_model_streaming_yields_pipeline_chunks(monkeypatch):
-    """In streaming output mode, ensure that the chunks yielded by the pipeline are forwarded to DiffusionModelRunner"""
+def test_execute_stepwise_streaming_returns_chunks_at_boundaries(monkeypatch):
+    """Step streaming returns empty step results until a chunk decode boundary."""
     chunks = [
         DiffusionOutput(output="chunk-0", finished=False, chunk_index=0, total_chunks=2),
         DiffusionOutput(output="chunk-1", finished=True, chunk_index=1, total_chunks=2),
     ]
-    runner = _make_runner(cache_backend=None, cache_backend_name="cache_dit")
-    runner.pipeline = _StreamingPipeline(chunks)
+    runner = _make_runner(cache_backend=None, cache_backend_name=None)
+    runner.pipeline = _ChunkStepPipeline(chunks)
     runner.od_config.streaming_output = True
+    runner.od_config.step_execution = True
     req = _make_request(skip_cache_refresh=True)
+    req.request_ids = ["req"]
 
     monkeypatch.setattr(model_runner_module, "set_forward_context", _noop_forward_context)
     monkeypatch.setattr(model_runner_module.current_omni_platform, "reset_peak_memory_stats", lambda: None)
     monkeypatch.setattr(model_runner_module.current_omni_platform, "max_memory_reserved", lambda: 0)
     monkeypatch.setattr(model_runner_module.current_omni_platform, "max_memory_allocated", lambda: 0)
+    scheduler_output = SimpleNamespace(
+        finished_req_ids=set(),
+        scheduled_new_reqs=[SimpleNamespace(sched_req_id="req", req=req)],
+        scheduled_cached_reqs=SimpleNamespace(sched_req_ids=[]),
+    )
 
-    outputs = list(DiffusionModelRunner.execute_model(runner, req))
+    first = DiffusionModelRunner.execute_stepwise(runner, scheduler_output)
+    assert first.get_req_output("req").result is None
 
-    assert outputs == chunks
-    assert runner.pipeline.forward_calls == 1
+    scheduler_output = SimpleNamespace(
+        finished_req_ids=set(),
+        scheduled_new_reqs=[],
+        scheduled_cached_reqs=SimpleNamespace(sched_req_ids=["req"]),
+    )
+    second = DiffusionModelRunner.execute_stepwise(runner, scheduler_output)
+    assert second.get_req_output("req").result == chunks[0]
+    assert second.get_req_output("req").finished is False
+
+    DiffusionModelRunner.execute_stepwise(runner, scheduler_output)
+    fourth = DiffusionModelRunner.execute_stepwise(runner, scheduler_output)
+    assert fourth.get_req_output("req").result == chunks[1]
+    assert fourth.get_req_output("req").finished is True
 
 
 @pytest.mark.core_model
@@ -114,6 +160,9 @@ def test_execute_model_skips_cache_summary_without_active_cache_backend(monkeypa
     cache_summary_calls = []
 
     monkeypatch.setattr(model_runner_module, "set_forward_context", _noop_forward_context)
+    monkeypatch.setattr(model_runner_module.current_omni_platform, "reset_peak_memory_stats", lambda: None)
+    monkeypatch.setattr(model_runner_module.current_omni_platform, "max_memory_reserved", lambda: 0)
+    monkeypatch.setattr(model_runner_module.current_omni_platform, "max_memory_allocated", lambda: 0)
     monkeypatch.setattr(
         model_runner_module,
         "cache_summary",
@@ -139,6 +188,9 @@ def test_execute_model_emits_cache_summary_with_active_cache_dit_backend(monkeyp
     cache_summary_calls = []
 
     monkeypatch.setattr(model_runner_module, "set_forward_context", _noop_forward_context)
+    monkeypatch.setattr(model_runner_module.current_omni_platform, "reset_peak_memory_stats", lambda: None)
+    monkeypatch.setattr(model_runner_module.current_omni_platform, "max_memory_reserved", lambda: 0)
+    monkeypatch.setattr(model_runner_module.current_omni_platform, "max_memory_allocated", lambda: 0)
     monkeypatch.setattr(
         model_runner_module,
         "cache_summary",

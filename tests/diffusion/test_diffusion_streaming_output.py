@@ -47,40 +47,33 @@ from vllm_omni.outputs import OmniRequestOutput
 pytestmark = [pytest.mark.core_model, pytest.mark.diffusion, pytest.mark.cpu]
 
 
-class _StreamingPipeline:
-    supports_streaming_output = True
+class _StepStreamingPipeline:
+    supports_step_execution = True
 
     def __init__(self, outputs: list[DiffusionOutput]) -> None:
         self.outputs = outputs
         self.requests: list[Any] = []
 
-    def _forward_generator(self, request):
+    def step_outputs(self, request):
         self.requests.append(request)
-        yield from self.outputs
-
-    def forward(self, request):
-        return self._forward_generator(request)
+        return list(self.outputs)
 
 
 class _FailingStreamingPipeline:
-    supports_streaming_output = True
+    supports_step_execution = True
 
     def __init__(self) -> None:
         self.requests: list[Any] = []
 
-    def _forward_generator(self, request):
+    def step_outputs(self, request):
         self.requests.append(request)
-        yield DiffusionOutput(custom_output={"chunk": 0}, finished=False)
         raise RuntimeError("stream failed midway")
-
-    def forward(self, request):
-        return self._forward_generator(request)
 
 
 class _PipelineBackedEngine:
-    """DiffusionEngine stand-in that drives ``step_streaming`` from a mock pipeline."""
+    """DiffusionEngine stand-in that exposes step-streaming chunks from a mock pipeline."""
 
-    def __init__(self, pipeline: _StreamingPipeline | _FailingStreamingPipeline) -> None:
+    def __init__(self, pipeline: _StepStreamingPipeline | _FailingStreamingPipeline) -> None:
         self.pipeline = pipeline
         self.executor = SimpleNamespace(
             register_failure_callback=MagicMock(),
@@ -88,7 +81,17 @@ class _PipelineBackedEngine:
         )
 
     async def step_streaming(self, request):
-        for output in self.pipeline.forward(request):
+        try:
+            outputs = self.pipeline.step_outputs(request)
+        except Exception as exc:
+            outputs = [
+                DiffusionOutput(custom_output={"chunk": 0}, finished=False),
+                DiffusionOutput(error=str(exc), finished=True),
+            ]
+        for output in outputs:
+            if output.error is not None:
+                yield [OmniRequestOutput.from_error(request_id=request.request_id, error_message=output.error)]
+                continue
             custom_output = output.custom_output or {}
             yield [
                 OmniRequestOutput.from_diffusion(
@@ -109,7 +112,7 @@ class TestPipelineStreamingOutputToStageDiffusionClient:
     @pytest.mark.asyncio
     async def test_streaming_output_reaches_stage_client_from_mock_pipeline(self) -> None:
         """Mock pipeline chunks over ZMQ reach StageDiffusionClient with correct finished flags."""
-        pipeline = _StreamingPipeline(
+        pipeline = _StepStreamingPipeline(
             [
                 DiffusionOutput(custom_output={"chunk": 0}, finished=False),
                 DiffusionOutput(custom_output={"chunk": 1}, finished=True),
@@ -142,7 +145,7 @@ class TestPipelineStreamingOutputToStageDiffusionClient:
     @classmethod
     async def _run_streaming_client_proc(
         cls,
-        pipeline: _StreamingPipeline | _FailingStreamingPipeline,
+        pipeline: _StepStreamingPipeline | _FailingStreamingPipeline,
         *,
         request_id: str,
     ) -> list[OmniRequestOutput]:
@@ -221,7 +224,7 @@ class TestPipelineStreamingOutputToEntrypoint:
     @pytest.mark.asyncio
     async def test_streaming_output_reaches_async_omni_from_mock_pipeline(self) -> None:
         """Mock pipeline streaming chunks reach AsyncOmni.generate() via inline stage and orchestrator."""
-        pipeline = _StreamingPipeline(
+        pipeline = _StepStreamingPipeline(
             [
                 DiffusionOutput(custom_output={"chunk": 0}, finished=False),
                 DiffusionOutput(custom_output={"chunk": 1}, finished=True),
@@ -252,7 +255,7 @@ class TestPipelineStreamingOutputToEntrypoint:
     async def test_streaming_output_reaches_api_websocket_from_mock_pipeline(self, mocker: MockerFixture) -> None:
         """Mock pipeline streaming chunks reach the video WebSocket handler through AsyncOmni.generate()."""
         frames = [np.full((4, 4, 3), fill_value=i, dtype=np.uint8) for i in range(2)]
-        pipeline = _StreamingPipeline(
+        pipeline = _StepStreamingPipeline(
             [
                 DiffusionOutput(custom_output={"chunk": 0, "images": [frames]}, finished=False),
                 DiffusionOutput(custom_output={"chunk": 1, "images": [frames]}, finished=True),
@@ -381,7 +384,7 @@ class TestPipelineStreamingOutputToEntrypoint:
             del request_ids
 
     @classmethod
-    def _make_inline_pipeline_client(cls, pipeline: _StreamingPipeline) -> InlineStageDiffusionClient:
+    def _make_inline_pipeline_client(cls, pipeline: _StepStreamingPipeline) -> InlineStageDiffusionClient:
         """Build an inline diffusion stage client whose engine runs the given mock pipeline."""
         metadata = StageMetadata(
             stage_id=0,
@@ -458,26 +461,26 @@ def _make_vllm_config():
 class TestSupportedPipelines:
     """Streaming-output protocol checks for supported pipelines."""
 
-    def test_helios_supports_streaming_output(self) -> None:
+    def test_helios_supports_step_execution_for_streaming_output(self) -> None:
         from vllm_omni.diffusion.models.helios.pipeline_helios import HeliosPipeline
-        from vllm_omni.diffusion.models.interface import SupportsStreamingOutput, supports_streaming_output
+        from vllm_omni.diffusion.models.interface import SupportsStepExecution, supports_step_execution
 
         # Avoid loading model weights; protocol membership depends on the class contract.
         pipeline = object.__new__(HeliosPipeline)
 
-        assert pipeline.supports_streaming_output is True
-        assert supports_streaming_output(pipeline) is True
-        assert isinstance(pipeline, SupportsStreamingOutput) is True
+        assert pipeline.supports_step_execution is True
+        assert supports_step_execution(pipeline) is True
+        assert isinstance(pipeline, SupportsStepExecution) is True
 
-    def test_load_model_rejects_unsupported_streaming_output(self, monkeypatch) -> None:
-        class _NoStreamingPipeline:
+    def test_load_model_rejects_streaming_output_without_step_execution(self, monkeypatch) -> None:
+        class _NoStepPipeline:
             def forward(self): ...
 
         class _FakeDiffusersPipelineLoader:
             def __init__(self, *args, **kwargs): ...
 
             def load_model(self, **kwargs):
-                return _NoStreamingPipeline()
+                return _NoStepPipeline()
 
         class _FakeDeviceMemoryProfiler:
             consumed_memory = 0
@@ -497,7 +500,8 @@ class TestSupportedPipelines:
             cache_backend=None,
             cache_config=None,
             streaming_output=True,
-            model_class_name="NoStreamingPipeline",
+            step_execution=False,
+            model_class_name="NoStepPipeline",
             parallel_config=SimpleNamespace(use_hsdp=False),
         )
         runner.device = torch.device("cpu")
@@ -511,5 +515,5 @@ class TestSupportedPipelines:
         monkeypatch.setattr(model_runner_module, "get_offload_backend", lambda *args, **kwargs: None)
         monkeypatch.setattr(model_runner_module, "get_cache_backend", lambda *args, **kwargs: None)
 
-        with pytest.raises(ValueError, match="NoStreamingPipeline"):
+        with pytest.raises(ValueError, match="NoStepPipeline"):
             DiffusionModelRunner.load_model(runner)

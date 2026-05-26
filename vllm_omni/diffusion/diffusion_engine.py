@@ -9,7 +9,7 @@ import inspect
 import queue
 import threading
 import time
-from collections.abc import AsyncGenerator, Generator, Iterable
+from collections.abc import AsyncGenerator, Iterable
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -135,9 +135,14 @@ class DiffusionEngine:
             and "sampling_params" in inspect.signature(self.post_process_func).parameters
         )
 
+        self.step_execution = bool(getattr(od_config, "step_execution", False))
+        if self.od_config.streaming_output and not self.step_execution:
+            logger.warning("streaming_output=True requires step_execution=True; enabling step execution.")
+            self.od_config.step_execution = True
+            self.step_execution = True
+
         executor_class = DiffusionExecutor.get_class(od_config)
         self.executor = executor_class(od_config)
-        self.step_execution = bool(getattr(od_config, "step_execution", False))
         self.scheduler: SchedulerInterface = scheduler or (
             StepScheduler() if self.step_execution else RequestScheduler()
         )
@@ -165,8 +170,6 @@ class DiffusionEngine:
         self._rpc_queue: queue.Queue[_RpcTask] = queue.Queue()
         if self.step_execution:
             self.execute_fn = self.executor.execute_step
-        elif self.od_config.streaming_output:
-            self.execute_fn = self.executor.execute_streaming_request
         else:
             self.execute_fn = self.executor.execute_request
 
@@ -508,62 +511,35 @@ class DiffusionEngine:
                     self._handle_finished_requests(sched_output.finished_req_ids, None)
                 continue
 
-            if not self.od_config.streaming_output:
-                try:
-                    runner_output: BaseRunnerOutput = self.execute_fn(sched_output)  # pyright: ignore[reportAssignmentType]
-                except Exception as exc:
-                    logger.error(
-                        "Execution failed for diffusion requests %s", sched_output.scheduled_req_ids, exc_info=True
-                    )
-                    runner_output = BatchRunnerOutput.from_list(
-                        [
-                            RunnerOutput(
-                                req_id=req_id,
-                                step_index=None,
-                                finished=True,
-                                result=DiffusionOutput(error=str(exc)),
-                            )
-                            for req_id in sched_output.scheduled_req_ids
-                        ]
-                    )
+            try:
+                runner_output: BaseRunnerOutput = self.execute_fn(sched_output)  # pyright: ignore[reportAssignmentType]
+            except Exception as exc:
+                logger.error(
+                    "Execution failed for diffusion requests %s", sched_output.scheduled_req_ids, exc_info=True
+                )
+                runner_output = BatchRunnerOutput.from_list(
+                    [
+                        RunnerOutput(
+                            req_id=req_id,
+                            step_index=None,
+                            finished=True,
+                            result=DiffusionOutput(error=str(exc)),
+                        )
+                        for req_id in sched_output.scheduled_req_ids
+                    ]
+                )
 
-                self._process_aborts_queue()
-                self._process_rpc_queue()
-                finished_req_ids = self.scheduler.update_from_output(sched_output, runner_output)
-                self._handle_finished_requests(finished_req_ids, runner_output)
+            self._process_aborts_queue()
+            self._process_rpc_queue()
+            finished_req_ids = self.scheduler.update_from_output(sched_output, runner_output)
+            if self.od_config.streaming_output:
+                self._handle_step_streaming_runner_output(
+                    finished_req_ids,
+                    sched_output.scheduled_req_ids,
+                    runner_output,
+                )
             else:
-                generator: Generator[BaseRunnerOutput, None, None] = self.execute_fn(sched_output)  # pyright: ignore[reportAssignmentType]
-                while True:
-                    met_error = False
-                    try:
-                        streaming_runner_output: BaseRunnerOutput = next(generator)  # pyright: ignore[reportAssignmentType]
-                    except StopIteration:
-                        break
-                    except Exception as exc:
-                        logger.error(
-                            "Execution failed for diffusion requests %s",
-                            sched_output.scheduled_req_ids,
-                            exc_info=True,
-                        )
-                        streaming_runner_output = BatchRunnerOutput.from_list(
-                            [
-                                RunnerOutput(
-                                    req_id=req_id,
-                                    step_index=None,
-                                    finished=True,
-                                    result=DiffusionOutput(error=str(exc)),
-                                )
-                                for req_id in sched_output.scheduled_req_ids
-                            ]
-                        )
-                        met_error = True
-                    self._process_aborts_queue()
-                    self._process_rpc_queue()
-                    finished_req_ids = self.scheduler.update_from_output(sched_output, streaming_runner_output)
-                    scheduled_req_ids = sched_output.scheduled_req_ids
-                    self._handle_streaming_runner_output(finished_req_ids, scheduled_req_ids, streaming_runner_output)
-                    if met_error:
-                        break
+                self._handle_finished_requests(finished_req_ids, runner_output)
 
         # Engine is stopping: fail any RPCs still queued so callers don't hang.
         self._fail_pending_rpcs(RuntimeError("DiffusionEngine is shutting down."))
@@ -648,17 +624,19 @@ class DiffusionEngine:
             out = self._finalize_finished_request(rid, None, missing_result_error=missing_result_error)
             self._put_streaming_output_with_cv(rid, out)
 
-    def _handle_streaming_runner_output(
+    def _handle_step_streaming_runner_output(
         self,
         finished_req_ids: set[str],
         scheduled_req_ids: list[str],
         runner_output: BaseRunnerOutput,
     ) -> None:
         """
-        Mirrors `_handle_finished_requests()` in non-streaming mode when used for non-empty scheduler output.
-        Unlike non-streaming mode, it always delivers the (chunked) output for the scheduled requests (no matter
-        finished or not). For other requests (listed in `finished_req_ids` but not scheduled in this round),
-        deliver them as usual.
+        Deliver partial step-execution outputs in streaming mode.
+
+        Step execution returns one ``RunnerOutput`` per scheduled request per
+        engine tick. Most denoise steps have ``result=None``; chunk boundaries
+        return a ``DiffusionOutput`` that must be delivered even before the
+        scheduler marks the request finished.
         """
         delivered_finished_req_ids: set[str] = set()
 
@@ -782,57 +760,29 @@ class DiffusionEngine:
                 # NOTE: add_req_and_wait_for_response() is synchronous, will be only called
                 # within _dummy_run, only one request will be scheduled
                 sched_req_id = sched_output.scheduled_req_ids[0]
-                if not self.od_config.streaming_output:
-                    try:
-                        runner_output: BaseRunnerOutput = self.execute_fn(sched_output)  # pyright: ignore[reportAssignmentType]
-                    except EngineDeadError:
-                        raise
-                    except Exception as exc:
-                        logger.error("Execution failed for diffusion request %s", sched_req_id, exc_info=True)
-                        runner_output = RunnerOutput(
-                            req_id=sched_req_id,
-                            step_index=None,
-                            finished=True,
-                            result=DiffusionOutput(error=str(exc)),
-                        )
+                try:
+                    runner_output: BaseRunnerOutput = self.execute_fn(sched_output)  # pyright: ignore[reportAssignmentType]
+                except EngineDeadError:
+                    raise
+                except Exception as exc:
+                    logger.error("Execution failed for diffusion request %s", sched_req_id, exc_info=True)
+                    runner_output = RunnerOutput(
+                        req_id=sched_req_id,
+                        step_index=None,
+                        finished=True,
+                        result=DiffusionOutput(error=str(exc)),
+                    )
 
-                    self._process_aborts_queue()
+                self._process_aborts_queue()
 
-                    finished_req_ids = self.scheduler.update_from_output(sched_output, runner_output)
-                    if target_sched_req_id in finished_req_ids:
-                        req_output = runner_output.get_req_output(target_sched_req_id)
-                        return self._finalize_finished_request(
-                            target_sched_req_id,
-                            runner_output=req_output,
-                            missing_result_error="Diffusion execution finished without a final output.",
-                        )
-                else:  # streaming output mode
-                    generator: Generator[BaseRunnerOutput, None, None] = self.execute_fn(sched_output)  # pyright: ignore[reportAssignmentType]
-                    while True:
-                        try:
-                            runner_output = next(generator)
-                        except StopIteration:
-                            break
-                        except EngineDeadError:
-                            raise
-                        except Exception as exc:
-                            logger.error("Execution failed for diffusion request %s", sched_req_id, exc_info=True)
-                            runner_output = RunnerOutput(
-                                req_id=sched_req_id,
-                                step_index=None,
-                                finished=True,
-                                result=DiffusionOutput(error=str(exc)),
-                            )
-                            break
-                        self._process_aborts_queue()
-                        finished_req_ids = self.scheduler.update_from_output(sched_output, runner_output)
-                        if target_sched_req_id in finished_req_ids:
-                            req_output = runner_output.get_req_output(target_sched_req_id)
-                            return self._finalize_finished_request(
-                                target_sched_req_id,
-                                runner_output=req_output,
-                                missing_result_error="Diffusion streaming execution finished without a final output.",
-                            )
+                finished_req_ids = self.scheduler.update_from_output(sched_output, runner_output)
+                if target_sched_req_id in finished_req_ids:
+                    req_output = runner_output.get_req_output(target_sched_req_id)
+                    return self._finalize_finished_request(
+                        target_sched_req_id,
+                        runner_output=req_output,
+                        missing_result_error="Diffusion execution finished without a final output.",
+                    )
 
     def profile(self, is_start: bool = True, profile_prefix: str | None = None) -> None:
         """Start or stop profiling on all diffusion workers.

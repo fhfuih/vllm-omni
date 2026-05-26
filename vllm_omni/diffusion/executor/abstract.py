@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from collections.abc import Callable, Generator
+from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
 
 from vllm.utils.import_utils import resolve_obj_by_qualname
@@ -77,13 +77,6 @@ class DiffusionExecutor(ABC):
     @abstractmethod
     def execute_request(self, scheduler_output: DiffusionSchedulerOutput) -> BaseRunnerOutput:
         """Execute request-mode work from a scheduler output."""
-        pass
-
-    @abstractmethod
-    def execute_streaming_request(
-        self, scheduler_output: DiffusionSchedulerOutput
-    ) -> Generator[BaseRunnerOutput, None, None]:
-        """Execute streaming request-mode work from a scheduler output."""
         pass
 
     @abstractmethod

@@ -5,7 +5,7 @@ import multiprocessing.connection
 import threading
 import time
 import weakref
-from collections.abc import Callable, Generator
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
@@ -317,71 +317,9 @@ class MultiprocDiffusionExecutor(DiffusionExecutor):
             result=result,
         )
 
-    def execute_streaming_request(
-        self,
-        scheduler_output: DiffusionSchedulerOutput,
-    ) -> Generator[BaseRunnerOutput, None, None]:
-        """Mirrors `execute_request` but for streaming output mode. It doesn't reuse existing `collective_rpc()` helper
-        because that function waits for all outputs before returning."""
-        from vllm_omni.diffusion.worker.utils import RunnerOutput
-
-        self._ensure_open()
-        if scheduler_output.num_scheduled_reqs != 1:
-            raise ValueError(
-                f"Request mode currently supports batch_size=1, "
-                f"but got {scheduler_output.num_scheduled_reqs} scheduled requests."
-            )
-
-        new_req = scheduler_output.scheduled_new_reqs[0]
-        rpc_request = {
-            "type": "rpc",
-            "method": "execute_model",
-            "args": (new_req.req, self.od_config),
-            "kwargs": {},
-            "output_rank": 0,
-            "exec_all_ranks": True,
-        }
-
-        try:
-            self._broadcast_mq.enqueue(rpc_request)
-            while True:
-                response = self._dequeue_one_with_failure_polling(None, "execute_model")
-
-                try:
-                    unpack_diffusion_output_shm(response)
-                except Exception as e:
-                    logger.warning("SHM unpack failed (data may already be inline): %s", e)
-
-                if isinstance(response, dict) and response.get("status") == "error":
-                    raise RuntimeError(
-                        f"Worker failed with error '{response.get('error')}', "
-                        "please check the stack trace above for the root cause"
-                    )
-
-                if not isinstance(response, DiffusionOutput):
-                    raise RuntimeError(
-                        "Unexpected response type for execute_streaming_request chunked output in streaming mode: "
-                        f"{type(response)!r}"
-                    )
-
-                yield RunnerOutput(
-                    req_id=new_req.sched_req_id,
-                    step_index=None,
-                    finished=response.finished,
-                    result=response,
-                )
-                if response.finished:
-                    break
-        except Exception as e:
-            logger.error(f"RPC call execute_streaming_request failed: {e}")
-            raise
-
     def execute_step(self, scheduler_output: DiffusionSchedulerOutput) -> BaseRunnerOutput:
         """Forward step-mode scheduler output to worker execute_stepwise RPC."""
         from vllm_omni.diffusion.worker.utils import BaseRunnerOutput, RunnerOutput
-
-        if self.od_config.streaming_output:
-            raise NotImplementedError("Step execution is currently not compatible with streaming output mode.")
 
         self._ensure_open()
         result = self.collective_rpc(

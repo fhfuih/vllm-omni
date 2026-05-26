@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import copy
 import time
-from collections.abc import Generator, Iterable
+from collections.abc import Iterable
 from contextlib import nullcontext
 from typing import Any
 
@@ -28,7 +28,7 @@ from vllm_omni.diffusion.compile import regionally_compile
 from vllm_omni.diffusion.data import DiffusionOutput, OmniDiffusionConfig
 from vllm_omni.diffusion.forward_context import set_forward_context
 from vllm_omni.diffusion.model_loader.diffusers_loader import DiffusersPipelineLoader
-from vllm_omni.diffusion.models.interface import supports_step_execution, supports_streaming_output
+from vllm_omni.diffusion.models.interface import supports_step_execution
 from vllm_omni.diffusion.offloader import get_offload_backend
 from vllm_omni.diffusion.registry import _NO_CACHE_ACCELERATION
 from vllm_omni.diffusion.request import OmniDiffusionRequest
@@ -148,16 +148,19 @@ class DiffusionModelRunner(OmniConnectorModelRunnerMixin):
         )
         logger.info("Model runner: Model loaded successfully.")
 
+        if self.od_config.streaming_output and not getattr(self.od_config, "step_execution", False):
+            logger.warning("streaming_output=True requires step_execution=True; enabling step execution.")
+            self.od_config.step_execution = True
+
         if getattr(self.od_config, "step_execution", False) and not self.supports_step_mode():
             raise ValueError(
                 "step_execution=True requires a pipeline implementing "
                 "prepare_encode(), denoise_step(), step_scheduler(), and post_decode(); "
                 f"{self.od_config.model_class_name} does not support that contract."
             )
-        if self.od_config.streaming_output and not supports_streaming_output(self.pipeline):
+        if self.od_config.streaming_output and not self.supports_step_mode():
             raise ValueError(
-                "streaming_output=True requires a pipeline implementing "
-                "_forward_generator(); "
+                "streaming_output=True requires step execution support; "
                 f"{self.od_config.model_class_name} does not support that contract."
             )
 
@@ -226,7 +229,7 @@ class DiffusionModelRunner(OmniConnectorModelRunnerMixin):
             pool_overhead_gb / peak_reserved_gb * 100 if peak_reserved_gb > 0 else 0.0,
         )
 
-    def execute_model(self, req: OmniDiffusionRequest) -> DiffusionOutput | Generator[DiffusionOutput, None, None]:
+    def execute_model(self, req: OmniDiffusionRequest) -> DiffusionOutput:
         """
         Execute a forward pass for the given requests.
 
@@ -298,9 +301,6 @@ class DiffusionModelRunner(OmniConnectorModelRunnerMixin):
             if is_primary:
                 current_omni_platform.reset_peak_memory_stats()
 
-            if self.od_config.streaming_output:
-                return self._execute_model_streaming(req, grad_context, is_primary)
-
             with set_forward_context(vllm_config=self.vllm_config, omni_diffusion_config=self.od_config):
                 with record_function("pipeline_forward"):
                     # Normally, only save the returned output. Do memory and cache summary later.
@@ -311,29 +311,6 @@ class DiffusionModelRunner(OmniConnectorModelRunnerMixin):
 
             self._summarize_cache()
             return output
-
-    def _execute_model_streaming(
-        self,
-        req: OmniDiffusionRequest,
-        grad_context: torch.no_grad | torch.inference_mode,
-        is_primary: bool,
-    ) -> Generator[DiffusionOutput, None, None]:
-        # [NOTE] Although the caller wraps a grad_context, that only ensures the context before the
-        # generator itself is created and returned, not during the actual generation (inference).
-        # Thus, we still need to wrap the grad_context within the generator.
-        with grad_context:
-            with set_forward_context(vllm_config=self.vllm_config, omni_diffusion_config=self.od_config):
-                with record_function("pipeline_forward"):
-                    generator: Generator[DiffusionOutput, None, None] = self.pipeline.forward(req)
-                    for output in generator:
-                        # Record peak memory without reset_peak_memory_stats.
-                        # Every streamed chunk's peak memory is the peak since the forward() call.
-                        if is_primary:
-                            self._record_peak_memory(output)
-                        yield output
-
-        # Summarize after the entire forward() call is complete.
-        self._summarize_cache()
 
     def _summarize_cache(self) -> None:
         # NOTE:
@@ -441,7 +418,7 @@ class DiffusionModelRunner(OmniConnectorModelRunnerMixin):
         scatter_latents(states, input_batch)
 
         for state in states:
-            if interrupted or state.denoise_completed:
+            if interrupted or state.request_denoise_completed:
                 self.state_cache.pop(state.req_id, None)
 
     def _prepare_attn_metadata(self, input_batch: InputBatch) -> Any:
@@ -499,15 +476,24 @@ class DiffusionModelRunner(OmniConnectorModelRunnerMixin):
                             req, noise_pred[offset : offset + row_num] if noise_pred is not None else None
                         )
                         offset = offset + row_num
-                        if req.denoise_completed:
+                        if self.od_config.streaming_output:
+                            should_decode = req.chunk_denoise_completed
+                        else:
+                            should_decode = req.denoise_completed
+
+                        if should_decode:
                             result = self.pipeline.post_decode(req)
                         else:
                             result = None
+                        # finished should be computed after post_decode() advanced chunk_index
+                        finished = (
+                            req.request_denoise_completed if self.od_config.streaming_output else req.denoise_completed
+                        )
                         runner_output_list.append(
                             RunnerOutput(
                                 req_id=req.req_id,
                                 step_index=req.step_index,
-                                finished=req.denoise_completed,
+                                finished=finished,
                                 result=result,
                             )
                         )

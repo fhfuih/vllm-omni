@@ -576,7 +576,7 @@ class TestDiffusionEngine:
             result=DiffusionOutput(output="chunk-0", finished=False, chunk_index=0, total_chunks=2),
         )
         finished_req_ids = engine.scheduler.update_from_output(sched_output, chunk)
-        engine._handle_streaming_runner_output(finished_req_ids, sched_output.scheduled_req_ids, chunk)
+        engine._handle_step_streaming_runner_output(finished_req_ids, sched_output.scheduled_req_ids, chunk)
 
         notified_chunk = await asyncio.wait_for(queue.get(), timeout=1)
         assert notified_chunk.output == "chunk-0"
@@ -590,7 +590,7 @@ class TestDiffusionEngine:
             result=DiffusionOutput(output="chunk-1", finished=True, chunk_index=1, total_chunks=2),
         )
         finished_req_ids = engine.scheduler.update_from_output(sched_output, final_chunk)
-        engine._handle_streaming_runner_output(finished_req_ids, sched_output.scheduled_req_ids, final_chunk)
+        engine._handle_step_streaming_runner_output(finished_req_ids, sched_output.scheduled_req_ids, final_chunk)
 
         notified_final = await asyncio.wait_for(queue.get(), timeout=1)
         assert notified_final.output == "chunk-1"

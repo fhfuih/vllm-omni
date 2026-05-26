@@ -19,6 +19,7 @@ from vllm_omni.diffusion.diffusion_engine import DiffusionEngine
 from vllm_omni.diffusion.executor.multiproc_executor import MultiprocDiffusionExecutor
 from vllm_omni.diffusion.sched import RequestScheduler
 from vllm_omni.diffusion.stage_diffusion_proc import StageDiffusionProc
+from vllm_omni.diffusion.worker.utils import RunnerOutput
 from vllm_omni.inputs.data import OmniDiffusionSamplingParams
 from vllm_omni.outputs import OmniRequestOutput
 
@@ -397,63 +398,32 @@ class TestMultiprocExecutorRaisesEngineDeadError:
             )
 
 
-class TestMultiprocExecutorStreamingOutput:
-    """MultiprocExecutor plays well with streaming output mode"""
+class TestMultiprocExecutorStepStreamingOutput:
+    """Streaming output uses step execution and one worker reply per step."""
 
-    def test_collective_rpc_returns_single_response_even_when_streaming_enabled(self):
-        """Streaming request handling lives in execute_streaming_request(), not collective_rpc()."""
-        executor, req_q, res_q = _make_executor()
-        executor.od_config.streaming_output = True
-        chunks = [
-            DiffusionOutput(output=torch.tensor([0]), finished=False, chunk_index=0, total_chunks=2),
-            DiffusionOutput(output=torch.tensor([1]), finished=True, chunk_index=1, total_chunks=2),
-        ]
-
-        def _worker():
-            req_q.get(timeout=10)
-            for chunk in chunks:
-                res_q.put(chunk)
-                time.sleep(0.1)
-
-        thread = threading.Thread(target=_worker, daemon=True)
-        thread.start()
-
-        result = executor.collective_rpc("execute_model", args=(MagicMock(),), unique_reply_rank=0, exec_all_ranks=True)
-
-        assert result == chunks[0]
-        thread.join(timeout=2)
-
-    def test_execute_streaming_request_wraps_each_chunk_as_runner_output(self):
-        """In streaming mode, executer correctly converts DiffusionOutput chunks/streams to RunnerOutput."""
+    def test_execute_step_allows_streaming_output_mode(self):
         executor, req_q, res_q = _make_executor()
         executor.od_config = SimpleNamespace(streaming_output=True)  # pyright: ignore[reportAttributeAccessIssue]
-        chunks = [
-            DiffusionOutput(output="chunk-0", finished=False, chunk_index=0, total_chunks=2),
-            DiffusionOutput(output="chunk-1", finished=True, chunk_index=1, total_chunks=2),
-        ]
+        runner_output = RunnerOutput(
+            req_id="sched-stream",
+            step_index=1,
+            finished=False,
+            result=DiffusionOutput(output="chunk-0", finished=False, chunk_index=0, total_chunks=2),
+        )
         scheduler_output = SimpleNamespace(
-            num_scheduled_reqs=1,
-            scheduled_new_reqs=[
-                SimpleNamespace(
-                    sched_req_id="sched-stream",
-                    req=MagicMock(),
-                )
-            ],
+            scheduled_req_ids=["sched-stream"],
         )
 
         def _worker():
             req_q.get(timeout=10)
-            for chunk in chunks:
-                res_q.put(chunk)
+            res_q.put(runner_output)
 
         thread = threading.Thread(target=_worker, daemon=True)
         thread.start()
 
-        outputs = list(MultiprocDiffusionExecutor.execute_streaming_request(executor, scheduler_output))  # pyright: ignore[reportArgumentType]
+        output = MultiprocDiffusionExecutor.execute_step(executor, scheduler_output)  # pyright: ignore[reportArgumentType]
 
-        assert [out.req_id for out in outputs] == ["sched-stream", "sched-stream"]
-        assert [out.finished for out in outputs] == [False, True]
-        assert [out.result for out in outputs] == chunks
+        assert output is runner_output
         thread.join(timeout=2)
 
 
