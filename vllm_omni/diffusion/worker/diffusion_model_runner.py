@@ -303,24 +303,20 @@ class DiffusionModelRunner(OmniConnectorModelRunnerMixin):
 
             with set_forward_context(vllm_config=self.vllm_config, omni_diffusion_config=self.od_config):
                 with record_function("pipeline_forward"):
-                    # Normally, only save the returned output. Do memory and cache summary later.
                     output = self.pipeline.forward(req)
 
             if is_primary:
                 self._record_peak_memory(output)
 
-            self._summarize_cache()
+            # NOTE:
+            if (
+                self.cache_backend is not None
+                and self.cache_backend.is_enabled()
+                and self.od_config.cache_backend == "cache_dit"
+                and self.od_config.enable_cache_dit_summary
+            ):
+                cache_summary(self.pipeline, details=True)
             return output
-
-    def _summarize_cache(self) -> None:
-        # NOTE:
-        if (
-            self.cache_backend is not None
-            and self.cache_backend.is_enabled()
-            and self.od_config.cache_backend == "cache_dit"
-            and self.od_config.enable_cache_dit_summary
-        ):
-            cache_summary(self.pipeline, details=True)
 
     # ------------------------------------------------------------------
     # Step-wise execution

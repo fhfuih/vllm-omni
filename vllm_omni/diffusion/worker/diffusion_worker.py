@@ -363,7 +363,7 @@ class DiffusionWorker:
         profiler = self._get_profiler()
         ctx = profiler.annotate_context_manager("diffusion_forward") if profiler else nullcontext()
         with ctx:
-            output = self.model_runner.execute_model(req)  # pyright: ignore[reportAssignmentType]
+            output = self.model_runner.execute_model(req)
         if profiler:
             profiler.step()
         return output
