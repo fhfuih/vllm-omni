@@ -159,10 +159,14 @@ def set_forward_context(
             # Local import to avoid importing vllm.config.vllm at module import time.
             from vllm.config.vllm import set_current_vllm_config
 
+            enable_torch_wrap = vllm_config.compilation_config.ir_enable_torch_wrap
+            # enable_torch_wrap = True
+            # enable_torch_wrap = False
+            print(f"!!!!!!!!!!DEBUG!!!!!!!!!!!! enable_torch_wrap: {enable_torch_wrap}")
             with (
                 set_current_vllm_config(vllm_config),
                 vllm_config.kernel_config.ir_op_priority.set_priority(),
-                vllm.ir.enable_torch_wrap(vllm_config.compilation_config.ir_enable_torch_wrap),
+                vllm.ir.enable_torch_wrap(enable_torch_wrap),
             ):
                 yield
 

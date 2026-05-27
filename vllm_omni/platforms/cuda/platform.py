@@ -137,6 +137,7 @@ class CudaOmniPlatform(OmniPlatform, CudaPlatformBase):
     def get_default_ir_op_priority(cls, vllm_config: VllmConfig) -> IrOpPriorityConfig:
         """Copied from vllm/platforms/cuda/platform.py v0.20.0 with force using vllm_c kernels"""
         default = ["vllm_c", "native"]  # Originally using "native" here when compiling
+        # default = ["native"]  # Originally using "native" here when compiling
 
         # Use oink if enabled for rms_norm
         # TODO(Laurawly/luka): remove this env var,
