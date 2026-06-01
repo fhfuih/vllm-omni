@@ -34,6 +34,7 @@ from vllm_omni.diffusion.models.qwen_image.cfg_parallel import (
 from vllm_omni.diffusion.models.qwen_image.pipeline_qwen_image import calculate_shift
 from vllm_omni.diffusion.models.qwen_image.pipeline_qwen_image_edit import (
     calculate_dimensions,
+    prepare_image_for_vae_preprocess,
     retrieve_latents,
     retrieve_timesteps,
 )
@@ -147,6 +148,7 @@ def get_qwen_image_edit_plus_pre_process_func(
                 vae_image_sizes.append((vae_width, vae_height))
 
                 condition_images.append(image_processor.resize(img, condition_height, condition_width))
+                img = prepare_image_for_vae_preprocess(img)
                 vae_images.append(image_processor.preprocess(img, vae_height, vae_width).unsqueeze(2))
 
             # Store preprocessed images in request
@@ -685,6 +687,7 @@ class QwenImageEditPlusPipeline(
                 condition_image_sizes.append((condition_width, condition_height))
                 vae_image_sizes.append((vae_width, vae_height))
                 condition_images.append(self.image_processor.resize(img, condition_height, condition_width))
+                img = prepare_image_for_vae_preprocess(img, self.device)
                 vae_images.append(self.image_processor.preprocess(img, vae_height, vae_width).unsqueeze(2))
 
         num_inference_steps = req.sampling_params.num_inference_steps or num_inference_steps

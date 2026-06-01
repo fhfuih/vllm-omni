@@ -12,6 +12,7 @@ from typing import Any, cast
 import numpy as np
 import PIL.Image
 import torch
+import torchvision.transforms.functional as TF
 from diffusers.image_processor import VaeImageProcessor
 from diffusers.models.autoencoders.autoencoder_kl_qwenimage import (
     AutoencoderKLQwenImage,
@@ -118,6 +119,7 @@ def get_qwen_image_edit_pre_process_func(
             ):
                 image = image_processor.resize(image, calculated_height, calculated_width)
                 prompt_image = image
+                image = prepare_image_for_vae_preprocess(image)
                 image = image_processor.preprocess(image, calculated_height, calculated_width)
                 image = image.unsqueeze(2)
 
@@ -163,6 +165,17 @@ def calculate_dimensions(target_area: float, ratio: float):
     height = round(height / 32) * 32
 
     return width, height
+
+
+def prepare_image_for_vae_preprocess(
+    image: PIL.Image.Image | np.ndarray | torch.Tensor,
+    device: torch.device | str | None = None,
+) -> torch.Tensor:
+    """Move PIL/ndarray inputs to the target device before VaeImageProcessor.preprocess."""
+    device = device or get_local_device()
+    if isinstance(image, (PIL.Image.Image, np.ndarray)):
+        return TF.to_tensor(image).to(device)
+    return image.to(device)
 
 
 def retrieve_timesteps(
@@ -716,6 +729,7 @@ class QwenImageEditPipeline(nn.Module, SupportImageInput, QwenImageCFGParallelMi
             if image is not None and not (isinstance(image, torch.Tensor) and image.size(1) == self.latent_channels):
                 image = self.image_processor.resize(image, calculated_height, calculated_width)
                 prompt_image = image
+                image = prepare_image_for_vae_preprocess(image, self.device)
                 image = self.image_processor.preprocess(image, calculated_height, calculated_width)
                 image = image.unsqueeze(2)
 
