@@ -117,9 +117,9 @@ def get_qwen_image_edit_pre_process_func(
             if image is not None and not (
                 isinstance(image, torch.Tensor) and len(image.shape) > 1 and image.shape[1] == latent_channels
             ):
-                image = image_processor.resize(image, calculated_height, calculated_width)
-                prompt_image = image
-                image = prepare_image_for_vae_preprocess(image)
+                resized_image = image_processor.resize(image, calculated_height, calculated_width)
+                prompt_image = prepare_condition_images_for_processor(resized_image)
+                image = prepare_image_for_vae_preprocess(resized_image)
                 image = image_processor.preprocess(image, calculated_height, calculated_width)
                 image = image.unsqueeze(2)
 
@@ -176,6 +176,19 @@ def prepare_image_for_vae_preprocess(
     if isinstance(image, (PIL.Image.Image, np.ndarray)):
         return TF.to_tensor(image).to(device)
     return image.to(device)
+
+
+def prepare_condition_images_for_processor(
+    image: PIL.Image.Image | np.ndarray | torch.Tensor | list[PIL.Image.Image | np.ndarray | torch.Tensor | Any] | None,
+    device: torch.device | str | None = None,
+) -> torch.Tensor | list[torch.Tensor] | None:
+    """Convert VaeImageProcessor-resized condition images to GPU CHW tensors for Qwen2VLProcessor."""
+    if image is None:
+        return None
+    device = device or get_local_device()
+    if isinstance(image, list):
+        return [prepare_image_for_vae_preprocess(im, device) for im in image]
+    return prepare_image_for_vae_preprocess(image, device)
 
 
 def retrieve_timesteps(
@@ -409,13 +422,14 @@ class QwenImageEditPipeline(nn.Module, SupportImageInput, QwenImageCFGParallelMi
     def _get_qwen_prompt_embeds(
         self,
         prompt: str | list[str] = None,
-        image: PIL.Image.Image | torch.Tensor | None = None,
+        image: torch.Tensor | list[torch.Tensor] | None = None,
         dtype: torch.dtype | None = None,
         max_sequence_length: int | None = None,
         prompt_name: str = "prompt",
     ):
         """Get prompt embeddings with image support for editing."""
         dtype = dtype or self.text_encoder.dtype
+        image = prepare_condition_images_for_processor(image, self.device)
 
         prompt = [prompt] if isinstance(prompt, str) else prompt
 
@@ -456,6 +470,7 @@ class QwenImageEditPipeline(nn.Module, SupportImageInput, QwenImageCFGParallelMi
             images=image,
             padding=True,
             return_tensors="pt",
+            images_kwargs={"device": self.device},
         ).to(self.device)
 
         outputs = self.text_encoder(
@@ -485,7 +500,7 @@ class QwenImageEditPipeline(nn.Module, SupportImageInput, QwenImageCFGParallelMi
     def encode_prompt(
         self,
         prompt: str | list[str],
-        image: torch.Tensor | None = None,
+        image: torch.Tensor | list[torch.Tensor] | None = None,
         num_images_per_prompt: int = 1,
         prompt_embeds: torch.Tensor | None = None,
         prompt_embeds_mask: torch.Tensor | None = None,
@@ -711,7 +726,10 @@ class QwenImageEditPipeline(nn.Module, SupportImageInput, QwenImageCFGParallelMi
         if not isinstance(first_prompt, str) and "preprocessed_image" in (
             additional_information := first_prompt.get("additional_information", {})
         ):
-            prompt_image = additional_information.get("prompt_image")
+            prompt_image = prepare_condition_images_for_processor(
+                additional_information.get("prompt_image"),
+                self.device,
+            )
             image = additional_information.get("preprocessed_image")
             calculated_height = additional_information.get("calculated_height")
             calculated_width = additional_information.get("calculated_width")
@@ -727,9 +745,9 @@ class QwenImageEditPipeline(nn.Module, SupportImageInput, QwenImageCFGParallelMi
             height, width = normalize_min_aligned_size(height, width, self.vae_scale_factor * 2)
 
             if image is not None and not (isinstance(image, torch.Tensor) and image.size(1) == self.latent_channels):
-                image = self.image_processor.resize(image, calculated_height, calculated_width)
-                prompt_image = image
-                image = prepare_image_for_vae_preprocess(image, self.device)
+                resized_image = self.image_processor.resize(image, calculated_height, calculated_width)
+                prompt_image = prepare_condition_images_for_processor(resized_image, self.device)
+                image = prepare_image_for_vae_preprocess(resized_image, self.device)
                 image = self.image_processor.preprocess(image, calculated_height, calculated_width)
                 image = image.unsqueeze(2)
 

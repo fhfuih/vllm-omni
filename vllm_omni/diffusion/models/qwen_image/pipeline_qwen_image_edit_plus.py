@@ -34,6 +34,7 @@ from vllm_omni.diffusion.models.qwen_image.cfg_parallel import (
 from vllm_omni.diffusion.models.qwen_image.pipeline_qwen_image import calculate_shift
 from vllm_omni.diffusion.models.qwen_image.pipeline_qwen_image_edit import (
     calculate_dimensions,
+    prepare_condition_images_for_processor,
     prepare_image_for_vae_preprocess,
     retrieve_latents,
     retrieve_timesteps,
@@ -147,7 +148,8 @@ def get_qwen_image_edit_plus_pre_process_func(
                 condition_image_sizes.append((condition_width, condition_height))
                 vae_image_sizes.append((vae_width, vae_height))
 
-                condition_images.append(image_processor.resize(img, condition_height, condition_width))
+                resized_condition = image_processor.resize(img, condition_height, condition_width)
+                condition_images.append(prepare_condition_images_for_processor(resized_condition, get_local_device()))
                 img = prepare_image_for_vae_preprocess(img)
                 vae_images.append(image_processor.preprocess(img, vae_height, vae_width).unsqueeze(2))
 
@@ -336,6 +338,7 @@ class QwenImageEditPlusPipeline(
     ):
         """Get prompt embeddings with support for multiple images."""
         dtype = dtype or self.text_encoder.dtype
+        image = prepare_condition_images_for_processor(image, self.device)
 
         prompt = [prompt] if isinstance(prompt, str) else prompt
 
@@ -386,6 +389,7 @@ class QwenImageEditPlusPipeline(
             images=image,
             padding=True,
             return_tensors="pt",
+            images_kwargs={"device": self.device},
         ).to(self.device)
 
         outputs = self.text_encoder(
@@ -650,7 +654,10 @@ class QwenImageEditPlusPipeline(
             and "vae_images" in (additional_information := first_prompt.get("additional_information", {}))
             and "condition_images" in additional_information
         ):
-            condition_images = additional_information.get("condition_images")
+            condition_images = prepare_condition_images_for_processor(
+                additional_information.get("condition_images"),
+                self.device,
+            )
             vae_images = additional_information.get("vae_images")
             condition_image_sizes = additional_information.get("condition_image_sizes")
             vae_image_sizes = additional_information.get("vae_image_sizes")
@@ -686,7 +693,8 @@ class QwenImageEditPlusPipeline(
                 vae_width, vae_height = calculate_dimensions(VAE_IMAGE_SIZE, image_width / image_height)
                 condition_image_sizes.append((condition_width, condition_height))
                 vae_image_sizes.append((vae_width, vae_height))
-                condition_images.append(self.image_processor.resize(img, condition_height, condition_width))
+                resized_condition = self.image_processor.resize(img, condition_height, condition_width)
+                condition_images.append(prepare_condition_images_for_processor(resized_condition, self.device))
                 img = prepare_image_for_vae_preprocess(img, self.device)
                 vae_images.append(self.image_processor.preprocess(img, vae_height, vae_width).unsqueeze(2))
 
