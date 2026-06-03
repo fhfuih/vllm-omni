@@ -33,6 +33,7 @@ from vllm_omni.distributed.omni_connectors.utils.serialization import (
     OmniMsgpackEncoder,
 )
 from vllm_omni.distributed.omni_coordinator import OmniCoordClientForStage
+from vllm_omni.engine.stage_init_utils import set_death_signal
 from vllm_omni.inputs.data import OmniDiffusionSamplingParams
 from vllm_omni.outputs import OmniRequestOutput
 
@@ -40,6 +41,14 @@ if TYPE_CHECKING:
     from vllm_omni.diffusion.data import OmniDiffusionConfig
 
 logger = init_logger(__name__)
+
+
+_SIGNAL_EXIT_BASE = 128
+
+
+def _signal_exit_code(signum: int) -> int:
+    """Return the conventional process exit code for signal-driven exits."""
+    return _SIGNAL_EXIT_BASE + signum
 
 
 class StageDiffusionProc:
@@ -151,7 +160,6 @@ class StageDiffusionProc:
         request = OmniDiffusionRequest(
             prompts=[prompt],
             sampling_params=sampling_params,
-            request_ids=[request_id],
             request_id=request_id,
             kv_sender_info=kv_sender_info,
         )
@@ -175,7 +183,6 @@ class StageDiffusionProc:
         request = OmniDiffusionRequest(
             prompts=[prompt],
             sampling_params=sampling_params,
-            request_ids=[request_id],
             request_id=request_id,
             kv_sender_info=kv_sender_info,
         )
@@ -208,7 +215,6 @@ class StageDiffusionProc:
         request = OmniDiffusionRequest(
             prompts=prompts,
             sampling_params=sampling_params,
-            request_ids=[f"{request_id}-{i}" for i in range(len(prompts))],
             request_id=request_id,
             kv_sender_info=kv_sender_info,
         )
@@ -661,11 +667,13 @@ class StageDiffusionProc:
         """
         shutdown_requested = False
 
+        set_death_signal(signal.SIGTERM)
+
         def signal_handler(signum: int, frame: Any) -> None:
             nonlocal shutdown_requested
             if not shutdown_requested:
                 shutdown_requested = True
-                raise SystemExit(128 + signum)
+                raise SystemExit(_signal_exit_code(signum))
 
         signal.signal(signal.SIGTERM, signal_handler)
         signal.signal(signal.SIGINT, signal_handler)

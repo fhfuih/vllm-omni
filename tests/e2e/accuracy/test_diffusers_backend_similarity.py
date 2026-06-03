@@ -25,15 +25,19 @@ from PIL import Image
 
 from benchmarks.accuracy.common import pil_to_base64
 from tests.e2e.accuracy.helpers import (
-    _run_ffmpeg_similarity,
     apply_ftfy_mock,
     assert_similarity,
     env_to_apply_ftfy_mock_in_subproc,
     model_output_dir,
 )
-from tests.e2e.accuracy.wan22_i2v.test_wan22_i2v_video_similarity import (
-    _parse_psnr_score,
-    _parse_ssim_score,
+from tests.e2e.accuracy.helpers import (
+    parse_psnr_score as _parse_psnr_score,
+)
+from tests.e2e.accuracy.helpers import (
+    parse_ssim_score as _parse_ssim_score,
+)
+from tests.e2e.accuracy.helpers import (
+    run_ffmpeg_similarity as _run_ffmpeg_similarity,
 )
 from tests.helpers.env import run_post_test_cleanup, run_pre_test_cleanup
 from tests.helpers.mark import hardware_test

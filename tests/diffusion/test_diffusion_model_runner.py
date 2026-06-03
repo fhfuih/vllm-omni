@@ -93,6 +93,7 @@ def _make_runner(cache_backend, cache_backend_name: str, enable_cache_dit_summar
     runner.cache_backend = cache_backend
     runner.offload_backend = None
     runner.state_cache = {}
+    runner.prompt_embed_cache = None
     runner.od_config = SimpleNamespace(
         cache_backend=cache_backend_name,
         enable_cache_dit_summary=enable_cache_dit_summary,
@@ -120,7 +121,7 @@ def test_execute_stepwise_streaming_returns_chunks_at_boundaries(monkeypatch):
     runner.od_config.streaming_output = True
     runner.od_config.step_execution = True
     req = _make_request(skip_cache_refresh=True)
-    req.request_ids = ["req"]
+    req.request_id = "req"
 
     monkeypatch.setattr(model_runner_module, "set_forward_context", _noop_forward_context)
     monkeypatch.setattr(model_runner_module.current_omni_platform, "reset_peak_memory_stats", lambda: None)
@@ -128,26 +129,26 @@ def test_execute_stepwise_streaming_returns_chunks_at_boundaries(monkeypatch):
     monkeypatch.setattr(model_runner_module.current_omni_platform, "max_memory_allocated", lambda: 0)
     scheduler_output = SimpleNamespace(
         finished_req_ids=set(),
-        scheduled_new_reqs=[SimpleNamespace(sched_req_id="req", req=req)],
-        scheduled_cached_reqs=SimpleNamespace(sched_req_ids=[]),
+        scheduled_new_reqs=[SimpleNamespace(request_id="req", req=req)],
+        scheduled_cached_reqs=SimpleNamespace(request_ids=[]),
     )
 
     first = DiffusionModelRunner.execute_stepwise(runner, scheduler_output)
-    assert first.get_req_output("req").result is None
+    assert first.get_request_output("req").result is None
 
     scheduler_output = SimpleNamespace(
         finished_req_ids=set(),
         scheduled_new_reqs=[],
-        scheduled_cached_reqs=SimpleNamespace(sched_req_ids=["req"]),
+        scheduled_cached_reqs=SimpleNamespace(request_ids=["req"]),
     )
     second = DiffusionModelRunner.execute_stepwise(runner, scheduler_output)
-    assert second.get_req_output("req").result == chunks[0]
-    assert second.get_req_output("req").finished is False
+    assert second.get_request_output("req").result == chunks[0]
+    assert second.get_request_output("req").finished is False
 
     DiffusionModelRunner.execute_stepwise(runner, scheduler_output)
     fourth = DiffusionModelRunner.execute_stepwise(runner, scheduler_output)
-    assert fourth.get_req_output("req").result == chunks[1]
-    assert fourth.get_req_output("req").finished is True
+    assert fourth.get_request_output("req").result == chunks[1]
+    assert fourth.get_request_output("req").finished is True
 
 
 @pytest.mark.core_model
@@ -392,8 +393,4 @@ def test_vllm_set_forward_context_implementation(monkeypatch):
                 "vllm_config",
             ),
         ),
-        ("ir_op_priority", None),
-        ("enable_torch_wrap", vllm_config.compilation_config.ir_enable_torch_wrap),
-        ("enable_torch_wrap_exit", vllm_config.compilation_config.ir_enable_torch_wrap),
-        ("ir_op_priority_exit", None),
     ], ERROR_MESSAGE

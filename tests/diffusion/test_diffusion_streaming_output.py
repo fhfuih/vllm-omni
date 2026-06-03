@@ -124,7 +124,7 @@ class TestPipelineStreamingOutputToStageDiffusionClient:
         assert [output.request_id for output in outputs] == ["req-stream", "req-stream"]
         assert [output.finished for output in outputs] == [False, True]
         assert [output.custom_output["chunk"] for output in outputs] == [0, 1]
-        assert pipeline.requests[0].request_ids == ["req-stream"]
+        assert pipeline.requests[0].request_id == "req-stream"
 
     @pytest.mark.asyncio
     async def test_streaming_midway_error_reaches_stage_client_after_prior_chunk(self) -> None:
@@ -245,7 +245,7 @@ class TestPipelineStreamingOutputToEntrypoint:
                 outputs.append(output)
 
             await _wait_for(lambda: len(pipeline.requests) == 1)
-            assert pipeline.requests[0].request_ids == ["req-omni"]
+            assert pipeline.requests[0].request_id.startswith("req-omni-")
             assert [output.custom_output["chunk"] for output in outputs] == [0, 1]
             assert [getattr(output.request_output, "finished", output.finished) for output in outputs] == [False, True]
         finally:
@@ -322,7 +322,7 @@ class TestPipelineStreamingOutputToEntrypoint:
                     assert done["chunks"] == 2
 
             await _wait_for(lambda: len(pipeline.requests) == 1)
-            assert pipeline.requests[0].request_ids
+            assert pipeline.requests[0].request_id
         finally:
             await self._shutdown_pipeline_omni_harness(omni, fixture, inline_client)
 
@@ -427,6 +427,8 @@ class TestPipelineStreamingOutputToEntrypoint:
         omni.event_resolver = AsyncEventResolver()
         omni._enable_ar_profiler = False
         omni._is_sleeping = False
+        omni.prom_metrics = MagicMock()
+        omni.mod_metrics = MagicMock()
         omni.resolve_sampling_params_list = lambda params, allow_delta_coercion: params
         omni._compute_final_stage_id = lambda output_modalities: 0
         omni._log_summary_and_cleanup = lambda request_id: omni.request_states.pop(request_id, None)
