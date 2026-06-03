@@ -21,8 +21,6 @@ from PIL import Image
 from torchmetrics.image import PeakSignalNoiseRatio, StructuralSimilarityIndexMeasure
 
 FTFY_SITECUSTOMIZE_MOCK_DIR = Path(__file__).with_name("ftfy_mock")
-_SSIM_RE = re.compile(r"All:(?P<score>[0-9.]+)")
-_PSNR_RE = re.compile(r"average:(?P<score>[0-9.]+)")
 
 
 class IdentityFtfy:
@@ -73,6 +71,10 @@ def model_output_dir(parent_dir: Path, model: str) -> Path:
     path = parent_dir / safe_model_name
     path.mkdir(parents=True, exist_ok=True)
     return path
+
+
+_SSIM_RE = re.compile(r"All:(?P<score>[0-9.]+)")
+_PSNR_RE = re.compile(r"average:(?P<score>[0-9.]+)")
 
 
 def parse_video_metadata(payload: dict[str, Any]) -> dict[str, int | float]:
@@ -303,7 +305,7 @@ def assert_video_similarity_metrics(
     offline_path: Path,
     ssim_threshold: float,
     psnr_threshold: float,
-) -> None:
+) -> tuple[float, float]:
     ssim_output = run_ffmpeg_similarity("ssim", online_path, offline_path)
     psnr_output = run_ffmpeg_similarity("psnr", online_path, offline_path)
     ssim_score = parse_ssim_score(ssim_output)
@@ -337,6 +339,7 @@ def assert_video_similarity_metrics(
         f"PSNR below threshold: got {psnr_score:.6f}, expected >= {psnr_threshold:.6f}. "
         f"online={online_path} offline={offline_path}"
     )
+    return ssim_score, psnr_score
 
 
 def assert_similarity(
@@ -486,64 +489,6 @@ def compute_image_ssim_psnr(
     ssim_value = float(ssim_metric(pred_tensor, ref_tensor).item())
     psnr_value = float(psnr_metric(pred_tensor, ref_tensor).item())
     return ssim_value, psnr_value
-
-
-def compute_video_ssim_psnr(prediction: Path, reference: Path) -> tuple[float, float]:
-    """Compute video SSIM and PSNR by running ffmpeg's built-in filters."""
-    ssim_output = run_ffmpeg_similarity("ssim", prediction, reference)
-    psnr_output = run_ffmpeg_similarity("psnr", prediction, reference)
-    return parse_ssim_score(ssim_output), parse_psnr_score(psnr_output)
-
-
-def assert_video_similarity(
-    *,
-    model_name: str,
-    prediction: Path,
-    reference: Path,
-    ssim_threshold: float,
-    psnr_threshold: float,
-) -> tuple[float, float]:
-    prediction_metadata = probe_video(prediction)
-    reference_metadata = probe_video(reference)
-    assert prediction_metadata == reference_metadata, (
-        f"Video metadata mismatch for {model_name}:\n"
-        f"prediction={prediction_metadata}\n"
-        f"reference={reference_metadata}\n"
-        f"prediction_path={prediction}\n"
-        f"reference_path={reference}"
-    )
-
-    ssim_score, psnr_score = compute_video_ssim_psnr(prediction, reference)
-
-    print(f"{model_name} video similarity metrics:")
-    print(
-        "  SSIM:"
-        f" value={ssim_score:.6f},"
-        f" threshold>={ssim_threshold:.6f},"
-        " range=[0, 1],"
-        " higher_is_better=True,"
-        " interpretation=structural_similarity"
-    )
-    print(
-        "  PSNR:"
-        f" value={psnr_score:.6f} dB,"
-        f" threshold>={psnr_threshold:.6f} dB,"
-        " range=[0, +inf),"
-        " higher_is_better=True,"
-        " interpretation=pixel_error_in_decibels"
-    )
-    print(f"prediction_video={prediction}")
-    print(f"reference_video={reference}")
-
-    assert ssim_score >= ssim_threshold, (
-        f"SSIM below threshold for {model_name}: got {ssim_score:.6f}, expected >= {ssim_threshold:.6f}. "
-        f"prediction={prediction} reference={reference}"
-    )
-    assert psnr_score >= psnr_threshold, (
-        f"PSNR below threshold for {model_name}: got {psnr_score:.6f}, expected >= {psnr_threshold:.6f}. "
-        f"prediction={prediction} reference={reference}"
-    )
-    return ssim_score, psnr_score
 
 
 class CLIPScorer:

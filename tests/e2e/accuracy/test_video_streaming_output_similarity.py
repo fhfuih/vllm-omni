@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from tests.e2e.accuracy.helpers import assert_video_similarity
+from tests.e2e.accuracy.helpers import assert_video_similarity_metrics, probe_video
 from tests.helpers.mark import hardware_marks
 from tests.helpers.runtime import DiffusionResponse, OmniServer, OpenAIClientHandler
 
@@ -122,10 +122,20 @@ def test_helios_streaming_output_matches_non_streaming(
     record_property("helios_non_streaming_video", str(non_streaming_path))
     record_property("helios_non_streaming_latency_s", non_streaming_response.e2e_latency)
 
-    ssim, psnr = assert_video_similarity(
-        model_name="helios_streaming_output",
-        prediction=streaming_path,
-        reference=non_streaming_path,
+    streaming_metadata = probe_video(streaming_path)
+    non_streaming_metadata = probe_video(non_streaming_path)
+    assert streaming_metadata == non_streaming_metadata, (
+        f"Video metadata mismatch for helios_streaming_output:\n"
+        f"streaming={streaming_metadata}\n"
+        f"non_streaming={non_streaming_metadata}\n"
+        f"streaming_path={streaming_path}\n"
+        f"non_streaming_path={non_streaming_path}"
+    )
+
+    ssim, psnr = assert_video_similarity_metrics(
+        label="helios_streaming_output",
+        online_path=streaming_path,
+        offline_path=non_streaming_path,
         ssim_threshold=MIN_SSIM,
         psnr_threshold=MIN_PSNR_DB,
     )
