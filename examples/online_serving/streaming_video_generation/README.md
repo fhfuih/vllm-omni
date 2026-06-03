@@ -10,11 +10,11 @@ Start a diffusion video model with streaming output enabled:
 ```bash
 vllm serve BestWishYsh/Helios-Distilled \
   --omni \
-  --streaming-output \
+  --diffusion-streaming-output \
   --port 8000
 ```
 
-The `--streaming-output` CLI flag is forwarded as `streaming_output=True` in the default diffusion stage `engine_args`, then loaded by `OmniDiffusionConfig.from_kwargs()`.
+The `--diffusion-streaming-output` CLI flag is forwarded as `streaming_output=True` in the default diffusion stage `engine_args`, then loaded by `OmniDiffusionConfig.from_kwargs()`.
 
 ## WebSocket Protocol
 

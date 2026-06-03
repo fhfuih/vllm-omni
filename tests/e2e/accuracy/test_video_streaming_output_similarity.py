@@ -43,7 +43,7 @@ def _server_args(*, streaming_output: bool) -> list[str]:
         "--log-stats",
     ]
     if streaming_output:
-        args.append("--streaming-output")
+        args.append("--diffusion-streaming-output")
     return args
 
 

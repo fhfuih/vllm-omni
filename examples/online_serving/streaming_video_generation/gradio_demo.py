@@ -7,7 +7,7 @@ Usage:
     python gradio_demo.py --host 127.0.0.1 --port 7860
 
 Start a vLLM-Omni server with streaming output enabled first, for example:
-    vllm serve BestWishYsh/Helios-Distilled --omni --streaming-output --port 8000
+    vllm serve BestWishYsh/Helios-Distilled --omni --diffusion-streaming-output --port 8000
 """
 
 from __future__ import annotations
