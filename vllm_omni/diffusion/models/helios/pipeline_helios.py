@@ -280,7 +280,7 @@ class HeliosPipeline(nn.Module, CFGParallelMixin, ProgressBarMixin, DiffusionPip
         req = OmniDiffusionRequest(
             prompts=state.prompts or [],
             sampling_params=state.sampling,
-            request_ids=[state.req_id],
+            request_id=state.request_id,
         )
         extra = getattr(state.sampling, "extra_args", {}) or {}
 
