@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: Copyright contributors to the vLLM project
-"""Gradio demo for `/v1/videos/stream`.
+"""Gradio demo for `/v1/realtime/video`.
 
 Usage:
     python gradio_demo.py --host 127.0.0.1 --port 7860
@@ -142,7 +142,7 @@ def build_browser_stream_config(
         seed=seed if include_seed else None,
     )
     config = {
-        "url": f"ws://{host}:{int(port)}/v1/videos/stream",
+        "url": f"ws://{host}:{int(port)}/v1/realtime/video",
         "payload": payload,
     }
     return json.dumps(config, ensure_ascii=False), gr.update(value="Streaming...", interactive=False)
@@ -152,7 +152,7 @@ def create_demo() -> gr.Blocks:
     with gr.Blocks(title="Streaming Video Generation") as demo:
         gr.Markdown("# Streaming Video Generation")
         gr.Markdown(
-            "Connects to `WS /v1/videos/stream` in the browser and appends fMP4 chunks "
+            "Connects to `WS /v1/realtime/video` in the browser and appends fMP4 chunks "
             "directly to a Media Source Extensions video player."
         )
 

@@ -1,6 +1,6 @@
 # Streaming Video Generation
 
-This example uses the custom WebSocket endpoint `WS /v1/videos/stream` to receive a video byte stream as chunks are produced.
+This example uses the custom WebSocket endpoint `WS /v1/realtime/video` to receive a video byte stream as chunks are produced.
 It covers text-only video generation. Image/reference input is intentionally not included for now.
 
 ## Start The Server

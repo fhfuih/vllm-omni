@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: Copyright contributors to the vLLM project
-"""Text-only WebSocket client for `/v1/videos/stream`.
+"""Text-only WebSocket client for `/v1/realtime/video`.
 
 The client prints a line for every binary video chunk it receives and writes
 the received bytes to disk when the session finishes or is interrupted.
@@ -136,7 +136,7 @@ def save_video(
 async def stream_video(args: argparse.Namespace) -> None:
     payload = build_session_start(args)
     output_path = Path(args.output)
-    url = f"ws://{args.host}:{args.port}/v1/videos/stream"
+    url = f"ws://{args.host}:{args.port}/v1/realtime/video"
     chunks: list[bytes] = []
     total_bytes = 0
     total_frames = 0

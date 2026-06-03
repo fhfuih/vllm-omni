@@ -2149,7 +2149,7 @@ class OpenAIClientHandler:
         timeout_seconds: float = 600.0,
     ) -> list[DiffusionResponse]:
         """
-        Send a native ``/v1/videos/stream`` WebSocket request and return one
+        Send a native ``/v1/realtime/video`` WebSocket request and return one
         finalized MP4 artifact assembled from the streamed binary fragments.
         """
         if request_num != 1:
@@ -2188,7 +2188,7 @@ class OpenAIClientHandler:
 
         fps = float(payload.get("fps") or 16)
         stream_format = payload["format"]
-        url = self._build_ws_url("/v1/videos/stream")
+        url = self._build_ws_url("/v1/realtime/video")
 
         result = DiffusionResponse()
         chunks: list[bytes] = []

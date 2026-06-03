@@ -5,7 +5,7 @@
 Covers:
 - Mock pipeline -> StageDiffusionClient (ZMQ subprocess path)
 - Mock pipeline -> InlineStageDiffusionClient -> Orchestrator -> AsyncOmni
-- Mock pipeline -> InlineStageDiffusionClient -> Orchestrator -> AsyncOmni -> `/v1/videos/stream`
+- Mock pipeline -> InlineStageDiffusionClient -> Orchestrator -> AsyncOmni -> `/v1/realtime/video`
 """
 
 import asyncio
@@ -306,13 +306,13 @@ class TestPipelineStreamingOutputToEntrypoint:
         )
         app = FastAPI()
 
-        @app.websocket("/v1/videos/stream")
+        @app.websocket("/v1/realtime/video")
         async def ws_endpoint(websocket: WebSocket):
             await handler.handle_session(websocket)
 
         try:
             with TestClient(app) as client:
-                with client.websocket_connect("/v1/videos/stream") as ws:
+                with client.websocket_connect("/v1/realtime/video") as ws:
                     ws.send_json({"type": "session.start", "prompt": "integration test"})
                     assert ws.receive_json()["type"] == "video.start"
                     assert ws.receive_bytes() == b"pipeline-fmp4-0"

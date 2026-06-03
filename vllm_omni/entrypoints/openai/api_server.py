@@ -1485,7 +1485,7 @@ async def streaming_video_chat(websocket: WebSocket):
     await handler.handle_session(websocket)
 
 
-@router.websocket("/v1/videos/stream")
+@router.websocket("/v1/realtime/video")
 async def streaming_video_output(websocket: WebSocket):
     """WebSocket endpoint for streaming generated video output chunks."""
     handler = getattr(websocket.app.state, "openai_streaming_video_output", None)

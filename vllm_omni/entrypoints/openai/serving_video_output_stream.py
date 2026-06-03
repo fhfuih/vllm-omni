@@ -66,7 +66,7 @@ class _SessionProgress:
 
 
 class OmniStreamingVideoOutputHandler:
-    """Handles `/v1/videos/stream` sessions for generated video output."""
+    """Handles `/v1/realtime/video` sessions for generated video output."""
 
     def __init__(
         self,

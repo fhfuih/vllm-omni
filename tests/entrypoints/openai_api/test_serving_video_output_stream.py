@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: Copyright contributors to the vLLM project
-"""Unit tests for `/v1/videos/stream` WebSocket video output streaming."""
+"""Unit tests for `/v1/realtime/video` WebSocket video output streaming."""
 
 from __future__ import annotations
 
@@ -85,7 +85,7 @@ def _build_test_app(
     )
     app = FastAPI()
 
-    @app.websocket("/v1/videos/stream")
+    @app.websocket("/v1/realtime/video")
     async def ws_endpoint(websocket: WebSocket):
         await handler.handle_session(websocket)
 
@@ -117,7 +117,7 @@ class TestStreamingVideoOutputWebSocket:
         )
 
         with TestClient(app) as client:
-            with client.websocket_connect("/v1/videos/stream") as ws:
+            with client.websocket_connect("/v1/realtime/video") as ws:
                 ws.send_json({"type": "session.start", "prompt": "A cat walking in the rain"})
 
                 start = ws.receive_json()
@@ -150,7 +150,7 @@ class TestStreamingVideoOutputWebSocket:
         )
 
         with TestClient(app) as client:
-            with client.websocket_connect("/v1/videos/stream") as ws:
+            with client.websocket_connect("/v1/realtime/video") as ws:
                 ws.send_json({"type": "session.start", "prompt": "hello", "format": "webm"})
                 err = ws.receive_json()
                 assert err["type"] == "error"
@@ -177,7 +177,7 @@ class TestStreamingVideoOutputWebSocket:
         )
 
         with TestClient(app) as client:
-            with client.websocket_connect("/v1/videos/stream") as ws:
+            with client.websocket_connect("/v1/realtime/video") as ws:
                 ws.send_json({"type": "session.start", "prompt": "A cat walking in the rain"})
                 assert ws.receive_json()["type"] == "video.start"
                 assert ws.receive_bytes() == b"mp4-chunk-0"
@@ -210,7 +210,7 @@ class TestStreamingVideoOutputWebSocket:
         )
 
         with TestClient(app) as client:
-            with client.websocket_connect("/v1/videos/stream") as ws:
+            with client.websocket_connect("/v1/realtime/video") as ws:
                 ws.send_json({"type": "session.start", "prompt": "hello"})
                 assert ws.receive_json()["type"] == "video.start"
                 assert ws.receive_bytes() == b"mp4-chunk-0"
@@ -337,7 +337,7 @@ class TestStreamingVideoOutputStallTimeout:
         )
 
         with TestClient(app) as client:
-            with client.websocket_connect("/v1/videos/stream") as ws:
+            with client.websocket_connect("/v1/realtime/video") as ws:
                 ws.send_json({"type": "session.start", "prompt": "slow generation"})
                 assert ws.receive_json()["type"] == "video.start"
                 assert ws.receive_bytes() == b"mp4-chunk-0"
@@ -368,7 +368,7 @@ class TestStreamingVideoOutputStallTimeout:
         )
 
         with TestClient(app) as client:
-            with client.websocket_connect("/v1/videos/stream") as ws:
+            with client.websocket_connect("/v1/realtime/video") as ws:
                 ws.send_json({"type": "session.start", "prompt": "stalled"})
                 assert ws.receive_json()["type"] == "video.start"
                 err = ws.receive_json()
