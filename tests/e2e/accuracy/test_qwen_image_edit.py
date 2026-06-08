@@ -11,7 +11,7 @@ from diffusers import QwenImageEditPipeline, QwenImageEditPlusPipeline
 from PIL import Image
 
 from benchmarks.accuracy.common import decode_base64_image, pil_to_png_bytes
-from tests.e2e.accuracy.helpers import assert_images_pixel_close, assert_similarity, model_output_dir
+from tests.e2e.accuracy.helpers import assert_image_accuracy, model_output_dir
 from tests.helpers.env import run_post_test_cleanup, run_pre_test_cleanup
 from tests.helpers.mark import hardware_test
 from tests.helpers.runtime import OmniServer
@@ -28,6 +28,8 @@ TRUE_CFG_SCALE = 4.0
 SEED = 42
 SSIM_THRESHOLD = 0.94
 PSNR_THRESHOLD = 28.0
+MEAN_ABS_DIFF_THRESHOLD = 3e-2
+P99_ABS_DIFF_THRESHOLD = 4e-1
 
 EDIT_2511_MODEL = "Qwen/Qwen-Image-Edit-2511"
 EDIT_2511_MODEL_ENV_VAR = "QWEN_IMAGE_EDIT_2511_MODEL"
@@ -39,6 +41,8 @@ EDIT_2511_GUIDANCE_SCALE = 1.0
 EDIT_2511_SEED = 42
 EDIT_2511_MEAN_ABS_DIFF_THRESHOLD = 3e-2
 EDIT_2511_P99_ABS_DIFF_THRESHOLD = 4e-1
+EDIT_2511_SSIM_THRESHOLD = 0.94
+EDIT_2511_PSNR_THRESHOLD = 28.0
 EDIT_2511_NEGATIVE_PROMPT = " "
 EDIT_2511_PROMPT = (
     "将第二张图中人脸/猫狗脸转换为3D卡通形象，质量要求：毛发纹理自然电影级色彩校准，注意保留原图的外貌、"
@@ -267,7 +271,7 @@ def test_qwen_image_edit_single_matches_diffusers(
         accuracy_artifact_root=accuracy_artifact_root,
         qwen_bear_image=qwen_bear_image,
     )
-    assert_similarity(
+    assert_image_accuracy(
         model_name=SINGLE_MODEL,
         vllm_image=vllm_image,
         diffusers_image=diffusers_image,
@@ -275,6 +279,8 @@ def test_qwen_image_edit_single_matches_diffusers(
         height=HEIGHT,
         ssim_threshold=SSIM_THRESHOLD,
         psnr_threshold=PSNR_THRESHOLD,
+        mean_threshold=MEAN_ABS_DIFF_THRESHOLD,
+        p99_threshold=P99_ABS_DIFF_THRESHOLD,
     )
 
 
@@ -309,10 +315,12 @@ def test_qwen_image_edit_2511_matches_diffusers_pixelwise(accuracy_artifact_root
     print(f"  vllm_omni: {vllm_output_path}")
     print(f"  diffusers: {diffusers_output_path}")
 
-    assert_images_pixel_close(
+    assert_image_accuracy(
         model_name=EDIT_2511_MODEL,
         vllm_image=vllm_image,
         diffusers_image=diffusers_image,
+        ssim_threshold=EDIT_2511_SSIM_THRESHOLD,
+        psnr_threshold=EDIT_2511_PSNR_THRESHOLD,
         mean_threshold=EDIT_2511_MEAN_ABS_DIFF_THRESHOLD,
         p99_threshold=EDIT_2511_P99_ABS_DIFF_THRESHOLD,
     )

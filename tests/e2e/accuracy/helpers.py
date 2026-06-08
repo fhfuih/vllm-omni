@@ -341,16 +341,12 @@ def assert_video_similarity_metrics(
     )
 
 
-def assert_similarity(
+def _validate_image_pair_sizes(
     *,
-    model_name: str,
     vllm_image: Image.Image,
     diffusers_image: Image.Image,
-    ssim_threshold: float,
-    psnr_threshold: float,
     width: int | None = None,
     height: int | None = None,
-    compare_mode: str = "RGB",
 ) -> None:
     requested_size = (width, height) if width is not None and height is not None else None
     if requested_size is not None and diffusers_image.size != requested_size:
@@ -363,15 +359,159 @@ def assert_similarity(
         f"Online and diffusers output sizes mismatch: online={vllm_image.size}, diffusers={diffusers_image.size}"
     )
 
+
+def compute_image_pixel_metrics(
+    *,
+    vllm_image: Image.Image,
+    diffusers_image: Image.Image,
+    compare_mode: str = "RGB",
+) -> dict[str, float | dict[int, float]]:
+    vllm_array = np.asarray(vllm_image.convert(compare_mode), dtype=np.float32) / 255.0
+    diffusers_array = np.asarray(diffusers_image.convert(compare_mode), dtype=np.float32) / 255.0
+    channel_abs_diff = np.abs(vllm_array - diffusers_array)
+    mean_abs_diff = float(channel_abs_diff.mean())
+    p99_abs_diff = float(np.quantile(channel_abs_diff, 0.99))
+    percentiles = {
+        percentile: float(np.quantile(channel_abs_diff, percentile / 100.0)) for percentile in (50, 90, 95, 99, 99.9)
+    }
+    return {
+        "mean_abs_diff": mean_abs_diff,
+        "p99_abs_diff": p99_abs_diff,
+        "percentiles": percentiles,
+        "channel_abs_diff": channel_abs_diff,
+    }
+
+
+def print_image_pixel_metrics(
+    *,
+    model_name: str,
+    pixel_metrics: dict[str, float | dict[int, float] | np.ndarray],
+    mean_threshold: float,
+    p99_threshold: float,
+) -> None:
+    mean_abs_diff = float(pixel_metrics["mean_abs_diff"])
+    p99_abs_diff = float(pixel_metrics["p99_abs_diff"])
+    percentiles = pixel_metrics["percentiles"]
+    channel_abs_diff = pixel_metrics["channel_abs_diff"]
+    assert isinstance(percentiles, dict)
+    assert isinstance(channel_abs_diff, np.ndarray)
+
+    print(f"{model_name} pixel metrics:")
+    print(
+        f"  mean_abs_diff: value={mean_abs_diff:.6e}, threshold<={mean_threshold:.6e}, "
+        "range=[0, 1], lower_is_better=True"
+    )
+    print(
+        f"  p99_abs_diff: value={p99_abs_diff:.6e}, threshold<={p99_threshold:.6e}, range=[0, 1], lower_is_better=True"
+    )
+    print("  abs_diff_percentiles:")
+    for percentile, value in percentiles.items():
+        print(f"    p{percentile}: value={value:.6e}, range=[0, 1], lower_is_better=True")
+    print("  mismatch_ratios_by_channel_threshold:")
+    for tolerance in (0, 1, 2, 4, 8, 16, 32, 64, 128):
+        normalized_tolerance = tolerance / 255.0
+        pixel_mismatch = np.any(channel_abs_diff > normalized_tolerance, axis=-1)
+        pixel_mismatch_ratio = float(np.count_nonzero(pixel_mismatch) / pixel_mismatch.size)
+        channel_mismatch_ratio = float(
+            np.count_nonzero(channel_abs_diff > normalized_tolerance) / channel_abs_diff.size
+        )
+        print(
+            f"    threshold>{normalized_tolerance:.6e} ({tolerance}/255): pixel_ratio={pixel_mismatch_ratio:.8f}, "
+            f"channel_ratio={channel_mismatch_ratio:.8f}"
+        )
+
+
+def assert_image_accuracy(
+    *,
+    model_name: str,
+    vllm_image: Image.Image,
+    diffusers_image: Image.Image,
+    ssim_threshold: float,
+    psnr_threshold: float,
+    mean_threshold: float,
+    p99_threshold: float,
+    width: int | None = None,
+    height: int | None = None,
+    compare_mode: str = "RGB",
+) -> None:
+    """Compute, print, and assert SSIM, PSNR, and pixel closeness metrics."""
+    _validate_image_pair_sizes(
+        vllm_image=vllm_image,
+        diffusers_image=diffusers_image,
+        width=width,
+        height=height,
+    )
+
     ssim_score, psnr_score = compute_image_ssim_psnr(
         prediction=vllm_image,
         reference=diffusers_image,
         compare_mode=compare_mode,
     )
-    print(f"{model_name} similarity metrics:")
-    print(f"  SSIM: value={ssim_score:.6f}, threshold>={ssim_threshold:.6f}, range=[-1, 1], higher_is_better=True")
-    print(
-        f"  PSNR: value={psnr_score:.6f} dB, threshold>={psnr_threshold:.6f} dB, range=[0, +inf), higher_is_better=True"
+    pixel_metrics = compute_image_pixel_metrics(
+        vllm_image=vllm_image,
+        diffusers_image=diffusers_image,
+        compare_mode=compare_mode,
+    )
+
+    print_image_ssim_psnr(
+        model_name=model_name,
+        ssim_score=ssim_score,
+        psnr_score=psnr_score,
+        ssim_threshold=ssim_threshold,
+        psnr_threshold=psnr_threshold,
+    )
+    print_image_pixel_metrics(
+        model_name=model_name,
+        pixel_metrics=pixel_metrics,
+        mean_threshold=mean_threshold,
+        p99_threshold=p99_threshold,
+    )
+
+    assert ssim_score >= ssim_threshold, (
+        f"SSIM below threshold for {model_name}: got {ssim_score:.6f}, expected >= {ssim_threshold:.6f}."
+    )
+    assert psnr_score >= psnr_threshold, (
+        f"PSNR below threshold for {model_name}: got {psnr_score:.6f}, expected >= {psnr_threshold:.6f}."
+    )
+    mean_abs_diff = float(pixel_metrics["mean_abs_diff"])
+    p99_abs_diff = float(pixel_metrics["p99_abs_diff"])
+    assert mean_abs_diff <= mean_threshold and p99_abs_diff <= p99_threshold, (
+        f"Image diff exceeded threshold for {model_name}: mean_abs_diff={mean_abs_diff:.6e}, "
+        f"p99_abs_diff={p99_abs_diff:.6e} (thresholds: mean<={mean_threshold:.6e}, "
+        f"p99<={p99_threshold:.6e})"
+    )
+
+
+def assert_similarity(
+    *,
+    model_name: str,
+    vllm_image: Image.Image,
+    diffusers_image: Image.Image,
+    ssim_threshold: float,
+    psnr_threshold: float,
+    width: int | None = None,
+    height: int | None = None,
+    compare_mode: str = "RGB",
+) -> None:
+    """Compute, print, and assert SSIM and PSNR metrics."""
+    _validate_image_pair_sizes(
+        vllm_image=vllm_image,
+        diffusers_image=diffusers_image,
+        width=width,
+        height=height,
+    )
+
+    ssim_score, psnr_score = compute_image_ssim_psnr(
+        prediction=vllm_image,
+        reference=diffusers_image,
+        compare_mode=compare_mode,
+    )
+    print_image_ssim_psnr(
+        model_name=model_name,
+        ssim_score=ssim_score,
+        psnr_score=psnr_score,
+        ssim_threshold=ssim_threshold,
+        psnr_threshold=psnr_threshold,
     )
 
     assert ssim_score >= ssim_threshold, (
@@ -414,7 +554,7 @@ def assert_images_pixel_close(
     p99_threshold: float,
     compare_mode: str = "RGB",
 ) -> None:
-    """Assert full-image pixel closeness between online serving and diffusers output.
+    """Compute, print, and assert full-image pixel closeness metrics.
 
     Match the threshold style used by diffusion parallelism tests: convert both
     images to float32 RGB tensors in the [0, 1] range, then compare mean and p99
@@ -433,39 +573,20 @@ def assert_images_pixel_close(
         f"Online and diffusers output sizes mismatch: online={vllm_image.size}, diffusers={diffusers_image.size}"
     )
 
-    vllm_array = np.asarray(vllm_image.convert(compare_mode), dtype=np.float32) / 255.0
-    diffusers_array = np.asarray(diffusers_image.convert(compare_mode), dtype=np.float32) / 255.0
-    channel_abs_diff = np.abs(vllm_array - diffusers_array)
-    mean_abs_diff = float(channel_abs_diff.mean())
-    p99_abs_diff = float(np.quantile(channel_abs_diff, 0.99))
-    percentiles = {
-        percentile: float(np.quantile(channel_abs_diff, percentile / 100.0)) for percentile in (50, 90, 95, 99, 99.9)
-    }
-
-    print(f"{model_name} pixel metrics:")
-    print(
-        f"  mean_abs_diff: value={mean_abs_diff:.6e}, threshold<={mean_threshold:.6e}, "
-        "range=[0, 1], lower_is_better=True"
+    pixel_metrics = compute_image_pixel_metrics(
+        vllm_image=vllm_image,
+        diffusers_image=diffusers_image,
+        compare_mode=compare_mode,
     )
-    print(
-        f"  p99_abs_diff: value={p99_abs_diff:.6e}, threshold<={p99_threshold:.6e}, range=[0, 1], lower_is_better=True"
+    print_image_pixel_metrics(
+        model_name=model_name,
+        pixel_metrics=pixel_metrics,
+        mean_threshold=mean_threshold,
+        p99_threshold=p99_threshold,
     )
-    print("  abs_diff_percentiles:")
-    for percentile, value in percentiles.items():
-        print(f"    p{percentile}: value={value:.6e}, range=[0, 1], lower_is_better=True")
-    print("  mismatch_ratios_by_channel_threshold:")
-    for tolerance in (0, 1, 2, 4, 8, 16, 32, 64, 128):
-        normalized_tolerance = tolerance / 255.0
-        pixel_mismatch = np.any(channel_abs_diff > normalized_tolerance, axis=-1)
-        pixel_mismatch_ratio = float(np.count_nonzero(pixel_mismatch) / pixel_mismatch.size)
-        channel_mismatch_ratio = float(
-            np.count_nonzero(channel_abs_diff > normalized_tolerance) / channel_abs_diff.size
-        )
-        print(
-            f"    threshold>{normalized_tolerance:.6e} ({tolerance}/255): pixel_ratio={pixel_mismatch_ratio:.8f}, "
-            f"channel_ratio={channel_mismatch_ratio:.8f}"
-        )
 
+    mean_abs_diff = float(pixel_metrics["mean_abs_diff"])
+    p99_abs_diff = float(pixel_metrics["p99_abs_diff"])
     assert mean_abs_diff <= mean_threshold and p99_abs_diff <= p99_threshold, (
         f"Image diff exceeded threshold for {model_name}: mean_abs_diff={mean_abs_diff:.6e}, "
         f"p99_abs_diff={p99_abs_diff:.6e} (thresholds: mean<={mean_threshold:.6e}, "
@@ -488,6 +609,21 @@ def compute_image_ssim_psnr(
     ssim_value = float(ssim_metric(pred_tensor, ref_tensor).item())
     psnr_value = float(psnr_metric(pred_tensor, ref_tensor).item())
     return ssim_value, psnr_value
+
+
+def print_image_ssim_psnr(
+    *,
+    model_name: str,
+    ssim_score: float,
+    psnr_score: float,
+    ssim_threshold: float,
+    psnr_threshold: float,
+) -> None:
+    print(f"{model_name} similarity metrics:")
+    print(f"  SSIM: value={ssim_score:.6f}, threshold>={ssim_threshold:.6f}, range=[-1, 1], higher_is_better=True")
+    print(
+        f"  PSNR: value={psnr_score:.6f} dB, threshold>={psnr_threshold:.6f} dB, range=[0, +inf), higher_is_better=True"
+    )
 
 
 class CLIPScorer:

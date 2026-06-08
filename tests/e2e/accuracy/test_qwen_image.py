@@ -12,7 +12,7 @@ import torch
 from diffusers.pipelines.pipeline_utils import DiffusionPipeline
 from PIL import Image
 
-from tests.e2e.accuracy.helpers import assert_images_pixel_close, assert_similarity, model_output_dir
+from tests.e2e.accuracy.helpers import assert_image_accuracy, model_output_dir
 from tests.helpers.env import run_post_test_cleanup, run_pre_test_cleanup
 from tests.helpers.mark import hardware_test
 from tests.helpers.runtime import OmniServer
@@ -31,6 +31,8 @@ TRUE_CFG_SCALE = 4.0
 SEED = 42
 SSIM_THRESHOLD = 0.97
 PSNR_THRESHOLD = 30.0
+MEAN_ABS_DIFF_THRESHOLD = 3e-2
+P99_ABS_DIFF_THRESHOLD = 4e-1
 
 MODEL_2512_ID = "Qwen/Qwen-Image-2512"
 MODEL_2512_ENV_VAR = "QWEN_IMAGE_2512_MODEL"
@@ -54,6 +56,8 @@ TRUE_CFG_SCALE_2512 = 4.0
 SEED_2512 = 42
 MEAN_ABS_DIFF_THRESHOLD_2512 = 3e-2
 P99_ABS_DIFF_THRESHOLD_2512 = 4e-1
+SSIM_THRESHOLD_2512 = 0.94
+PSNR_THRESHOLD_2512 = 28.0
 
 
 def _model_name() -> str:
@@ -201,7 +205,7 @@ def test_qwen_image_matches_diffusers(accuracy_artifact_root: Path) -> None:
     vllm_output = _run_vllm_omni_qwen_image(model=model, output_path=output_dir / "vllm_omni.png")
     diffusers_output = _run_diffusers_qwen_image(model=model, output_path=output_dir / "diffusers.png")
 
-    assert_similarity(
+    assert_image_accuracy(
         model_name=MODEL_ID,
         vllm_image=vllm_output,
         diffusers_image=diffusers_output,
@@ -209,6 +213,8 @@ def test_qwen_image_matches_diffusers(accuracy_artifact_root: Path) -> None:
         height=HEIGHT,
         ssim_threshold=SSIM_THRESHOLD,
         psnr_threshold=PSNR_THRESHOLD,
+        mean_threshold=MEAN_ABS_DIFF_THRESHOLD,
+        p99_threshold=P99_ABS_DIFF_THRESHOLD,
     )
 
 
@@ -227,10 +233,12 @@ def test_qwen_image_2512_matches_diffusers_pixelwise(accuracy_artifact_root: Pat
     print(f"  vllm_omni: {vllm_output_path}")
     print(f"  diffusers: {diffusers_output_path}")
 
-    assert_images_pixel_close(
+    assert_image_accuracy(
         model_name=MODEL_2512_ID,
         vllm_image=vllm_output,
         diffusers_image=diffusers_output,
+        ssim_threshold=SSIM_THRESHOLD_2512,
+        psnr_threshold=PSNR_THRESHOLD_2512,
         mean_threshold=MEAN_ABS_DIFF_THRESHOLD_2512,
         p99_threshold=P99_ABS_DIFF_THRESHOLD_2512,
     )
