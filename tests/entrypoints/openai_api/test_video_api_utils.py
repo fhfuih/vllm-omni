@@ -103,7 +103,7 @@ def test_finalize_streaming_mp4_bytes_produces_progressive_mp4():
     """Fragment MP4 chunks are remuxed into decodable progressive MP4 bytes."""
     import numpy as np
 
-    from vllm_omni.diffusion.utils.media_utils import FragmentedMP4Muxer
+    from vllm_omni.diffusion.utils.media_utils import FragmentedMP4Muxer, finalize_streaming_video_bytes
 
     def _read_mp4_video_info(mp4_bytes: bytes) -> tuple[int, float, float | None, int, int]:
         import io
@@ -130,7 +130,7 @@ def test_finalize_streaming_mp4_bytes_produces_progressive_mp4():
     frames = np.zeros((input_frame_count, height, width, 3), dtype=np.uint8)
     streamed = muxer.mux_video_frames(frames) + muxer.close()
 
-    finalized = video_api_utils.finalize_streaming_video_bytes(streamed, input_format="m4s", fps=fps)
+    finalized = finalize_streaming_video_bytes(streamed, input_format="m4s", fps=fps)
     assert finalized
     assert finalized != streamed
 

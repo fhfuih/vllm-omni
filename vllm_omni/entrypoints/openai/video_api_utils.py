@@ -292,24 +292,6 @@ def create_streaming_video_encoder(
     raise ValueError(f"Unsupported streaming video format: {output_format}")
 
 
-def finalize_streaming_video_bytes(
-    video_bytes: bytes,
-    *,
-    input_format: StreamingVideoFormat,
-    fps: int | float,
-    video_codec_options: dict[str, str] | None = None,
-) -> bytes:
-    """Finalize streamed WebSocket video bytes into progressive MP4 bytes."""
-    from vllm_omni.diffusion.utils.media_utils import finalize_streaming_video_bytes as _finalize
-
-    return _finalize(
-        video_bytes,
-        input_format=input_format,
-        fps=float(fps),
-        video_codec_options=video_codec_options,
-    )
-
-
 def encode_video_base64(
     video: Any,
     fps: int,

@@ -113,7 +113,7 @@ def save_video(
         print("No video chunks received; nothing to save.")
         return
 
-    from vllm_omni.entrypoints.openai.video_api_utils import finalize_streaming_video_bytes
+    from vllm_omni.diffusion.utils.media_utils import finalize_streaming_video_bytes
 
     streamed_bytes = b"".join(chunks)
     playback_bytes = finalize_streaming_video_bytes(

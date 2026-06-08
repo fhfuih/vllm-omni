@@ -2220,7 +2220,8 @@ class OpenAIClientHandler:
                 if msg_type == "error":
                     raise RuntimeError(str(msg.get("message", msg)))
 
-        from vllm_omni.entrypoints.openai.video_api_utils import StreamingVideoFormat, finalize_streaming_video_bytes
+        from vllm_omni.diffusion.utils.media_utils import finalize_streaming_video_bytes
+        from vllm_omni.entrypoints.openai.video_api_utils import StreamingVideoFormat
 
         streamed_bytes = b"".join(chunks)
         if not streamed_bytes:
