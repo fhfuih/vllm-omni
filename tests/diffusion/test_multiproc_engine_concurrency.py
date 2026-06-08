@@ -404,26 +404,47 @@ class TestMultiprocExecutorStepStreamingOutput:
     def test_execute_step_allows_streaming_output_mode(self):
         executor, req_q, res_q = _make_executor()
         executor.od_config = SimpleNamespace(streaming_output=True)  # pyright: ignore[reportAttributeAccessIssue]
-        runner_output = RunnerOutput(
-            request_id="sched-stream",
-            step_index=1,
-            finished=False,
-            result=DiffusionOutput(output="chunk-0", finished=False, chunk_index=0, total_chunks=2),
-        )
+        runner_outputs = [
+            RunnerOutput(
+                request_id="sched-stream",
+                step_index=1,
+                finished=False,
+                result=DiffusionOutput(output={"chunk": 0}, finished=False, chunk_index=0, total_chunks=2),
+            ),
+            RunnerOutput(
+                request_id="sched-stream",
+                step_index=2,
+                finished=True,
+                result=DiffusionOutput(output={"chunk": 1}, finished=True, chunk_index=1, total_chunks=2),
+            ),
+        ]
         scheduler_output = SimpleNamespace(
             scheduled_request_ids=["sched-stream"],
         )
 
         def _worker():
-            req_q.get(timeout=10)
-            res_q.put(runner_output)
+            for runner_output in runner_outputs:
+                req_q.get(timeout=10)
+                res_q.put(runner_output)
 
         thread = threading.Thread(target=_worker, daemon=True)
         thread.start()
 
-        output = MultiprocDiffusionExecutor.execute_step(executor, scheduler_output)  # pyright: ignore[reportArgumentType]
+        first: RunnerOutput = (  # pyright: ignore[reportAssignmentType]
+            MultiprocDiffusionExecutor.execute_step(executor, scheduler_output),  # pyright: ignore[reportArgumentType]
+        )
+        second: RunnerOutput = (  # pyright: ignore[reportAssignmentType]
+            MultiprocDiffusionExecutor.execute_step(executor, scheduler_output),  # pyright: ignore[reportArgumentType]
+        )
 
-        assert output is runner_output
+        assert first is runner_outputs[0]
+        assert first.result is not None
+        assert first.result.output == {"chunk": 0}
+        assert first.finished is False
+        assert second is runner_outputs[1]
+        assert second.result is not None
+        assert second.result.output == {"chunk": 1}
+        assert second.finished is True
         thread.join(timeout=2)
 
 
