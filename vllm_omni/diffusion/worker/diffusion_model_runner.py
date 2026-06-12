@@ -477,7 +477,7 @@ class DiffusionModelRunner(OmniConnectorModelRunnerMixin):
                 omni_diffusion_config=self.od_config,
                 attn_metadata=attn_metadata,
             ):
-                noise_pred = self.pipeline.denoise_step(input_batch)
+                noise_pred = self.pipeline.denoise_step(input_batch, states=states)
 
                 runner_output_list = []
                 pipeline_interrupted = getattr(self.pipeline, "interrupt", False)

@@ -8,7 +8,7 @@ import json
 import logging
 import math
 import os
-from collections.abc import Iterable
+from collections.abc import Iterable, Sequence
 from typing import TYPE_CHECKING, Any
 
 import numpy as np
@@ -589,7 +589,6 @@ class HeliosPipeline(nn.Module, CFGParallelMixin, ProgressBarMixin, DiffusionPip
         state.step_in_chunk = 0
         state.step_index = 0
         self._num_timesteps = state.chunk_num_steps
-        self._step_state = state
 
     def _prepare_stage2_chunk(self, state: DiffusionRequestState) -> None:
         extra = state.extra
@@ -642,10 +641,13 @@ class HeliosPipeline(nn.Module, CFGParallelMixin, ProgressBarMixin, DiffusionPip
     def denoise_step(
         self,
         input_batch: InputBatch,
+        states: Sequence[DiffusionRequestState],
         **kwargs: Any,
     ) -> torch.Tensor | None:
         del kwargs
-        state = self._step_state
+        if len(states) != 1:
+            raise ValueError("Helios step execution supports a single request, not a batched request.")
+        state = states[0]
         if state.extra["is_enable_stage2"]:
             return self._denoise_stage2_step(state)
         return self._denoise_stage1_step(state, input_batch.latents, input_batch.timesteps)

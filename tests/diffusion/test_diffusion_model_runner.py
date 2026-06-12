@@ -52,7 +52,8 @@ class _ChunkStepPipeline:
         state.total_chunks = len(self._outputs)
         return state
 
-    def denoise_step(self, input_batch):
+    def denoise_step(self, input_batch, states):
+        del states
         return torch.ones_like(input_batch.latents)
 
     def step_scheduler(self, state, noise_pred):
