@@ -5,13 +5,14 @@
 Protocol:
     Client -> Server:
         {"type": "session.start", "model": "...", "prompt": "...", "format": "m4s", ...}
-        {"type": "session.prompt_update", "prompt": "..."}  # currently unsupported
+        {"type": "session.prompt_update", "prompt": "...", "transition_duration_chunks": 1}
         {"type": "session.stop"}
         {"type": "session.ping"}  # optional; refreshes stall clock
 
     Server -> Client:
         {"type": "video.start", "request_id": "...", "config": {...}, "format": "m4s"}
         <binary frame: fragmented MP4 bytes>
+        {"type": "session.prompt_update.accepted"}
         {"type": "session.done", ...}
         {"type": "session.pong"}  # reply to session.ping
         {"type": "error", "message": "..."}
@@ -283,9 +284,10 @@ class OmniStreamingVideoOutputHandler:
                     pass
                 continue
             if msg_type == "session.prompt_update":
-                await self._send_error(
+                await self._handle_prompt_update(
                     websocket,
-                    "session.prompt_update is not supported by this backend yet",
+                    msg,
+                    request_id=request_id,
                     send_lock=send_lock,
                 )
                 continue
@@ -300,6 +302,69 @@ class OmniStreamingVideoOutputHandler:
                     await result
         except Exception:
             logger.debug("Failed to abort streaming video request %s", request_id, exc_info=True)
+
+    async def _handle_prompt_update(
+        self,
+        websocket: WebSocket,
+        msg: dict[str, Any],
+        *,
+        request_id: str,
+        send_lock: asyncio.Lock,
+    ) -> None:
+        prompt = msg.get("prompt")
+        if not isinstance(prompt, str) or not prompt.strip():
+            await self._send_error(websocket, "session.prompt_update requires a non-empty prompt", send_lock=send_lock)
+            return
+
+        transition_duration_chunks = msg.get("transition_duration_chunks", 1)
+        try:
+            transition_duration_chunks = int(transition_duration_chunks)
+        except (TypeError, ValueError):
+            await self._send_error(
+                websocket,
+                "session.prompt_update transition_duration_chunks must be an integer",
+                send_lock=send_lock,
+            )
+            return
+
+        if "negative_prompt" in msg and msg["negative_prompt"] is not None:
+            await self._send_error(
+                websocket,
+                "session.prompt_update negative_prompt is not supported in this release",
+                send_lock=send_lock,
+            )
+            return
+
+        add_prompt_update = getattr(self._engine_client, "add_prompt_update_async", None)
+        if not callable(add_prompt_update):
+            await self._send_error(
+                websocket,
+                "session.prompt_update is not supported by this backend",
+                send_lock=send_lock,
+            )
+            return
+
+        try:
+            result = add_prompt_update(
+                request_id,
+                prompt=prompt,
+                transition_duration_chunks=transition_duration_chunks,
+            )
+            if inspect.isawaitable(result):
+                await result
+        except ValueError as exc:
+            await self._send_error(websocket, str(exc), send_lock=send_lock)
+            return
+        except Exception:
+            logger.exception("Failed to apply prompt_update for request %s", request_id)
+            await self._send_error(websocket, "Failed to apply prompt_update", send_lock=send_lock)
+            return
+
+        try:
+            async with send_lock:
+                await websocket.send_json({"type": "session.prompt_update.accepted"})
+        except Exception:
+            logger.debug("Failed to send prompt_update acknowledgement for %s", request_id, exc_info=True)
 
     async def _stream_video_bytes(
         self,

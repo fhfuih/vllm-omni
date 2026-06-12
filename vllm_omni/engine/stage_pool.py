@@ -1002,6 +1002,33 @@ class StagePool:
             await self._llm_client(replica_id).add_request_async(request)
         return replica_id
 
+    async def submit_prompt_update(
+        self,
+        request_id: str,
+        req_state: OrchestratorRequestState,
+        *,
+        prompt: str,
+        transition_duration_chunks: int = 1,
+    ) -> int:
+        """Submit a midway prompt update to an active diffusion request."""
+        del req_state
+        if self.stage_type != "diffusion":
+            raise ValueError(f"prompt_update is not supported for stage type {self.stage_type!r}")
+
+        replica_id = self.get_bound_replica_id(request_id)
+        if replica_id is None or self.clients[replica_id] is None:
+            raise ValueError(f"No active diffusion replica binding for request {request_id!r}")
+
+        client = self._diffusion_client(replica_id)
+        await client.prompt_update_async(
+            request_id,
+            {
+                "prompt": prompt,
+                "transition_duration_chunks": transition_duration_chunks,
+            },
+        )
+        return replica_id
+
     async def _pick_or_select(
         self,
         request_id: str,

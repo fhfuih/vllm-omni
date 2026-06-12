@@ -83,6 +83,7 @@ class StageDiffusionClient(StageClientBase):
         # Spawn StageDiffusionProc subprocess and wait for READY.
         proc, handshake_address, request_address, response_address = spawn_diffusion_proc(model, od_config)
         complete_diffusion_handshake(proc, handshake_address, stage_init_timeout)
+        self.od_config = od_config
         self._initialize_client(metadata, request_address, response_address, proc=proc, batch_size=batch_size)
 
     @classmethod
@@ -439,6 +440,19 @@ class StageDiffusionClient(StageClientBase):
                     "request_ids": list(request_ids),
                 }
             )
+        )
+
+    async def prompt_update_async(
+        self,
+        request_id: str,
+        update: dict[str, Any],
+        timeout: float | None = None,
+    ) -> Any:
+        """Apply a midway prompt update to an active streaming request."""
+        return await self.collective_rpc_async(
+            "prompt_update",
+            timeout=timeout,
+            args=(request_id, update),
         )
 
     async def collective_rpc_async(

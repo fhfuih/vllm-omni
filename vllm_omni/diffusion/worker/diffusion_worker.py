@@ -432,6 +432,11 @@ class DiffusionWorker:
         # for the frontend server yet.
         return self.lora_manager.add_adapter(lora_request)
 
+    def prompt_update(self, request_id: str, update: dict[str, Any]) -> bool:
+        """Apply a midway prompt update to an active stepwise request."""
+        assert self.model_runner is not None, "Model runner not initialized"
+        return self.model_runner.prompt_update(request_id, update)
+
     def list_loras(self) -> list[int]:
         return self.lora_manager.list_adapters()
 

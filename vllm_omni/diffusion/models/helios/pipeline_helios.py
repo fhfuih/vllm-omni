@@ -28,6 +28,13 @@ from vllm_omni.diffusion.models.helios.helios_transformer import HeliosTransform
 from vllm_omni.diffusion.models.helios.scheduling_helios import HeliosScheduler
 from vllm_omni.diffusion.models.progress_bar import ProgressBarMixin
 from vllm_omni.diffusion.profiler.diffusion_pipeline_profiler import DiffusionPipelineProfilerMixin
+from vllm_omni.diffusion.prompt_update import (
+    PromptUpdatePayload,
+    PromptUpdateState,
+    bump_prompt_update_version,
+    get_prompt_update_state,
+    set_prompt_update_state,
+)
 from vllm_omni.diffusion.request import OmniDiffusionRequest
 from vllm_omni.platforms import current_omni_platform
 
@@ -160,6 +167,7 @@ class HeliosPipeline(nn.Module, CFGParallelMixin, ProgressBarMixin, DiffusionPip
     """
 
     supports_step_execution: bool = True
+    supports_prompt_update: bool = True
 
     def __init__(
         self,
@@ -883,6 +891,7 @@ class HeliosPipeline(nn.Module, CFGParallelMixin, ProgressBarMixin, DiffusionPip
         state.chunk_index += 1
         finished = state.request_denoise_completed
         if not finished:
+            self._apply_prompt_update_at_chunk_boundary(state)
             self._prepare_next_chunk(state)
         else:
             self._current_timestep = None
@@ -1743,3 +1752,60 @@ class HeliosPipeline(nn.Module, CFGParallelMixin, ProgressBarMixin, DiffusionPip
     def load_weights(self, weights: Iterable[tuple[str, torch.Tensor]]) -> set[str]:
         loader = AutoWeightsLoader(self)
         return loader.load_weights(weights)
+
+    def prepare_prompt_update(
+        self,
+        state: DiffusionRequestState,
+        update: PromptUpdatePayload,
+    ) -> None:
+        """Encode and queue a prompt update to apply at the next chunk boundary."""
+        extra = state.extra
+        prompt_embeds, _ = self.encode_prompt(
+            prompt=update.prompt,
+            negative_prompt=None,
+            do_classifier_free_guidance=False,
+            num_videos_per_prompt=state.sampling.num_outputs_per_prompt or 1,
+            max_sequence_length=state.sampling.max_sequence_length or 226,
+            device=self.device,
+            dtype=extra.get("dtype", self.transformer.dtype),
+        )
+        extra["pending_prompt_update"] = {
+            "target_prompt_embeds": prompt_embeds,
+            "transition_duration_chunks": update.transition_duration_chunks,
+        }
+
+    def _apply_prompt_update_at_chunk_boundary(self, state: DiffusionRequestState) -> None:
+        """Advance or start prompt interpolation before the next chunk."""
+        extra = state.extra
+        update_state = get_prompt_update_state(state)
+        pending = extra.pop("pending_prompt_update", None)
+        embeds_changed = False
+
+        if update_state is not None:
+            update_state.advance_transition()
+            state.prompt_embeds = update_state.blended_prompt_embeds()
+            embeds_changed = True
+            if update_state.elapsed_transition_chunks >= update_state.transition_duration_chunks:
+                state.prompt_embeds = update_state.target_prompt_embeds
+                update_state.source_prompt_embeds = update_state.target_prompt_embeds
+
+        if pending is not None:
+            if state.prompt_embeds is None:
+                return
+            source = state.prompt_embeds.detach().clone()
+            target = pending["target_prompt_embeds"]
+            duration = int(pending["transition_duration_chunks"])
+            update_state = PromptUpdateState(
+                source_prompt_embeds=source,
+                target_prompt_embeds=target,
+                transition_duration_chunks=duration,
+            )
+            set_prompt_update_state(state, update_state)
+            if duration <= 0:
+                state.prompt_embeds = target
+            else:
+                state.prompt_embeds = update_state.blended_prompt_embeds()
+            embeds_changed = True
+
+        if embeds_changed:
+            bump_prompt_update_version(state)

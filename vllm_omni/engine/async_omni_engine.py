@@ -2357,6 +2357,40 @@ class AsyncOmniEngine:
         """Async abort API."""
         self.abort(request_ids)
 
+    def add_prompt_update(
+        self,
+        request_id: str,
+        *,
+        prompt: str,
+        transition_duration_chunks: int = 1,
+    ) -> None:
+        """Send a prompt-update control message to the Orchestrator."""
+        if self.request_queue is None:
+            raise RuntimeError("request_queue is not initialized")
+        from vllm_omni.engine.messages import PromptUpdateMessage
+
+        self.request_queue.sync_q.put_nowait(
+            PromptUpdateMessage(
+                request_id=request_id,
+                prompt=prompt,
+                transition_duration_chunks=transition_duration_chunks,
+            )
+        )
+
+    async def add_prompt_update_async(
+        self,
+        request_id: str,
+        *,
+        prompt: str,
+        transition_duration_chunks: int = 1,
+    ) -> None:
+        """Async prompt-update API."""
+        self.add_prompt_update(
+            request_id,
+            prompt=prompt,
+            transition_duration_chunks=transition_duration_chunks,
+        )
+
     def collective_rpc(
         self,
         method: str,

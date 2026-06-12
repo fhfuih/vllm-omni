@@ -47,6 +47,7 @@ from vllm_omni.engine.messages import (
     EngineQueueMessage,
     ErrorMessage,
     OutputMessage,
+    PromptUpdateMessage,
     RegisterRemoteReplicaMessage,
     ShutdownRequestMessage,
     StageMetricsMessage,
@@ -416,6 +417,8 @@ class Orchestrator:
                 await self._handle_add_companion(msg)
             elif msg_type == "abort":
                 await self._handle_abort(msg)
+            elif msg_type == "prompt_update":
+                await self._handle_prompt_update(msg)
             elif msg_type == "collective_rpc":
                 await self._handle_collective_rpc(msg)
             elif isinstance(msg, RegisterRemoteReplicaMessage):
@@ -597,6 +600,57 @@ class Orchestrator:
             abort=True,
         )
         logger.info("[Orchestrator] Aborted request(s) %s", request_ids)
+
+    async def _emit_prompt_update_error(self, request_id: str, error: str) -> None:
+        await self.output_async_queue.put(
+            ErrorMessage(
+                error=error,
+                fatal=False,
+                request_id=request_id,
+                stage_id=0,
+            )
+        )
+
+    async def _handle_prompt_update(self, msg: PromptUpdateMessage) -> None:
+        """Handle a midway prompt update for an active streaming diffusion request."""
+        request_id = msg.request_id
+        req_state = self.request_states.get(request_id)
+        if req_state is None:
+            logger.info("[Orchestrator] Dropping prompt_update for inactive req %s", request_id)
+            await self._emit_prompt_update_error(request_id, f"No active request for prompt_update: {request_id}")
+            return
+
+        if self.num_stages != 1:
+            await self._emit_prompt_update_error(
+                request_id,
+                "prompt_update requires single-stage diffusion",
+            )
+            return
+
+        pool = self.stage_pools[0]
+        if pool.stage_type != "diffusion":
+            await self._emit_prompt_update_error(
+                request_id,
+                "prompt_update requires a diffusion stage",
+            )
+            return
+
+        replica_id = pool.get_bound_replica_id(request_id)
+        client = pool.clients[replica_id] if replica_id is not None else None
+        od_config = getattr(client, "od_config", None)
+        if od_config is None or not getattr(od_config, "streaming_output", False):
+            await self._emit_prompt_update_error(
+                request_id,
+                "prompt_update requires streaming diffusion output",
+            )
+            return
+
+        await pool.submit_prompt_update(
+            request_id,
+            req_state,
+            prompt=msg.prompt,
+            transition_duration_chunks=msg.transition_duration_chunks,
+        )
 
     async def _abort_request_ids(self, request_ids: list[str]) -> None:
         """Forward abort requests to all stage pools."""

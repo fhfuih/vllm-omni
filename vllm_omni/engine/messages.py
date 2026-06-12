@@ -44,6 +44,13 @@ class AbortRequestMessage(EngineQueueMessage, kw_only=True):
     request_ids: list[str]
 
 
+class PromptUpdateMessage(EngineQueueMessage, kw_only=True):
+    type: Literal["prompt_update"] = "prompt_update"
+    request_id: str
+    prompt: str
+    transition_duration_chunks: int = 1
+
+
 class CollectiveRPCRequestMessage(EngineQueueMessage, kw_only=True):
     type: Literal["collective_rpc"] = "collective_rpc"
     rpc_id: str

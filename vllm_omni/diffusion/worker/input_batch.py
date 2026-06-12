@@ -17,6 +17,7 @@ from dataclasses import dataclass
 import numpy as np
 import torch
 
+from vllm_omni.diffusion.prompt_update import prompt_update_versions
 from vllm_omni.diffusion.worker.utils import DiffusionRequestState
 
 
@@ -530,12 +531,15 @@ def _same_composition(
     cached_batch: InputBatch | None,
     request_ids: list[str],
     idx_mapping_np: np.ndarray,
+    states: Sequence[DiffusionRequestState],
 ) -> bool:
     if cached_batch is None:
         return False
     if cached_batch.request_ids != request_ids:
         return False
-    return np.array_equal(cached_batch.idx_mapping_np, idx_mapping_np)
+    if not np.array_equal(cached_batch.idx_mapping_np, idx_mapping_np):
+        return False
+    return cached_batch._prompt_update_versions == prompt_update_versions(list(states))
 
 
 def _scatter_batch_tensor_by_mapping(
@@ -604,6 +608,7 @@ class InputBatch:
     img_shapes: list | None = None
     txt_seq_lens: list[int] | None = None
     negative_txt_seq_lens: list[int] | None = None
+    _prompt_update_versions: tuple[int, ...] = ()
 
     def __post_init__(self) -> None:
         if len(self.request_ids) != int(self.idx_mapping.numel()):
@@ -643,6 +648,7 @@ class InputBatch:
         self.img_shapes = _prepare_img_shapes(states)
         self.txt_seq_lens = _prepare_seq_lens(states, "txt_seq_lens")
         self.negative_txt_seq_lens = _prepare_seq_lens(states, "negative_txt_seq_lens")
+        self._prompt_update_versions = prompt_update_versions(list(states))
 
     def _repack_dynamic_fields(
         self,
@@ -679,7 +685,7 @@ class InputBatch:
         selected_states, idx_mapping, idx_mapping_np = _select_states(states, idx_mapping)
         request_ids = _prepare_request_ids(selected_states)
 
-        if _same_composition(cached_batch, request_ids, idx_mapping_np):
+        if _same_composition(cached_batch, request_ids, idx_mapping_np, selected_states):
             assert cached_batch is not None
             cached_batch._repack_dynamic_fields(selected_states)
             return cached_batch
@@ -718,6 +724,7 @@ class InputBatch:
                 selected_states,
                 "negative_txt_seq_lens",
             ),
+            _prompt_update_versions=prompt_update_versions(list(selected_states)),
         )
 
 

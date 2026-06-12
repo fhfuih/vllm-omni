@@ -32,8 +32,9 @@ from vllm_omni.diffusion.compile import regionally_compile
 from vllm_omni.diffusion.data import DiffusionOutput, OmniDiffusionConfig
 from vllm_omni.diffusion.forward_context import set_forward_context
 from vllm_omni.diffusion.model_loader.diffusers_loader import DiffusersPipelineLoader
-from vllm_omni.diffusion.models.interface import supports_step_execution
+from vllm_omni.diffusion.models.interface import supports_prompt_update, supports_step_execution
 from vllm_omni.diffusion.offloader import get_offload_backend
+from vllm_omni.diffusion.prompt_update import PromptUpdatePayload, payload_from_dict
 from vllm_omni.diffusion.registry import _NO_CACHE_ACCELERATION
 from vllm_omni.diffusion.request import OmniDiffusionRequest
 from vllm_omni.diffusion.sched.interface import DiffusionSchedulerOutput
@@ -531,3 +532,21 @@ class DiffusionModelRunner(OmniConnectorModelRunnerMixin):
                 self._update_states_after(states, input_batch, pipeline_interrupted)
 
                 return BatchRunnerOutput.from_list(runner_output_list)
+
+    def prompt_update(self, request_id: str, update: dict[str, Any] | PromptUpdatePayload) -> bool:
+        """Queue a midway prompt update for an active stepwise request."""
+        assert self.pipeline is not None, "Model not loaded. Call load_model() first."
+        if not supports_prompt_update(self.pipeline):
+            raise ValueError(f"prompt_update is not supported by pipeline {self.od_config.model_class_name!r}")
+        if not self.od_config.streaming_output:
+            raise ValueError("prompt_update requires streaming_output=True")
+        if not self.supports_step_mode():
+            raise ValueError("prompt_update requires step execution support")
+
+        state = self.state_cache.get(request_id)
+        if state is None:
+            raise ValueError(f"No active request state for prompt_update: {request_id!r}")
+
+        payload = update if isinstance(update, PromptUpdatePayload) else payload_from_dict(update)
+        self.pipeline.prepare_prompt_update(state, payload)
+        return True
