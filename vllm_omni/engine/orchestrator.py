@@ -38,6 +38,7 @@ from vllm_omni.engine.messages import (
     EngineQueueMessage,
     ErrorMessage,
     OutputMessage,
+    PromptUpdateMessage,
     RegisterRemoteReplicaMessage,
     ShutdownRequestMessage,
     StageMetricsMessage,
@@ -397,6 +398,8 @@ class Orchestrator:
                 await self._handle_add_companion(msg)
             elif msg_type == "abort":
                 await self._handle_abort(msg)
+            elif msg_type == "prompt_update":
+                await self._handle_prompt_update(msg)
             elif msg_type == "collective_rpc":
                 await self._handle_collective_rpc(msg)
             elif isinstance(msg, RegisterRemoteReplicaMessage):
@@ -572,6 +575,29 @@ class Orchestrator:
             abort=True,
         )
         logger.info("[Orchestrator] Aborted request(s) %s", request_ids)
+
+    async def _handle_prompt_update(self, msg: PromptUpdateMessage) -> None:
+        """Handle a midway prompt update for an active streaming diffusion request."""
+        stage_id = 0
+        request_id = msg.request_id
+        req_state = self.request_states.get(request_id)
+        if req_state is None:
+            logger.info("[Orchestrator] Dropping prompt_update for inactive req %s", request_id)
+            await self.output_async_queue.put(
+                ErrorMessage(
+                    error=f"No active request for prompt_update: {request_id}",
+                    fatal=False,
+                    request_id=request_id,
+                    stage_id=stage_id,
+                )
+            )
+            return
+
+        await self.stage_pools[stage_id].submit_prompt_update(
+            request_id,
+            prompt=msg.prompt,
+            transition_duration_chunks=msg.transition_duration_chunks,
+        )
 
     async def _abort_request_ids(self, request_ids: list[str]) -> None:
         """Forward abort requests to all stage pools."""

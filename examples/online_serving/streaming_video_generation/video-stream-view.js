@@ -14,6 +14,7 @@
   let totalBytes = 0;
   let done = false;
   let objectUrl = null;
+  let promptUpdateTimers = [];
 
   function el(id) {
     return document.getElementById(id);
@@ -73,7 +74,49 @@
     } catch (_) { }
   }
 
+  function clearPromptUpdateTimers() {
+    for (const timer of promptUpdateTimers) {
+      clearTimeout(timer);
+    }
+    promptUpdateTimers = [];
+  }
+
+  function schedulePromptUpdates(updates) {
+    clearPromptUpdateTimers();
+    if (!Array.isArray(updates) || updates.length === 0) return;
+
+    const videoStartedAt = performance.now();
+    for (const update of updates) {
+      const atSeconds = Number(update.at);
+      if (!Number.isFinite(atSeconds) || atSeconds < 0) continue;
+
+      const delayMs = Math.max(0, atSeconds * 1000 - (performance.now() - videoStartedAt));
+      const transitionDurationChunks = Number.isFinite(Number(update.transition_duration_chunks))
+        ? Number(update.transition_duration_chunks)
+        : 3;
+
+      const timer = setTimeout(() => {
+        if (!ws || ws.readyState !== WebSocket.OPEN) return;
+        const payload = {
+          type: "session.prompt_update",
+          prompt: update.prompt,
+          transition_duration_chunks: transitionDurationChunks,
+        };
+        try {
+          ws.send(JSON.stringify(payload));
+          log(
+            "Sent session.prompt_update at t=" + atSeconds.toFixed(2) + "s: " + JSON.stringify(payload)
+          );
+        } catch (err) {
+          log("Failed to send session.prompt_update: " + err.message);
+        }
+      }, delayMs);
+      promptUpdateTimers.push(timer);
+    }
+  }
+
   function stopCurrent() {
+    clearPromptUpdateTimers();
     if (ws && ws.readyState === WebSocket.OPEN) {
       try { ws.send(JSON.stringify({ type: "session.stop" })); } catch (_) { }
       try { ws.close(); } catch (_) { }
@@ -148,6 +191,9 @@
           const msg = JSON.parse(event.data);
           if (msg.type === "video.start") {
             log("Video session started: request_id=" + (msg.request_id || "") + " format=" + (msg.format || ""));
+            schedulePromptUpdates(config.prompt_updates);
+          } else if (msg.type === "session.prompt_update.accepted") {
+            log("Prompt update accepted by server");
           } else if (msg.type === "session.done") {
             done = true;
             setStatus("Done");

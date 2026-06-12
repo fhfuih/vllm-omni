@@ -1002,6 +1002,30 @@ class StagePool:
             await self._llm_client(replica_id).add_request_async(request)
         return replica_id
 
+    async def submit_prompt_update(
+        self,
+        request_id: str,
+        *,
+        prompt: str,
+        transition_duration_chunks: int | None = None,
+    ) -> int:
+        """Submit a midway prompt update to an active diffusion (typically video generation) request."""
+        replica_id = self.get_bound_replica_id(request_id)
+        if replica_id is None or self.clients[replica_id] is None:
+            replica_id = await self._pick_or_select(request_id)
+
+        client = self._diffusion_client(replica_id)
+        result = await client.prompt_update_async(
+            request_id,
+            prompt,
+            transition_duration_chunks,
+        )
+        # Prompt update may raise error if underlying check against ODConfig fails
+        if isinstance(result, dict) and result.get("error"):
+            reason = result.get("reason") or "Unknown prompt_update RPC error"
+            raise ValueError(str(reason))
+        return replica_id
+
     async def _pick_or_select(
         self,
         request_id: str,

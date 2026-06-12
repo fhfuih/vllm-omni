@@ -5,13 +5,14 @@
 Protocol:
     Client -> Server:
         {"type": "session.start", "model": "...", "prompt": "...", "format": "m4s", ...}
-        {"type": "session.prompt_update", "prompt": "..."}  # currently unsupported
+        {"type": "session.prompt_update", "prompt": "...", "transition_duration_chunks": (optional, integer)}
         {"type": "session.stop"}
         {"type": "session.ping"}  # optional; refreshes stall clock
 
     Server -> Client:
         {"type": "video.start", "request_id": "...", "config": {...}, "format": "m4s"}
         <binary frame: fragmented MP4 bytes>
+        {"type": "session.prompt_update.accepted"}
         {"type": "session.done", ...}
         {"type": "session.pong"}  # reply to session.ping
         {"type": "error", "message": "..."}
@@ -21,7 +22,6 @@ from __future__ import annotations
 
 import asyncio
 import copy
-import inspect
 import json
 import time
 import uuid
@@ -31,9 +31,9 @@ from typing import Any, cast
 
 from fastapi import HTTPException, WebSocket, WebSocketDisconnect
 from pydantic import ValidationError
-from vllm.engine.protocol import EngineClient
 from vllm.logger import init_logger
 
+from vllm_omni.entrypoints.async_omni import AsyncOmni
 from vllm_omni.entrypoints.openai.protocol.videos import VideoGenerationRequest, VideoParams
 from vllm_omni.entrypoints.openai.stage_params import (
     build_stage_sampling_params_list,
@@ -70,7 +70,7 @@ class OmniStreamingVideoOutputHandler:
 
     def __init__(
         self,
-        engine_client: EngineClient,
+        engine_client: AsyncOmni,
         model_name: str | None = None,
         stage_configs: list[Any] | None = None,
         stall_timeout: float = _DEFAULT_STALL_TIMEOUT,
@@ -283,9 +283,10 @@ class OmniStreamingVideoOutputHandler:
                     pass
                 continue
             if msg_type == "session.prompt_update":
-                await self._send_error(
+                await self._handle_prompt_update(
                     websocket,
-                    "session.prompt_update is not supported by this backend yet",
+                    msg,
+                    request_id=request_id,
                     send_lock=send_lock,
                 )
                 continue
@@ -293,13 +294,59 @@ class OmniStreamingVideoOutputHandler:
 
     async def _abort_request(self, request_id: str) -> None:
         try:
-            abort = getattr(self._engine_client, "abort", None)
-            if callable(abort):
-                result = abort(request_id)
-                if inspect.isawaitable(result):
-                    await result
+            await self._engine_client.abort(request_id)
         except Exception:
             logger.debug("Failed to abort streaming video request %s", request_id, exc_info=True)
+
+    async def _handle_prompt_update(
+        self,
+        websocket: WebSocket,
+        msg: dict[str, Any],
+        *,
+        request_id: str,
+        send_lock: asyncio.Lock,
+    ) -> None:
+        prompt = msg.get("prompt")
+        if not isinstance(prompt, str) or not prompt.strip():
+            await self._send_error(websocket, "session.prompt_update requires a non-empty prompt", send_lock=send_lock)
+            return
+
+        transition_duration_chunks: int | None = None
+        if "transition_duration_chunks" in msg and msg["transition_duration_chunks"] is not None:
+            try:
+                transition_duration_chunks = int(msg["transition_duration_chunks"])
+            except (TypeError, ValueError):
+                await self._send_error(
+                    websocket,
+                    "session.prompt_update transition_duration_chunks must be an integer",
+                    send_lock=send_lock,
+                )
+                return
+
+        if "negative_prompt" in msg and msg["negative_prompt"] is not None:
+            await self._send_error(
+                websocket,
+                "session.prompt_update negative_prompt is not supported in this release",
+                send_lock=send_lock,
+            )
+            return
+
+        try:
+            await self._engine_client.add_prompt_update_async(
+                request_id,
+                prompt=prompt,
+                transition_duration_chunks=transition_duration_chunks,
+            )
+        except Exception:
+            logger.exception("Failed to apply prompt_update for request %s", request_id, exc_info=True)
+            await self._send_error(websocket, "Failed to apply prompt_update", send_lock=send_lock)
+            return
+
+        try:
+            async with send_lock:
+                await websocket.send_json({"type": "session.prompt_update.accepted"})
+        except Exception:
+            logger.debug("Failed to send prompt_update acknowledgement for %s", request_id, exc_info=True)
 
     async def _stream_video_bytes(
         self,
@@ -387,11 +434,10 @@ class OmniStreamingVideoOutputHandler:
         return prompt, gen_params, vp
 
     def _resolve_default_sampling_params(self) -> OmniDiffusionSamplingParams:
-        default_sampling_params_list = getattr(self._engine_client, "default_sampling_params_list", None)
-        if default_sampling_params_list:
-            for params in default_sampling_params_list:
-                if isinstance(params, OmniDiffusionSamplingParams):
-                    return copy.deepcopy(params)
+        default_sampling_params_list = self._engine_client.default_sampling_params_list
+        for params in default_sampling_params_list:
+            if isinstance(params, OmniDiffusionSamplingParams):
+                return copy.deepcopy(params)
         return OmniDiffusionSamplingParams()
 
     @staticmethod
@@ -418,7 +464,7 @@ class OmniStreamingVideoOutputHandler:
         request_id: str,
         progress: _SessionProgress,
     ) -> AsyncGenerator[Any, None]:
-        stage_configs = self._stage_configs or getattr(self._engine_client, "stage_configs", None)
+        stage_configs = self._stage_configs or self._engine_client.stage_configs
         if not stage_configs:
             raise HTTPException(
                 status_code=HTTPStatus.SERVICE_UNAVAILABLE.value,
@@ -433,15 +479,14 @@ class OmniStreamingVideoOutputHandler:
                     detail=f"Video generation only supports diffusion stages, found '{stage_type}' stage.",
                 )
 
-        engine_client = cast(Any, self._engine_client)
         sampling_params_list = build_stage_sampling_params_list(
             list(stage_configs),
-            get_default_sampling_params_list(engine_client),
+            get_default_sampling_params_list(self._engine_client),
             diffusion_params=gen_params,
             replace_diffusion_params=True,
         )
 
-        async for output in engine_client.generate(
+        async for output in self._engine_client.generate(
             prompt=prompt,
             request_id=request_id,
             sampling_params_list=sampling_params_list,

@@ -461,6 +461,20 @@ class StageDiffusionClient(StageClientBase):
             )
         )
 
+    async def prompt_update_async(
+        self,
+        request_id: str,
+        prompt: str,
+        transition_duration_chunks: int | None = None,
+        timeout: float | None = None,
+    ) -> Any:
+        """Apply a midway prompt update to an active streaming request."""
+        return await self.collective_rpc_async(
+            "prompt_update",
+            timeout=timeout,
+            args=(request_id, prompt, transition_duration_chunks),
+        )
+
     async def collective_rpc_async(
         self,
         method: str,

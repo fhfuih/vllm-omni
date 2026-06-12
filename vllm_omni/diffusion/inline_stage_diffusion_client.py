@@ -283,6 +283,26 @@ class InlineStageDiffusionClient(StageClientBase):
                 task.cancel()
             self._engine.abort(rid)
 
+    async def prompt_update_async(
+        self,
+        request_id: str,
+        prompt: str,
+        transition_duration_chunks: int | None = None,
+        timeout: float | None = None,
+    ) -> Any:
+        """Apply a midway prompt update to an active streaming request."""
+        logger.debug(
+            "[InlineStageDiffusionClient] stage-%s [rep-%s] prompt update: %s",
+            self.stage_id,
+            self.replica_id,
+            request_id,
+        )
+        return await self.collective_rpc_async(
+            "prompt_update",
+            timeout=timeout,
+            args=(request_id, prompt, transition_duration_chunks),
+        )
+
     async def collective_rpc_async(
         self,
         method: str,

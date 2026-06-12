@@ -109,3 +109,11 @@ class StagePoolDiffusionClient(StagePoolClient, Protocol):
     ) -> None: ...
 
     def get_diffusion_output_nowait(self) -> OmniRequestOutput | None: ...
+
+    async def prompt_update_async(
+        self,
+        request_id: str,
+        prompt: str,
+        transition_duration_chunks: int | None = None,
+        timeout: float | None = None,
+    ) -> Any: ...

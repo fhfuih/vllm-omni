@@ -14,7 +14,7 @@ import copy
 import time
 from collections.abc import Iterable
 from contextlib import nullcontext
-from typing import Any
+from typing import Any, cast
 
 import torch
 from torch.profiler import record_function
@@ -32,7 +32,7 @@ from vllm_omni.diffusion.compile import regionally_compile
 from vllm_omni.diffusion.data import DiffusionOutput, OmniDiffusionConfig
 from vllm_omni.diffusion.forward_context import set_forward_context
 from vllm_omni.diffusion.model_loader.diffusers_loader import DiffusersPipelineLoader
-from vllm_omni.diffusion.models.interface import supports_step_execution
+from vllm_omni.diffusion.models.interface import SupportsPromptUpdate, supports_prompt_update, supports_step_execution
 from vllm_omni.diffusion.offloader import get_offload_backend
 from vllm_omni.diffusion.registry import _NO_CACHE_ACCELERATION
 from vllm_omni.diffusion.request import OmniDiffusionRequest
@@ -554,3 +554,25 @@ class DiffusionModelRunner(OmniConnectorModelRunnerMixin):
                 self._update_states_after(states, input_batch, pipeline_interrupted)
 
                 return BatchRunnerOutput.from_list(runner_output_list)
+
+    def prompt_update(
+        self,
+        request_id: str,
+        prompt: str,
+        transition_duration_chunks: int | None = None,
+    ) -> None:
+        """Queue a midway prompt update for an active stepwise request."""
+        assert self.pipeline is not None, "Model not loaded. Call load_model() first."
+        if not supports_prompt_update(self.pipeline):
+            raise ValueError(f"prompt_update is not supported by pipeline {self.od_config.model_class_name!r}")
+        if not self.od_config.streaming_output:
+            raise ValueError("prompt_update requires streaming_output=True")
+        if not self.supports_step_mode():
+            raise ValueError("prompt_update requires step execution support")
+
+        state = self.state_cache.get(request_id)
+        if state is None:
+            raise ValueError(f"No active request state for prompt_update: {request_id!r}")
+
+        pipeline = cast(SupportsPromptUpdate, self.pipeline)
+        pipeline.prepare_prompt_update(state, prompt, transition_duration_chunks)
