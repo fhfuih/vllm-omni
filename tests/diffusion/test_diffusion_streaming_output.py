@@ -195,12 +195,13 @@ class TestPipelineStreamingOutputToStageDiffusionClient:
         client.custom_process_input_func = None
         client.engine_input_source = []
         client._proc = None
+        client._proc_manager = None
         client._owns_process = False
         client._zmq_ctx = zmq.Context()
         client._request_socket = client._zmq_ctx.socket(zmq.PUSH)
-        client._request_socket.connect(request_address)
+        client._request_socket.bind(request_address)
         client._response_socket = client._zmq_ctx.socket(zmq.PULL)
-        client._response_socket.connect(response_address)
+        client._response_socket.bind(response_address)
         client._encoder = OmniMsgpackEncoder()
         client._decoder = OmniMsgpackDecoder()
         client._output_queue: asyncio.Queue[OmniRequestOutput] = asyncio.Queue()
@@ -353,7 +354,6 @@ class TestPipelineStreamingOutputToEntrypoint:
             final_stage_id: int,
             **kwargs: Any,
         ) -> None:
-            del kwargs
             self._fixture.request_sync_q.put_nowait(
                 StageSubmissionMessage(
                     type="add_request",
@@ -363,7 +363,9 @@ class TestPipelineStreamingOutputToEntrypoint:
                     output_prompt_text=None,
                     sampling_params_list=sampling_params_list,
                     final_stage_id=final_stage_id,
+                    final_output_stage_ids=kwargs.get("final_output_stage_ids"),
                     preprocess_ms=0.0,
+                    request_timestamp=kwargs.get("arrival_time", time.time()),
                     enqueue_ts=time.perf_counter(),
                 )
             )
@@ -431,6 +433,8 @@ class TestPipelineStreamingOutputToEntrypoint:
         omni.mod_metrics = MagicMock()
         omni.resolve_sampling_params_list = lambda params, allow_delta_coercion: params
         omni._compute_final_stage_id = lambda output_modalities: 0
+        omni._compute_final_output_stage_ids = lambda output_modalities: [0]
+        omni.default_sampling_params_list = engine.default_sampling_params_list
         omni._log_summary_and_cleanup = lambda request_id: omni.request_states.pop(request_id, None)
         return omni
 
