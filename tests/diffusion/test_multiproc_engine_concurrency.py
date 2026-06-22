@@ -616,10 +616,12 @@ class TestMultiprocExecutorStepStreamingOutput:
         thread.start()
 
         first: RunnerOutput = MultiprocDiffusionExecutor.execute_step(  # pyright: ignore[reportAssignmentType]
-            executor, scheduler_output  # pyright: ignore[reportArgumentType]
+            executor,
+            scheduler_output,  # pyright: ignore[reportArgumentType]
         )
         second: RunnerOutput = MultiprocDiffusionExecutor.execute_step(  # pyright: ignore[reportAssignmentType]
-            executor, scheduler_output  # pyright: ignore[reportArgumentType]
+            executor,
+            scheduler_output,  # pyright: ignore[reportArgumentType]
         )
 
         assert first is runner_outputs[0]
