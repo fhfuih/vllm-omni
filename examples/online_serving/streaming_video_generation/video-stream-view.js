@@ -1,3 +1,7 @@
+/**
+ * This file and the corresponding HTML file are needed to display a streamable video view in the Gradio demo.
+ * Gradio's built-in video player does not support modern M4S streaming format.
+ */
 (function () {
   const playerId = "vllm-streaming-video-player";
   const statusId = "vllm-streaming-video-status";
