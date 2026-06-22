@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import copy
 import time
+from collections.abc import Mapping
 from dataclasses import dataclass
 from http import HTTPStatus
 from typing import Any, cast
@@ -194,18 +195,21 @@ class OmniOpenAIServingVideo:
             # Merge extra_params into extra_args
             gen_params.extra_args.update(request.extra_params)
 
-            # Redact the inline ``action`` array (hundreds of floats) when
-            # logging so it doesn't flood the logs; everything else is logged
-            # verbatim.
+            # Redact inline arrays when logging so RoboLab policy requests do
+            # not flood the server log with image/state payloads.
             loggable = request.extra_params
-            action_val = loggable.get("action")
-            if action_val is not None:
-                summary = (
-                    f"<{type(action_val).__name__} len={len(action_val)}>"
-                    if hasattr(action_val, "__len__")
-                    else f"<{type(action_val).__name__}>"
+            redacted = {}
+            for key in ("action", "robot_obs", "observation"):
+                value = loggable.get(key)
+                if value is None:
+                    continue
+                redacted[key] = (
+                    f"<{type(value).__name__} len={len(value)}>"
+                    if hasattr(value, "__len__")
+                    else f"<{type(value).__name__}>"
                 )
-                loggable = {**loggable, "action": summary}
+            if redacted:
+                loggable = {**loggable, **redacted}
             logger.info("Applied extra_params: %s", loggable)
 
         self._apply_lora(request.lora, gen_params)
@@ -219,7 +223,9 @@ class OmniOpenAIServingVideo:
         )
 
         result = await self._run_generation(prompt, gen_params, reference_id)
-        videos = self._extract_video_outputs(result)
+        custom_output = self._extract_custom_output(result)
+        action_only = isinstance(custom_output, dict) and bool(custom_output.get("action_only_output"))
+        videos = [{"action_only_output": True}] if action_only else self._extract_video_outputs(result)
         audios = self._extract_audio_outputs(result, expected_count=len(videos))
         actions = self._extract_action_outputs(result, expected_count=len(videos))
         audio_sample_rate = self._resolve_audio_sample_rate(result)
@@ -312,6 +318,11 @@ class OmniOpenAIServingVideo:
         if request.extra_params is not None and isinstance(request.extra_params, dict):
             if "video_codec_options" in request.extra_params:
                 video_codec_options = request.extra_params["video_codec_options"]
+
+        action = artifacts.actions[0]
+        if action is not None and isinstance(artifacts.videos[0], dict):
+            logger.info("Action-only video request %s completed; skipping MP4 encoding.", reference_id)
+            return b"", artifacts.stage_durations, artifacts.peak_memory_mb, action
 
         _t_encode_start = time.perf_counter()
         video_bytes = _encode_video_bytes(
@@ -509,7 +520,8 @@ class OmniOpenAIServingVideo:
         if not custom_output or "action" not in custom_output:
             return [None] * expected_count
 
-        action_items = cls._split_action_payload(custom_output["action"], expected_count)
+        action_payload = custom_output.get("actions", custom_output["action"])
+        action_items = cls._split_action_payload(action_payload, expected_count)
         return [
             cls._make_video_action(action_item, custom_output) if action_item is not None else None
             for action_item in action_items
@@ -620,7 +632,7 @@ class OmniOpenAIServingVideo:
     def _resolve_fps(result: Any) -> int | None:
         """Extract fps from multimodal_output if the model reported it."""
         multimodal_output = getattr(result, "multimodal_output", None)
-        if isinstance(multimodal_output, dict):
+        if isinstance(multimodal_output, Mapping):
             fps = multimodal_output.get("fps")
             if fps is not None:
                 try:
@@ -633,7 +645,7 @@ class OmniOpenAIServingVideo:
         request_output = getattr(result, "request_output", None)
         if isinstance(request_output, dict):
             mm = request_output.get("multimodal_output") or {}
-            if isinstance(mm, dict):
+            if isinstance(mm, Mapping):
                 fps = mm.get("fps")
                 if fps is not None:
                     try:
@@ -644,7 +656,7 @@ class OmniOpenAIServingVideo:
                         pass
         elif hasattr(request_output, "multimodal_output"):
             mm = getattr(request_output, "multimodal_output", None)
-            if isinstance(mm, dict):
+            if isinstance(mm, Mapping):
                 fps = mm.get("fps")
                 if fps is not None:
                     try:
@@ -659,7 +671,7 @@ class OmniOpenAIServingVideo:
     @classmethod
     def _extract_audio_sample_rate_from_result(cls, result: Any) -> int | None:
         multimodal_output = getattr(result, "multimodal_output", None)
-        if isinstance(multimodal_output, dict):
+        if isinstance(multimodal_output, Mapping):
             sample_rate = cls._coerce_audio_sample_rate(
                 multimodal_output.get("audio_sample_rate")
                 or multimodal_output.get("sample_rate")
@@ -672,7 +684,7 @@ class OmniOpenAIServingVideo:
         request_output = getattr(result, "request_output", None)
         if isinstance(request_output, dict):
             multimodal_output = request_output.get("multimodal_output") or {}
-            if isinstance(multimodal_output, dict):
+            if isinstance(multimodal_output, Mapping):
                 return cls._coerce_audio_sample_rate(
                     multimodal_output.get("audio_sample_rate")
                     or multimodal_output.get("sample_rate")
@@ -681,7 +693,7 @@ class OmniOpenAIServingVideo:
                 )
         elif hasattr(request_output, "multimodal_output"):
             multimodal_output = getattr(request_output, "multimodal_output", None)
-            if isinstance(multimodal_output, dict):
+            if isinstance(multimodal_output, Mapping):
                 return cls._coerce_audio_sample_rate(
                     multimodal_output.get("audio_sample_rate")
                     or multimodal_output.get("sample_rate")
