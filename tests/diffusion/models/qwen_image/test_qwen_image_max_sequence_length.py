@@ -257,4 +257,5 @@ def test_qwen_edit_validator_excludes_image_placeholders_from_budget(pipeline_cl
     ],
 )
 def test_forward_max_sequence_length_default_is_1024(pipeline_class: type):
-    assert inspect.signature(pipeline_class.forward).parameters["max_sequence_length"].default == 1024
+    params = inspect.signature(pipeline_class.forward).parameters
+    assert list(params.keys()) == ["self", "req"]

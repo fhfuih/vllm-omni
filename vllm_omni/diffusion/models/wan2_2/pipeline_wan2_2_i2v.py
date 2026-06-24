@@ -428,66 +428,63 @@ class Wan22I2VPipeline(
         quant_config = getattr(self.od_config, "quantization_config", None)
         return create_transformer_from_config(config, quant_config=quant_config)
 
-    def forward(
-        self,
-        req: OmniDiffusionRequest,
-        prompt: str | None = None,
-        negative_prompt: str | None = None,
-        image: PIL.Image.Image | torch.Tensor | None = None,
-        height: int = 480,
-        width: int = 832,
-        num_inference_steps: int = 40,
-        guidance_scale: float | tuple[float, float] = 5.0,
-        frame_num: int = 81,
-        output_type: str | None = "np",
-        generator: torch.Generator | list[torch.Generator] | None = None,
-        prompt_embeds: torch.Tensor | None = None,
-        negative_prompt_embeds: torch.Tensor | None = None,
-        image_embeds: torch.Tensor | None = None,
-        last_image: PIL.Image.Image | torch.Tensor | None = None,
-        attention_kwargs: dict | None = None,
-        **kwargs,
-    ) -> DiffusionOutput:
-        # Get parameters from request or arguments
+    def forward(self, req: OmniDiffusionRequest) -> DiffusionOutput:
+        prompt: str | None = None
+        negative_prompt: str | None = None
+        prompt_embeds: torch.Tensor | None = None
+        negative_prompt_embeds: torch.Tensor | None = None
+        image_embeds: torch.Tensor | None = None
         if len(req.prompts) > 1:
             raise ValueError(
                 """This model only supports a single prompt, not a batched request.""",
                 """Please pass in a single prompt object or string, or a single-item list.""",
             )
-        if len(req.prompts) == 1:  # If req.prompt is empty, default to prompt & neg_prompt in param list
-            prompt = req.prompts[0] if isinstance(req.prompts[0], str) else req.prompts[0].get("prompt")
-            negative_prompt = None if isinstance(req.prompts[0], str) else req.prompts[0].get("negative_prompt")
+        if len(req.prompts) == 1:
+            first_prompt = req.prompts[0]
+            prompt = first_prompt if isinstance(first_prompt, str) else (first_prompt.get("prompt") or "")
+            negative_prompt = None if isinstance(first_prompt, str) else first_prompt.get("negative_prompt")
+            prompt_embeds = None if isinstance(first_prompt, str) else first_prompt.get("prompt_embeds")
+            negative_prompt_embeds = (
+                None if isinstance(first_prompt, str) else first_prompt.get("negative_prompt_embeds")
+            )
+            image_embeds = None if isinstance(first_prompt, str) else first_prompt.get("image_embeds")
         if prompt is None and prompt_embeds is None:
             raise ValueError("Prompt or prompt_embeds is required for Wan2.2 generation.")
 
         # Get image from request
-        if image is None:
-            multi_modal_data = (
-                req.prompts[0].get("multi_modal_data", {}) if not isinstance(req.prompts[0], str) else None
-            )
-            raw_image = multi_modal_data.get("image", None) if multi_modal_data is not None else None
-            if raw_image is None:
-                raise ValueError("Image is required for I2V generation.")
-            if isinstance(raw_image, list):
-                if len(raw_image) > 1:
-                    logger.warning(
-                        """Received a list of image. Only a single image is supported by this model."""
-                        """Taking only the first image for now."""
-                    )
-                raw_image = raw_image[0]
-            if isinstance(raw_image, str):
-                image = PIL.Image.open(raw_image)
-            else:
-                image = cast(PIL.Image.Image | torch.Tensor, raw_image)
+        multi_modal_data = req.prompts[0].get("multi_modal_data", {}) if not isinstance(req.prompts[0], str) else None
+        raw_image = multi_modal_data.get("image", None) if multi_modal_data is not None else None
+        if raw_image is None:
+            raise ValueError("Image is required for I2V generation.")
+        if isinstance(raw_image, list):
+            if len(raw_image) > 1:
+                logger.warning(
+                    """Received a list of image. Only a single image is supported by this model."""
+                    """Taking only the first image for now."""
+                )
+            raw_image = raw_image[0]
+        if isinstance(raw_image, str):
+            image = PIL.Image.open(raw_image)
+        else:
+            image = cast(PIL.Image.Image | torch.Tensor, raw_image)
 
-        height = req.sampling_params.height or height
-        width = req.sampling_params.width or width
-        num_frames = req.sampling_params.num_frames or frame_num
-        num_steps = req.sampling_params.num_inference_steps or num_inference_steps
+        last_image: PIL.Image.Image | torch.Tensor | None = None
+        if multi_modal_data is not None:
+            last_image = multi_modal_data.get("last_image", None)
+
+        height = req.sampling_params.height or 480
+        width = req.sampling_params.width or 832
+        num_frames = req.sampling_params.num_frames or 81
+        num_steps = 40 if req.sampling_params.num_inference_steps is None else req.sampling_params.num_inference_steps
 
         # Respect per-request guidance_scale when explicitly provided.
         if req.sampling_params.guidance_scale_provided:
             guidance_scale = req.sampling_params.guidance_scale
+        else:
+            guidance_scale = 5.0
+
+        output_type = getattr(req.sampling_params, "output_type", None) or "np"
+        attention_kwargs: dict | None = None
 
         # Handle guidance scales
         guidance_low = guidance_scale if isinstance(guidance_scale, (int, float)) else guidance_scale[0]
@@ -532,8 +529,7 @@ class Wan22I2VPipeline(
         dtype = self.transformer.dtype
 
         # Generator setup
-        if generator is None:
-            generator = req.sampling_params.generator
+        generator = req.sampling_params.generator
         if generator is None and req.sampling_params.seed is not None:
             generator = torch.Generator(device=device).manual_seed(req.sampling_params.seed)
 

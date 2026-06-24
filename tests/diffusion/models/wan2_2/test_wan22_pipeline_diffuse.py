@@ -78,14 +78,14 @@ def test_forward_delegates_denoising_to_diffuse(monkeypatch) -> None:
     pipeline.diffuse = _fake_diffuse  # type: ignore[method-assign]
 
     req = SimpleNamespace(
-        prompts=["prompt"],
+        prompts=[{"prompt": "prompt", "prompt_embeds": prompt_embeds}],
         sampling_params=SimpleNamespace(
             height=None,
             width=None,
             num_frames=1,
             num_inference_steps=2,
-            guidance_scale_provided=False,
-            guidance_scale=None,
+            guidance_scale_provided=True,
+            guidance_scale=1.0,
             guidance_scale_2=None,
             boundary_ratio=None,
             generator=None,
@@ -93,11 +93,12 @@ def test_forward_delegates_denoising_to_diffuse(monkeypatch) -> None:
             num_outputs_per_prompt=1,
             max_sequence_length=32,
             latents=None,
+            output_type="latent",
             extra_args={},
         ),
     )
 
-    output = pipeline.forward(req, prompt_embeds=prompt_embeds, output_type="latent", guidance_scale=1.0)
+    output = pipeline.forward(req)
 
     assert torch.equal(output.output, torch.ones((1, 4, 1, 8, 8)))
     assert torch.equal(captured["timesteps"], pipeline.scheduler.timesteps)
