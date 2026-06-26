@@ -654,6 +654,7 @@ class QwenImageEditPlusPipeline(
             calculated_width = additional_information.get("calculated_width")
             height = req.sampling_params.height
             width = req.sampling_params.width
+            image = None
         else:
             # fallback to run pre-processing in pipeline (debug only)
             if (
@@ -710,7 +711,6 @@ class QwenImageEditPlusPipeline(
         output_type = req.sampling_params.output_type or "pil"
         attention_kwargs = None
         callback_on_step_end_tensor_inputs = ["latents"]
-        image = None
 
         # 1. check inputs
         # 2. encode prompts
