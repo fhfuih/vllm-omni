@@ -428,7 +428,9 @@ class StableAudioPipeline(nn.Module, SupportAudioOutput, SupportsComponentDiscov
         # Get audio duration from request extra params or defaults
         audio_start_in_s: float = req.sampling_params.extra_args.get("audio_start_in_s", 0.0)
         audio_end_in_s: float | None = req.sampling_params.extra_args.get("audio_end_in_s", None)
-        num_waveforms_per_prompt: int = req.sampling_params.extra_args.get("num_waveforms_per_prompt", 1)
+        num_waveforms_per_prompt: int = req.sampling_params.extra_args.get(
+            "num_waveforms_per_prompt", req.sampling_params.num_outputs_per_prompt or 1
+        )
         output_type = req.sampling_params.output_type or "np"
 
         # Calculate audio length
