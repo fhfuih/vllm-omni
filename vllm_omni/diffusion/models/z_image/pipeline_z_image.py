@@ -464,8 +464,8 @@ class ZImagePipeline(nn.Module, DiffusionPipelineProfilerMixin, SupportsComponen
         )
         latents = req.sampling_params.latents
 
-        cfg_normalization = False
-        cfg_truncation = 1.0
+        cfg_normalization = req.sampling_params.cfg_normalize
+        cfg_truncation = req.sampling_params.extra_args.get("cfg_truncation", 1.0)
         joint_attention_kwargs: dict[str, Any] | None = None
         callback_on_step_end: Callable[[int, int, dict], None] | None = None
         callback_on_step_end_tensor_inputs = ["latents"]
