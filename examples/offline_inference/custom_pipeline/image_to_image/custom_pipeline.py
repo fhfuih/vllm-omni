@@ -18,11 +18,12 @@ class CustomPipeline(QwenImageEditPipeline):
 
     def forward(self, req: OmniDiffusionRequest) -> DiffusionOutput:
         """Forward pass for image editing with dummy trajectory data."""
+        # Customize num_inference_steps that best suits your model
+        actual_num_steps = req.sampling_params.num_inference_steps or 50
+        req.sampling_params.num_inference_steps = actual_num_steps
+
         # Call parent's forward to get the normal output
         output = super().forward(req=req)
-
-        # Get actual num_inference_steps used
-        actual_num_steps = req.sampling_params.num_inference_steps or 50
 
         # Create dummy trajectory data
         dummy_trajectory_latents = torch.randn(actual_num_steps, 1, 16, 64, 64, dtype=torch.float32)
