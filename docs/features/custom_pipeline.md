@@ -64,11 +64,14 @@ class CustomPipeline(QwenImageEditPipeline):
         super().__init__(od_config=od_config, prefix=prefix)
 
     def forward(self, req: OmniDiffusionRequest) -> DiffusionOutput:
+        # Optionally customize sampling parameters
+        actual_num_steps = req.sampling_params.num_inference_steps or 50
+        req.sampling_params.num_inference_steps = actual_num_steps
+
         # Call parent's forward to get normal output
         output = super().forward(req=req)
 
         # Add custom trajectory data
-        actual_num_steps = req.sampling_params.num_inference_steps or 50
         output.trajectory_timesteps = torch.linspace(1000, 0, actual_num_steps, dtype=torch.float32)
         output.trajectory_latents = torch.randn(actual_num_steps, 1, 16, 64, 64, dtype=torch.float32)
 
