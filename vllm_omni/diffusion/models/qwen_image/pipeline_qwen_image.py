@@ -993,6 +993,8 @@ class QwenImagePipeline(
         num_images_per_prompt = (
             req.sampling_params.num_outputs_per_prompt if req.sampling_params.num_outputs_per_prompt > 0 else 1
         )
+        attention_kwargs = None
+        callback_on_step_end_tensor_inputs = ["latents"]
 
         ctx = self._prepare_generation_context(
             prompt=prompt,
@@ -1007,6 +1009,8 @@ class QwenImagePipeline(
             true_cfg_scale=true_cfg_scale,
             max_sequence_length=max_sequence_length,
             latents=req.sampling_params.latents,
+            attention_kwargs=attention_kwargs,
+            callback_on_step_end_tensor_inputs=callback_on_step_end_tensor_inputs,
         )
 
         latents = self.diffuse(
