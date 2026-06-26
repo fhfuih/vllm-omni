@@ -798,12 +798,14 @@ class Flux2KleinPipeline(
         latents = req.sampling_params.latents
         strength = req.sampling_params.strength if req.sampling_params.strength is not None else 1.0
 
-        text_encoder_out_layers: tuple[int, ...] = (9, 18, 27)
+        text_encoder_out_layers: tuple[int, ...] = req.sampling_params.extra_args.get(
+            "text_encoder_out_layers", (9, 18, 27)
+        )
+        padding_mask_crop: int | None = req.sampling_params.extra_args.get("padding_mask_crop")
         attention_kwargs: dict[str, Any] | None = None
         callback_on_step_end: Callable[[int, int, dict], None] | None = None
         callback_on_step_end_tensor_inputs = ["latents"]
         output_type = req.sampling_params.output_type or "pil"
-        padding_mask_crop: int | None = None
 
         # 1. Check inputs. Raise error if not correct
         self.check_inputs(
