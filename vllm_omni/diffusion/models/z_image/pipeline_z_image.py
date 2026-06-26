@@ -418,39 +418,8 @@ class ZImagePipeline(nn.Module, DiffusionPipelineProfilerMixin, SupportsComponen
         elif req.prompts:
             negative_prompt = ["" if isinstance(p, str) else (p.get("negative_prompt") or "") for p in req.prompts]
 
-        req_prompt_embeds = [p.get("prompt_embeds") if not isinstance(p, str) else None for p in req.prompts]
-        if any(p is not None for p in req_prompt_embeds):
-            if not all(p is not None for p in req_prompt_embeds):
-                raise ValueError(
-                    "If you provide `prompt_embeds` for at least one prompt, you have to provide `prompt_embeds` for"
-                    " all prompts."
-                )
-            prompt_embeds = []
-            for pe in req_prompt_embeds:
-                if isinstance(pe, list):
-                    prompt_embeds.extend(pe)
-                else:
-                    prompt_embeds.append(pe)
-        else:
-            prompt_embeds = None
-
-        req_negative_prompt_embeds = [
-            p.get("negative_prompt_embeds") if not isinstance(p, str) else None for p in req.prompts
-        ]
-        if any(p is not None for p in req_negative_prompt_embeds):
-            if not all(p is not None for p in req_negative_prompt_embeds):
-                raise ValueError(
-                    "If you provide `negative_prompt_embeds` for at least one prompt, "
-                    "you have to provide `negative_prompt_embeds` for all prompts."
-                )
-            negative_prompt_embeds = []
-            for npe in req_negative_prompt_embeds:
-                if isinstance(npe, list):
-                    negative_prompt_embeds.extend(npe)
-                else:
-                    negative_prompt_embeds.append(npe)
-        else:
-            negative_prompt_embeds = None
+        prompt_embeds = None
+        negative_prompt_embeds = None
 
         image = None
         if req.prompts:
@@ -522,33 +491,20 @@ class ZImagePipeline(nn.Module, DiffusionPipelineProfilerMixin, SupportsComponen
         self._cfg_normalization = cfg_normalization
         self._cfg_truncation = cfg_truncation
         # 2. Define call parameters
-        if prompt is not None and isinstance(prompt, str):
-            batch_size = 1
-        elif prompt is not None and isinstance(prompt, list):
-            batch_size = len(prompt)
-        else:
-            batch_size = len(prompt_embeds)
+        batch_size = len(prompt)
 
-        # If prompt_embeds is provided and prompt is None, skip encoding
-        if prompt_embeds is not None and prompt is None:
-            if self.do_classifier_free_guidance and negative_prompt_embeds is None:
-                raise ValueError(
-                    "When `prompt_embeds` is provided without `prompt`, "
-                    "`negative_prompt_embeds` must also be provided for classifier-free guidance."
-                )
-        else:
-            (
-                prompt_embeds,
-                negative_prompt_embeds,
-            ) = self.encode_prompt(
-                prompt=prompt,
-                negative_prompt=negative_prompt,
-                do_classifier_free_guidance=self.do_classifier_free_guidance,
-                prompt_embeds=prompt_embeds,
-                negative_prompt_embeds=negative_prompt_embeds,
-                device=device,
-                max_sequence_length=max_sequence_length,
-            )
+        (
+            prompt_embeds,
+            negative_prompt_embeds,
+        ) = self.encode_prompt(
+            prompt=prompt,
+            negative_prompt=negative_prompt,
+            do_classifier_free_guidance=self.do_classifier_free_guidance,
+            prompt_embeds=prompt_embeds,
+            negative_prompt_embeds=negative_prompt_embeds,
+            device=device,
+            max_sequence_length=max_sequence_length,
+        )
 
         # 4. Prepare latent variables
         num_channels_latents = self.transformer.in_channels

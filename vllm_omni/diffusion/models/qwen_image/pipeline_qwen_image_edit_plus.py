@@ -737,16 +737,9 @@ class QwenImageEditPlusPipeline(
         self._current_timestep = None
         self._interrupt = False
 
-        if prompt is not None and isinstance(prompt, str):
-            batch_size = 1
-        elif prompt is not None and isinstance(prompt, list):
-            batch_size = len(prompt)
-        else:
-            batch_size = prompt_embeds.shape[0]
+        batch_size = 1
 
-        has_neg_prompt = negative_prompt is not None or (
-            negative_prompt_embeds is not None and negative_prompt_embeds_mask is not None
-        )
+        has_neg_prompt = negative_prompt is not None
 
         do_true_cfg = true_cfg_scale > 1 and has_neg_prompt
         self.check_cfg_parallel_validity(true_cfg_scale, has_neg_prompt)

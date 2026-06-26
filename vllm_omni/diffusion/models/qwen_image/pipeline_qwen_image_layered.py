@@ -747,16 +747,9 @@ the image\n<|vision_start|><|image_pad|><|vision_end|><|im_end|>\n<|im_start|>as
         # 3. encode prompot & negative prompt
         if prompt is None or prompt == "" or prompt == " ":
             prompt = self.get_image_caption(prompt_image, use_en_prompt=use_en_prompt, device=self.device)
-        if prompt is not None and isinstance(prompt, str):
-            batch_size = 1
-        elif prompt is not None and isinstance(prompt, list):
-            batch_size = len(prompt)
-        else:
-            batch_size = prompt_embeds.shape[0]
+        batch_size = 1
 
-        has_neg_prompt = negative_prompt is not None or (
-            negative_prompt_embeds is not None and negative_prompt_embeds_mask is not None
-        )
+        has_neg_prompt = negative_prompt is not None
 
         if true_cfg_scale > 1 and not has_neg_prompt:
             logger.warning(

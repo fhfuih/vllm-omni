@@ -552,13 +552,9 @@ class Wan22Pipeline(
             first_prompt = req.prompts[0]
             prompt = first_prompt if isinstance(first_prompt, str) else (first_prompt.get("prompt") or "")
             negative_prompt = None if isinstance(first_prompt, str) else first_prompt.get("negative_prompt")
-            prompt_embeds = None if isinstance(first_prompt, str) else first_prompt.get("prompt_embeds")
-            negative_prompt_embeds = (
-                None if isinstance(first_prompt, str) else first_prompt.get("negative_prompt_embeds")
-            )
 
-        if prompt is None and prompt_embeds is None:
-            raise ValueError("Prompt or prompt_embeds is required for Wan2.2 generation.")
+        if not prompt:
+            raise ValueError("Prompt is required for Wan2.2 generation.")
 
         height = req.sampling_params.height or 480
         width = req.sampling_params.width or 832
@@ -639,24 +635,16 @@ class Wan22Pipeline(
             current_omni_platform.synchronize()
             _t_pipeline_start = time.perf_counter()
             _t_text_enc_start = _t_pipeline_start
-        if prompt_embeds is None:
-            prompt_embeds, negative_prompt_embeds = self.encode_prompt(
-                prompt=prompt,
-                negative_prompt=negative_prompt,
-                do_classifier_free_guidance=guidance_low > 1.0 or guidance_high > 1.0,
-                num_videos_per_prompt=req.sampling_params.num_outputs_per_prompt or 1,
-                max_sequence_length=req.sampling_params.max_sequence_length or 512,
-                device=device,
-                dtype=dtype,
-            )
-        else:
-            prompt_embeds = prompt_embeds.to(device=device, dtype=dtype)
-            if negative_prompt_embeds is not None:
-                negative_prompt_embeds = negative_prompt_embeds.to(device=device, dtype=dtype)
-            elif guidance_low > 1.0 or guidance_high > 1.0:
-                raise ValueError(
-                    "negative_prompt_embeds must be provided when prompt_embeds are given and guidance > 1."
-                )
+        prompt_embeds, negative_prompt_embeds = self.encode_prompt(
+            prompt=prompt,
+            negative_prompt=negative_prompt,
+            do_classifier_free_guidance=guidance_low > 1.0 or guidance_high > 1.0,
+            num_videos_per_prompt=req.sampling_params.num_outputs_per_prompt or 1,
+            max_sequence_length=req.sampling_params.max_sequence_length or 512,
+            device=device,
+            dtype=dtype,
+        )
+
         if DEBUG_PERF:
             current_omni_platform.synchronize()
             _t_text_enc_ms = (time.perf_counter() - _t_text_enc_start) * 1000

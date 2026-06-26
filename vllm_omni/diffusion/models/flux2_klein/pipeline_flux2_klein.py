@@ -777,32 +777,8 @@ class Flux2KleinPipeline(
         else:
             image = PIL.Image.open(raw_image) if isinstance(raw_image, str) else cast(PIL.Image.Image, raw_image)
 
-        req_prompt_embeds = [p.get("prompt_embeds") if not isinstance(p, str) else None for p in req.prompts]
-        if any(p is not None for p in req_prompt_embeds):
-            try:
-                prompt_embeds = torch.stack(req_prompt_embeds)  # type: ignore[arg-type]
-            except TypeError:
-                raise ValueError(
-                    "If you provide `prompt_embeds` for at least one prompt, you have to provide `prompt_embeds` for"
-                    " all prompts so the pipeline can stack them together."
-                )
-        else:
-            prompt_embeds = None
-
-        req_negative_prompt_embeds = [
-            p.get("negative_prompt_embeds") if not isinstance(p, str) else None for p in req.prompts
-        ]
-        if any(p is not None for p in req_negative_prompt_embeds):
-            try:
-                negative_prompt_embeds = torch.stack(req_negative_prompt_embeds)  # type: ignore[arg-type]
-            except TypeError:
-                raise ValueError(
-                    "If you provide `negative_prompt_embeds` for at least one prompt, "
-                    "you have to provide `negative_prompt_embeds` for all prompts "
-                    "so the pipeline can stack them together."
-                )
-        else:
-            negative_prompt_embeds = None
+        prompt_embeds = None
+        negative_prompt_embeds = None
 
         height = req.sampling_params.height
         width = req.sampling_params.width
@@ -847,12 +823,7 @@ class Flux2KleinPipeline(
         self._interrupt = False
 
         # 2. Define call parameters
-        if prompt is not None and isinstance(prompt, str):
-            batch_size = 1
-        elif prompt is not None and isinstance(prompt, list):
-            batch_size = len(prompt)
-        else:
-            batch_size = prompt_embeds.shape[0]
+        batch_size = 1
 
         device = self._execution_device
 

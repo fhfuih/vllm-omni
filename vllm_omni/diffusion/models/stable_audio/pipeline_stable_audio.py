@@ -411,32 +411,8 @@ class StableAudioPipeline(nn.Module, SupportAudioOutput, SupportsComponentDiscov
         elif req.prompts:
             negative_prompt = ["" if isinstance(p, str) else (p.get("negative_prompt") or "") for p in req.prompts]
 
-        req_prompt_embeds = [p.get("prompt_embeds") if not isinstance(p, str) else None for p in req.prompts]
-        if any(p is not None for p in req_prompt_embeds):
-            try:
-                prompt_embeds = torch.stack(req_prompt_embeds)  # type: ignore # intentionally expect TypeError
-            except TypeError:
-                raise ValueError(
-                    "If you provide `prompt_embeds` for at least one prompt, you have to provide `prompt_embeds` for"
-                    " all prompts so the pipeline can stack them together."
-                )
-        else:
-            prompt_embeds = None
-
-        req_negative_prompt_embeds = [
-            p.get("negative_prompt_embeds") if not isinstance(p, str) else None for p in req.prompts
-        ]
-        if any(p is not None for p in req_negative_prompt_embeds):
-            try:
-                negative_prompt_embeds = torch.stack(req_negative_prompt_embeds)  # type: ignore # intentionally expect TypeError
-            except TypeError:
-                raise ValueError(
-                    "If you provide `negative_prompt_embeds` for at least one prompt, "
-                    "you have to provide `negative_prompt_embeds` for all prompts "
-                    "so the pipeline can stack them together."
-                )
-        else:
-            negative_prompt_embeds = None
+        prompt_embeds = None
+        negative_prompt_embeds = None
 
         num_inference_steps = req.sampling_params.num_inference_steps or 100
         if req.sampling_params.guidance_scale_provided:
@@ -483,12 +459,7 @@ class StableAudioPipeline(nn.Module, SupportAudioOutput, SupportsComponentDiscov
         )
 
         # Determine batch size
-        if prompt is not None and isinstance(prompt, str):
-            batch_size = 1
-        elif prompt is not None and isinstance(prompt, list):
-            batch_size = len(prompt)
-        else:
-            batch_size = prompt_embeds.shape[0]
+        batch_size = len(prompt)
 
         device = self.device
         do_classifier_free_guidance = guidance_scale > 1.0
@@ -509,7 +480,7 @@ class StableAudioPipeline(nn.Module, SupportAudioOutput, SupportsComponentDiscov
             audio_start_in_s,
             audio_end_in_s,
             device,
-            do_classifier_free_guidance and (negative_prompt is not None or negative_prompt_embeds is not None),
+            do_classifier_free_guidance and negative_prompt is not None,
             batch_size,
         )
 
@@ -524,7 +495,7 @@ class StableAudioPipeline(nn.Module, SupportAudioOutput, SupportsComponentDiscov
         )
 
         # Handle CFG without negative prompt
-        if do_classifier_free_guidance and negative_prompt_embeds is None and negative_prompt is None:
+        if do_classifier_free_guidance and negative_prompt is None:
             negative_text_audio_duration_embeds = torch.zeros_like(text_audio_duration_embeds)
             text_audio_duration_embeds = torch.cat(
                 [negative_text_audio_duration_embeds, text_audio_duration_embeds],

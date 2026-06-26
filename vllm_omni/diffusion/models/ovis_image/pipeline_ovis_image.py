@@ -558,32 +558,8 @@ class OvisImagePipeline(nn.Module, CFGParallelMixin, DiffusionPipelineProfilerMi
         elif req.prompts:
             negative_prompt = ["" if isinstance(p, str) else (p.get("negative_prompt") or "") for p in req.prompts]
 
-        req_prompt_embeds = [p.get("prompt_embeds") if not isinstance(p, str) else None for p in req.prompts]
-        if any(p is not None for p in req_prompt_embeds):
-            try:
-                prompt_embeds = torch.stack(req_prompt_embeds)  # type: ignore[arg-type]
-            except TypeError:
-                raise ValueError(
-                    "If you provide `prompt_embeds` for at least one prompt, you have to provide `prompt_embeds` for"
-                    " all prompts so the pipeline can stack them together."
-                )
-        else:
-            prompt_embeds = None
-
-        req_negative_prompt_embeds = [
-            p.get("negative_prompt_embeds") if not isinstance(p, str) else None for p in req.prompts
-        ]
-        if any(p is not None for p in req_negative_prompt_embeds):
-            try:
-                negative_prompt_embeds = torch.stack(req_negative_prompt_embeds)  # type: ignore[arg-type]
-            except TypeError:
-                raise ValueError(
-                    "If you provide `negative_prompt_embeds` for at least one prompt, "
-                    "you have to provide `negative_prompt_embeds` for all prompts "
-                    "so the pipeline can stack them together."
-                )
-        else:
-            negative_prompt_embeds = None
+        prompt_embeds = None
+        negative_prompt_embeds = None
 
         height = req.sampling_params.height or self.default_sample_size * self.vae_scale_factor
         width = req.sampling_params.width or self.default_sample_size * self.vae_scale_factor
@@ -632,12 +608,7 @@ class OvisImagePipeline(nn.Module, CFGParallelMixin, DiffusionPipelineProfilerMi
         self._interrupt = False
 
         # 2. Define call parameters
-        if prompt is not None and isinstance(prompt, str):
-            batch_size = 1
-        elif prompt is not None and isinstance(prompt, list):
-            batch_size = len(prompt)
-        else:
-            batch_size = prompt_embeds.shape[0]
+        batch_size = len(prompt)
 
         do_classifier_free_guidance = guidance_scale > 1.0
         prompt_embeds, text_ids = self.encode_prompt(

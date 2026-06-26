@@ -572,10 +572,7 @@ class LongCatImageEditPipeline(
         negative_prompt_embeds = None
         output_type = "pil"
 
-        if prompt is not None:
-            batch_size = 1 if isinstance(prompt, str) else len(prompt)
-        else:
-            batch_size = prompt_embeds.shape[0]
+        batch_size = 1 if isinstance(prompt, str) else len(prompt)
 
         if not isinstance(first_prompt, str) and "preprocessed_image" in (
             additional_information := first_prompt.get("additional_information", {})

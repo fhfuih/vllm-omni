@@ -511,62 +511,10 @@ class FluxPipeline(
         elif req.prompts:
             negative_prompt = ["" if isinstance(p, str) else (p.get("negative_prompt") or "") for p in req.prompts]
 
-        req_prompt_embeds = [p.get("prompt_embeds") if not isinstance(p, str) else None for p in req.prompts]
-        if any(p is not None for p in req_prompt_embeds):
-            try:
-                prompt_embeds = torch.stack(req_prompt_embeds)  # type: ignore[arg-type]
-            except TypeError:
-                raise ValueError(
-                    "If you provide `prompt_embeds` for at least one prompt, you have to provide `prompt_embeds` for"
-                    " all prompts so the pipeline can stack them together."
-                )
-        else:
-            prompt_embeds = None
-
-        req_negative_prompt_embeds = [
-            p.get("negative_prompt_embeds") if not isinstance(p, str) else None for p in req.prompts
-        ]
-        if any(p is not None for p in req_negative_prompt_embeds):
-            try:
-                negative_prompt_embeds = torch.stack(req_negative_prompt_embeds)  # type: ignore[arg-type]
-            except TypeError:
-                raise ValueError(
-                    "If you provide `negative_prompt_embeds` for at least one prompt, "
-                    "you have to provide `negative_prompt_embeds` for all prompts "
-                    "so the pipeline can stack them together."
-                )
-        else:
-            negative_prompt_embeds = None
-
-        req_pooled_prompt_embeds = [
-            p.get("pooled_prompt_embeds") if not isinstance(p, str) else None for p in req.prompts
-        ]
-        if any(p is not None for p in req_pooled_prompt_embeds):
-            try:
-                pooled_prompt_embeds = torch.stack(req_pooled_prompt_embeds)  # type: ignore[arg-type]
-            except TypeError:
-                raise ValueError(
-                    "If you provide `pooled_prompt_embeds` for at least one prompt, "
-                    "you have to provide `pooled_prompt_embeds` for all prompts "
-                    "so the pipeline can stack them together."
-                )
-        else:
-            pooled_prompt_embeds = None
-
-        req_negative_pooled_prompt_embeds = [
-            p.get("negative_pooled_prompt_embeds") if not isinstance(p, str) else None for p in req.prompts
-        ]
-        if any(p is not None for p in req_negative_pooled_prompt_embeds):
-            try:
-                negative_pooled_prompt_embeds = torch.stack(req_negative_pooled_prompt_embeds)  # type: ignore[arg-type]
-            except TypeError:
-                raise ValueError(
-                    "If you provide `negative_pooled_prompt_embeds` for at least one prompt, "
-                    "you have to provide `negative_pooled_prompt_embeds` for all prompts "
-                    "so the pipeline can stack them together."
-                )
-        else:
-            negative_pooled_prompt_embeds = None
+        prompt_embeds = None
+        negative_prompt_embeds = None
+        pooled_prompt_embeds = None
+        negative_pooled_prompt_embeds = None
 
         height = req.sampling_params.height or self.default_sample_size * self.vae_scale_factor
         width = req.sampling_params.width or self.default_sample_size * self.vae_scale_factor
@@ -613,16 +561,9 @@ class FluxPipeline(
         self._interrupt = False
 
         # 2. Define call parameters
-        if prompt is not None and isinstance(prompt, str):
-            batch_size = 1
-        elif prompt is not None and isinstance(prompt, list):
-            batch_size = len(prompt)
-        else:
-            batch_size = prompt_embeds.shape[0]
+        batch_size = len(prompt)
 
-        has_neg_prompt = negative_prompt is not None or (
-            negative_prompt_embeds is not None and negative_pooled_prompt_embeds is not None
-        )
+        has_neg_prompt = negative_prompt is not None
         do_true_cfg = true_cfg_scale > 1 and has_neg_prompt
 
         self.check_cfg_parallel_validity(true_cfg_scale, has_neg_prompt)

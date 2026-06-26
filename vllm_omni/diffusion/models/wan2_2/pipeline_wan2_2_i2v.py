@@ -443,13 +443,9 @@ class Wan22I2VPipeline(
             first_prompt = req.prompts[0]
             prompt = first_prompt if isinstance(first_prompt, str) else (first_prompt.get("prompt") or "")
             negative_prompt = None if isinstance(first_prompt, str) else first_prompt.get("negative_prompt")
-            prompt_embeds = None if isinstance(first_prompt, str) else first_prompt.get("prompt_embeds")
-            negative_prompt_embeds = (
-                None if isinstance(first_prompt, str) else first_prompt.get("negative_prompt_embeds")
-            )
-            image_embeds = None if isinstance(first_prompt, str) else first_prompt.get("image_embeds")
-        if prompt is None and prompt_embeds is None:
-            raise ValueError("Prompt or prompt_embeds is required for Wan2.2 generation.")
+
+        if not prompt:
+            raise ValueError("Prompt is required for Wan2.2 generation.")
 
         # Get image from request
         multi_modal_data = req.prompts[0].get("multi_modal_data", {}) if not isinstance(req.prompts[0], str) else None
@@ -539,20 +535,15 @@ class Wan22I2VPipeline(
             _t_pipeline_start = time.perf_counter()
             _t_text_enc_start = _t_pipeline_start
 
-        if prompt_embeds is None:
-            prompt_embeds, negative_prompt_embeds = self.encode_prompt(
-                prompt=prompt,
-                negative_prompt=negative_prompt,
-                do_classifier_free_guidance=guidance_low > 1.0 or guidance_high > 1.0,
-                num_videos_per_prompt=req.sampling_params.num_outputs_per_prompt or 1,
-                max_sequence_length=req.sampling_params.max_sequence_length or 512,
-                device=device,
-                dtype=dtype,
-            )
-        else:
-            prompt_embeds = prompt_embeds.to(device=device, dtype=dtype)
-            if negative_prompt_embeds is not None:
-                negative_prompt_embeds = negative_prompt_embeds.to(device=device, dtype=dtype)
+        prompt_embeds, negative_prompt_embeds = self.encode_prompt(
+            prompt=prompt,
+            negative_prompt=negative_prompt,
+            do_classifier_free_guidance=guidance_low > 1.0 or guidance_high > 1.0,
+            num_videos_per_prompt=req.sampling_params.num_outputs_per_prompt or 1,
+            max_sequence_length=req.sampling_params.max_sequence_length or 512,
+            device=device,
+            dtype=dtype,
+        )
 
         if DEBUG_PERF:
             current_omni_platform.synchronize()
