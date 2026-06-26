@@ -648,48 +648,14 @@ class QwenImageEditPlusPipeline(
         ):
             condition_images = additional_information.get("condition_images")
             vae_images = additional_information.get("vae_images")
-            condition_image_sizes = additional_information.get("condition_image_sizes")
             vae_image_sizes = additional_information.get("vae_image_sizes")
             calculated_height = additional_information.get("calculated_height")
             calculated_width = additional_information.get("calculated_width")
-            height = req.sampling_params.height
-            width = req.sampling_params.width
-            image = None
-        else:
-            # fallback to run pre-processing in pipeline (debug only)
-            if (
-                raw_image := None
-                if isinstance(first_prompt, str)
-                else first_prompt.get("multi_modal_data", {}).get("image")
-            ) is None:
-                raise ValueError("Image is required for QwenImageEditPlusPipeline")
-            elif isinstance(raw_image, list):
-                image = [PIL.Image.open(im) if isinstance(im, str) else cast(PIL.Image.Image, im) for im in raw_image]
-            else:
-                image = [PIL.Image.open(raw_image) if isinstance(raw_image, str) else cast(PIL.Image.Image, raw_image)]
-
-            image_size = image[0].size
-            calculated_width, calculated_height = calculate_dimensions(VAE_IMAGE_SIZE, image_size[0] / image_size[1])
             height = req.sampling_params.height or calculated_height
             width = req.sampling_params.width or calculated_width
-
-            height, width = normalize_min_aligned_size(height, width, self.vae_scale_factor * 2)
-
-            condition_images = []
-            vae_images = []
-            condition_image_sizes = []
-            vae_image_sizes = []
-
-            for img in image:
-                image_width, image_height = img.size
-                condition_width, condition_height = calculate_dimensions(
-                    CONDITION_IMAGE_SIZE, image_width / image_height
-                )
-                vae_width, vae_height = calculate_dimensions(VAE_IMAGE_SIZE, image_width / image_height)
-                condition_image_sizes.append((condition_width, condition_height))
-                vae_image_sizes.append((vae_width, vae_height))
-                condition_images.append(self.image_processor.resize(img, condition_height, condition_width))
-                vae_images.append(self.image_processor.preprocess(img, vae_height, vae_width).unsqueeze(2))
+            image = None
+        else:
+            raise RuntimeError("Missing preprocess images that should have been created by the preprocess function.")
 
         num_inference_steps = req.sampling_params.num_inference_steps or 50
         sigmas = req.sampling_params.sigmas

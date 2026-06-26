@@ -582,24 +582,7 @@ class LongCatImageEditPipeline(
             calculated_height = additional_information.get("calculated_height", height)
             calculated_width = additional_information.get("calculated_width", width)
         else:
-            if (
-                raw_image := None
-                if isinstance(first_prompt, str)
-                else first_prompt.get("multi_modal_data", {}).get("image")
-            ) is None:
-                image = None
-            elif isinstance(raw_image, list):
-                image = [PIL.Image.open(im) if isinstance(im, str) else cast(PIL.Image.Image, im) for im in raw_image]
-            else:
-                image = PIL.Image.open(raw_image) if isinstance(raw_image, str) else cast(PIL.Image.Image, raw_image)
-
-            image_size = image[0].size if isinstance(image, list) else image.size
-            calculated_width, calculated_height = calculate_dimensions(1024 * 1024, image_size[0] * 1.0 / image_size[1])
-
-            if image is not None and not (isinstance(image, torch.Tensor) and image.size(1) == self.latent_channels):
-                image = self.image_processor.resize(image, calculated_height, calculated_width)
-                prompt_image = self.image_processor.resize(image, calculated_height // 2, calculated_width // 2)
-                image = self.image_processor.preprocess(image, calculated_height, calculated_width)
+            raise RuntimeError("Missing preprocess image that should have been created by the preprocess function.")
 
         self.check_inputs(
             prompt,

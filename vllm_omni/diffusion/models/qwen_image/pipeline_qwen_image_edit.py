@@ -705,30 +705,7 @@ class QwenImageEditPipeline(
             height = req.sampling_params.height
             width = req.sampling_params.width
         else:
-            # fallback to run pre-processing in pipeline (debug only)
-            if (
-                raw_image := None
-                if isinstance(first_prompt, str)
-                else first_prompt.get("multi_modal_data", {}).get("image")
-            ) is None:
-                image = None
-            elif isinstance(raw_image, list):
-                image = [PIL.Image.open(im) if isinstance(im, str) else cast(PIL.Image.Image, im) for im in raw_image]
-            else:
-                image = PIL.Image.open(raw_image) if isinstance(raw_image, str) else cast(PIL.Image.Image, raw_image)
-
-            image_size = image[0].size if isinstance(image, list) else image.size
-            calculated_width, calculated_height, _ = calculate_dimensions(1024 * 1024, image_size[0] / image_size[1])
-            height = req.sampling_params.height or calculated_height
-            width = req.sampling_params.width or calculated_width
-
-            height, width = normalize_min_aligned_size(height, width, self.vae_scale_factor * 2)
-
-            if image is not None and not (isinstance(image, torch.Tensor) and image.size(1) == self.latent_channels):
-                image = self.image_processor.resize(image, calculated_height, calculated_width)
-                prompt_image = image
-                image = self.image_processor.preprocess(image, calculated_height, calculated_width)
-                image = image.unsqueeze(2)
+            raise RuntimeError("Missing preprocess image that should have been created by the preprocess function.")
 
         num_inference_steps = req.sampling_params.num_inference_steps or 50
         sigmas = req.sampling_params.sigmas

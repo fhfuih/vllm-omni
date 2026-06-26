@@ -662,7 +662,6 @@ the image\n<|vision_start|><|image_pad|><|vision_end|><|im_end|>\n<|im_start|>as
         negative_prompt = None if isinstance(first_prompt, str) else first_prompt.get("negative_prompt")
 
         layers = req.sampling_params.layers
-        resolution = req.sampling_params.resolution
         max_sequence_length = req.sampling_params.max_sequence_length or 1024
         cfg_normalize = req.sampling_params.cfg_normalize
         use_en_prompt = req.sampling_params.use_en_prompt
@@ -695,36 +694,7 @@ the image\n<|vision_start|><|image_pad|><|vision_end|><|im_end|>\n<|im_start|>as
             height = req.sampling_params.height
             width = req.sampling_params.width
         else:
-            # fallback to run pre-processing in pipeline (debug only)
-            if (
-                raw_image := None
-                if isinstance(first_prompt, str)
-                else first_prompt.get("multi_modal_data", {}).get("image")
-            ) is None:
-                image = None
-            elif isinstance(raw_image, list):
-                image = [PIL.Image.open(im) if isinstance(im, str) else cast(PIL.Image.Image, im) for im in raw_image]
-            else:
-                image = PIL.Image.open(raw_image) if isinstance(raw_image, str) else cast(PIL.Image.Image, raw_image)
-
-            if isinstance(image, PIL.Image.Image) and image.mode != "RGBA":
-                image = image.convert("RGBA")
-            image_size = image[0].size if isinstance(image, list) else image.size
-            assert resolution in [640, 1024], f"resolution must be either 640 or 1024, but got {resolution}"
-            calculated_width, calculated_height = calculate_dimensions(
-                resolution * resolution, image_size[0] / image_size[1]
-            )
-            height = calculated_height
-            width = calculated_width
-
-            height, width = normalize_min_aligned_size(height, width, self.vae_scale_factor * 2)
-
-            if image is not None and not (isinstance(image, torch.Tensor) and image.size(1) == self.latent_channels):
-                image = self.image_processor.resize(image, calculated_height, calculated_width)
-                prompt_image = image
-                image = self.image_processor.preprocess(image, calculated_height, calculated_width)
-                image = image.unsqueeze(2)
-                image = image.to(dtype=self.text_encoder.dtype)
+            raise RuntimeError("Missing preprocess image that should have been created by the preprocess function.")
 
         # 2. check inputs
         self.check_inputs(
