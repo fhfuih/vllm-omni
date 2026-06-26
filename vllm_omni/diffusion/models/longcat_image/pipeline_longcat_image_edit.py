@@ -6,7 +6,7 @@ import math
 import os
 import re
 from collections.abc import Iterable
-from typing import Any, ClassVar, cast
+from typing import ClassVar, cast
 
 import numpy as np
 import PIL.Image
@@ -543,24 +543,7 @@ class LongCatImageEditPipeline(
                 f" {negative_prompt_embeds}. Please make sure to only forward one of the two."
             )
 
-    def forward(
-        self,
-        req: OmniDiffusionRequest,
-        image: PIL.Image.Image | torch.Tensor | None = None,
-        prompt: str | list[str] | None = None,
-        negative_prompt: str | list[str] | None = None,
-        num_inference_steps: int = 50,
-        sigmas: list[float] | None = None,
-        guidance_scale: float = 3.5,
-        num_images_per_prompt: int | None = 1,
-        generator: torch.Generator | list[torch.Generator] | None = None,
-        latents: torch.FloatTensor | None = None,
-        prompt_embeds: torch.Tensor | None = None,
-        negative_prompt_embeds: torch.Tensor | None = None,
-        output_type: str | None = "pil",
-        return_dict: bool = True,
-        joint_attention_kwargs: dict[str, Any] | None = None,
-    ):
+    def forward(self, req: OmniDiffusionRequest) -> DiffusionOutput:
         # TODO: In online mode, sometimes it receives [{"negative_prompt": None}, {...}], so cannot use .get("...", "")
         # TODO: May be some data formatting operations on the API side. Hack for now.
         if len(req.prompts) > 1:
@@ -571,27 +554,25 @@ class LongCatImageEditPipeline(
         first_prompt = req.prompts[0]
         prompt = first_prompt if isinstance(first_prompt, str) else (first_prompt.get("prompt") or "")
         negative_prompt = None if isinstance(first_prompt, str) else first_prompt.get("negative_prompt")
-        prompt_embeds = None if isinstance(first_prompt, str) else first_prompt.get("prompt_embeds")
-        negative_prompt_embeds = None if isinstance(first_prompt, str) else first_prompt.get("negative_prompt_embeds")  # type: ignore # Why it is list[torch.Tensor] in OmniTokenInputs or OmniEmbedsPrompt? Doesn't make sense
 
-        sigmas = req.sampling_params.sigmas or sigmas
-        guidance_scale = (
-            req.sampling_params.guidance_scale if req.sampling_params.guidance_scale is not None else guidance_scale
-        )
-        num_inference_steps = req.sampling_params.num_inference_steps or num_inference_steps
+        sigmas = req.sampling_params.sigmas
+        if req.sampling_params.guidance_scale_provided:
+            guidance_scale = req.sampling_params.guidance_scale
+        else:
+            guidance_scale = 3.5
+        num_inference_steps = req.sampling_params.num_inference_steps or 50
         num_images_per_prompt = (
-            req.sampling_params.num_outputs_per_prompt
-            if req.sampling_params.num_outputs_per_prompt is not None
-            else num_images_per_prompt
+            req.sampling_params.num_outputs_per_prompt if req.sampling_params.num_outputs_per_prompt > 0 else 1
         )
-        generator = req.sampling_params.generator or generator
+        generator = req.sampling_params.generator
         height = req.sampling_params.height or self.default_sample_size * self.vae_scale_factor
         width = req.sampling_params.width or self.default_sample_size * self.vae_scale_factor
+        latents = req.sampling_params.latents
+        prompt_embeds = None
+        negative_prompt_embeds = None
+        output_type = req.sampling_params.output_type or "pil"
 
-        if prompt is not None:
-            batch_size = 1 if isinstance(prompt, str) else len(prompt)
-        else:
-            batch_size = prompt_embeds.shape[0]
+        batch_size = 1 if isinstance(prompt, str) else len(prompt)
 
         if not isinstance(first_prompt, str) and "preprocessed_image" in (
             additional_information := first_prompt.get("additional_information", {})
@@ -601,13 +582,7 @@ class LongCatImageEditPipeline(
             calculated_height = additional_information.get("calculated_height", height)
             calculated_width = additional_information.get("calculated_width", width)
         else:
-            image_size = image[0].size if isinstance(image, list) else image.size
-            calculated_width, calculated_height = calculate_dimensions(1024 * 1024, image_size[0] * 1.0 / image_size[1])
-
-            if image is not None and not (isinstance(image, torch.Tensor) and image.size(1) == self.latent_channels):
-                image = self.image_processor.resize(image, calculated_height, calculated_width)
-                prompt_image = self.image_processor.resize(image, calculated_height // 2, calculated_width // 2)
-                image = self.image_processor.preprocess(image, calculated_height, calculated_width)
+            raise RuntimeError("Missing preprocess image that should have been created by the preprocess function.")
 
         self.check_inputs(
             prompt,
