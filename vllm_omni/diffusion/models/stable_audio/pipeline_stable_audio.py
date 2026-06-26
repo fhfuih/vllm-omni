@@ -429,7 +429,7 @@ class StableAudioPipeline(nn.Module, SupportAudioOutput, SupportsComponentDiscov
         audio_start_in_s: float = req.sampling_params.extra_args.get("audio_start_in_s", 0.0)
         audio_end_in_s: float | None = req.sampling_params.extra_args.get("audio_end_in_s", None)
         num_waveforms_per_prompt: int = req.sampling_params.extra_args.get("num_waveforms_per_prompt", 1)
-        output_type = getattr(req.sampling_params, "output_type", None) or "np"
+        output_type = req.sampling_params.output_type or "np"
 
         # Calculate audio length
         downsample_ratio = self.vae.hop_length

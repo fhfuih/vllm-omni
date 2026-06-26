@@ -645,6 +645,7 @@ class StableDiffusion3Pipeline(nn.Module, CFGParallelMixin, DiffusionPipelinePro
             req.sampling_params.num_outputs_per_prompt if req.sampling_params.num_outputs_per_prompt > 0 else 1
         )
         latents = req.sampling_params.latents
+        output_type = req.sampling_params.output_type or self.output_type
 
         extra_args = getattr(req.sampling_params, "extra_args", {}) or {}
         prompt_2: str | list[str] = extra_args.get("prompt_2", "")
@@ -725,7 +726,7 @@ class StableDiffusion3Pipeline(nn.Module, CFGParallelMixin, DiffusionPipelinePro
         )
 
         self._current_timestep = None
-        if self.output_type == "latent":
+        if output_type == "latent":
             image = latents
         else:
             # Ensure the latents are the same dtype as the VAE for decode

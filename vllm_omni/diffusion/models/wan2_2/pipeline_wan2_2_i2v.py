@@ -479,7 +479,7 @@ class Wan22I2VPipeline(
         else:
             guidance_scale = 5.0
 
-        output_type = getattr(req.sampling_params, "output_type", None) or "np"
+        output_type = req.sampling_params.output_type or "np"
         attention_kwargs: dict | None = None
 
         # Handle guidance scales

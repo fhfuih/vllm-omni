@@ -971,7 +971,7 @@ class QwenImagePipeline(
 
         height = state.sampling.height or self.default_sample_size * self.vae_scale_factor
         width = state.sampling.width or self.default_sample_size * self.vae_scale_factor
-        output_type = kwargs.get("output_type", "pil")
+        output_type = kwargs.get("output_type") or state.sampling.output_type or "pil"
 
         return self._decode_latents(state.latents, height, width, output_type)
 
@@ -1031,7 +1031,8 @@ class QwenImagePipeline(
         )
 
         self._current_timestep = None
-        return self._decode_latents(latents, height, width, "pil")
+        output_type = req.sampling_params.output_type or "pil"
+        return self._decode_latents(latents, height, width, output_type)
 
     def load_weights(self, weights: Iterable[tuple[str, torch.Tensor]]) -> set[str]:
         loader = AutoWeightsLoader(self)

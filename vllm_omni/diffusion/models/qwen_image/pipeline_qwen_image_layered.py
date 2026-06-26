@@ -681,7 +681,7 @@ the image\n<|vision_start|><|image_pad|><|vision_end|><|im_end|>\n<|im_start|>as
         negative_prompt_embeds = None
         prompt_embeds_mask = None
         negative_prompt_embeds_mask = None
-        output_type = "pil"
+        output_type = req.sampling_params.output_type or "pil"
         attention_kwargs = None
 
         if not isinstance(first_prompt, str) and "preprocessed_image" in (

@@ -574,7 +574,7 @@ class Wan22Pipeline(
         else:
             guidance_scale = 4.0
 
-        output_type = getattr(req.sampling_params, "output_type", None) or "np"
+        output_type = req.sampling_params.output_type or "np"
         attention_kwargs: dict | None = None
 
         guidance_low = guidance_scale if isinstance(guidance_scale, (int, float)) else guidance_scale[0]

@@ -537,7 +537,7 @@ class FluxPipeline(
         negative_prompt_2: str | list[str] | None = extra_args.get("negative_prompt_2")
         joint_attention_kwargs: dict[str, Any] | None = None
         callback_on_step_end_tensor_inputs = ["latents"]
-        output_type = "pil"
+        output_type = req.sampling_params.output_type or "pil"
 
         # 1. Check inputs. Raise error if not correct
         self.check_inputs(

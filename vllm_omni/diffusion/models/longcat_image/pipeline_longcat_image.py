@@ -524,7 +524,7 @@ class LongCatImagePipeline(nn.Module, CFGParallelMixin, DiffusionPipelineProfile
         enable_cfg_renorm: bool = extra_args.get("enable_cfg_renorm", True)
         cfg_renorm_min: float = extra_args.get("cfg_renorm_min", 0.0)
         joint_attention_kwargs: dict[str, Any] | None = None
-        output_type = "pil"
+        output_type = req.sampling_params.output_type or "pil"
 
         self.check_inputs(
             prompt,

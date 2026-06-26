@@ -570,7 +570,7 @@ class LongCatImageEditPipeline(
         latents = req.sampling_params.latents
         prompt_embeds = None
         negative_prompt_embeds = None
-        output_type = "pil"
+        output_type = req.sampling_params.output_type or "pil"
 
         batch_size = 1 if isinstance(prompt, str) else len(prompt)
 

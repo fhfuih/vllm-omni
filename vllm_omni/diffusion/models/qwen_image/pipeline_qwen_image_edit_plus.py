@@ -707,7 +707,7 @@ class QwenImageEditPlusPipeline(
         negative_prompt_embeds = None
         prompt_embeds_mask = None
         negative_prompt_embeds_mask = None
-        output_type = "pil"
+        output_type = req.sampling_params.output_type or "pil"
         attention_kwargs = None
         callback_on_step_end_tensor_inputs = ["latents"]
         image = None
