@@ -597,7 +597,8 @@ class LongCatImageEditPipeline(
             prompt=prompt, image=prompt_image, prompt_embeds=prompt_embeds, num_images_per_prompt=num_images_per_prompt
         )
 
-        if guidance_scale > 1:
+        do_true_cfg = guidance_scale > 1 and negative_prompt is not None
+        if do_true_cfg:
             (negative_prompt_embeds, negative_text_ids) = self.encode_prompt(
                 prompt=negative_prompt,
                 image=prompt_image,
@@ -656,7 +657,6 @@ class LongCatImageEditPipeline(
                 latent_model_input = torch.cat([latents, image_latents], dim=1)
 
             timestep = t.expand(latent_model_input.shape[0]).to(latents.dtype)
-            do_true_cfg = guidance_scale > 1
             positive_kwargs = {
                 "hidden_states": latent_model_input,
                 "timestep": timestep / 1000,
