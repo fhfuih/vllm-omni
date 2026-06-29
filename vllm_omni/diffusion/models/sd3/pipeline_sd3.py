@@ -672,10 +672,7 @@ class StableDiffusion3Pipeline(nn.Module, CFGParallelMixin, DiffusionPipelinePro
             max_sequence_length=max_sequence_length,
         )
 
-        if req.sampling_params.guidance_scale_provided:
-            self._guidance_scale = req.sampling_params.guidance_scale
-        else:
-            self._guidance_scale = 7.0
+        self._guidance_scale = req.sampling_params.guidance_scale
         self._current_timestep = None
         self._interrupt = False
 

@@ -414,7 +414,7 @@ class StableAudioPipeline(nn.Module, SupportAudioOutput, SupportsComponentDiscov
         prompt_embeds = None
         negative_prompt_embeds = None
 
-        num_inference_steps = req.sampling_params.num_inference_steps or 100
+        num_inference_steps = req.sampling_params.num_inference_steps or 50
         if req.sampling_params.guidance_scale_provided:
             guidance_scale = req.sampling_params.guidance_scale
         else:

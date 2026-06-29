@@ -786,10 +786,7 @@ class Flux2KleinPipeline(
             50 if req.sampling_params.num_inference_steps is None else req.sampling_params.num_inference_steps
         )
         sigmas = req.sampling_params.sigmas
-        if req.sampling_params.guidance_scale_provided:
-            guidance_scale = req.sampling_params.guidance_scale
-        else:
-            guidance_scale = 4.0
+        guidance_scale = req.sampling_params.guidance_scale
         generator = req.sampling_params.generator
         num_images_per_prompt = (
             req.sampling_params.num_outputs_per_prompt if req.sampling_params.num_outputs_per_prompt > 0 else 1
