@@ -110,6 +110,7 @@ from vllm_omni.entrypoints.openai.protocol.images import (
     ImageData,
     ImageGenerationRequest,
     ImageGenerationResponse,
+    ResponseFormat,
 )
 from vllm_omni.entrypoints.openai.protocol.videos import (
     SecondStr,
@@ -132,6 +133,7 @@ from vllm_omni.entrypoints.openai.serving_video import (
     ReferenceImage,
     ReferenceVideo,
 )
+from vllm_omni.entrypoints.openai.serving_video_output_stream import OmniStreamingVideoOutputHandler
 from vllm_omni.entrypoints.openai.serving_video_stream import create_streaming_video_handler
 from vllm_omni.entrypoints.openai.stage_params import (
     build_stage_sampling_params_list,
@@ -573,15 +575,14 @@ async def omni_run_server_worker(listen_address, sock, args, client_config=None,
             **uvicorn_kwargs,
         )
 
-    # NB: Await server shutdown only after the backend context is exited
-    try:
-        await shutdown_task
-    finally:
-        state = getattr(app, "state", None)
-        serving_speech = getattr(state, "openai_serving_speech", None) if state is not None else None
-        if serving_speech is not None:
-            serving_speech.shutdown()
-        sock.close()
+        try:
+            await shutdown_task
+        finally:
+            state = getattr(app, "state", None)
+            serving_speech = getattr(state, "openai_serving_speech", None) if state is not None else None
+            if serving_speech is not None:
+                serving_speech.shutdown()
+            sock.close()
 
 
 @asynccontextmanager
@@ -771,6 +772,11 @@ async def omni_init_app_state(
         diffusion_stage_configs = engine_client.stage_configs if hasattr(engine_client, "stage_configs") else None
         state.openai_serving_video = OmniOpenAIServingVideo.for_diffusion(
             diffusion_engine=engine_client,  # type: ignore
+            model_name=model_name,
+            stage_configs=diffusion_stage_configs,
+        )
+        state.openai_streaming_video_output = OmniStreamingVideoOutputHandler(
+            engine_client=engine_client,
             model_name=model_name,
             stage_configs=diffusion_stage_configs,
         )
@@ -1311,7 +1317,10 @@ async def create_speech_batch(request: BatchSpeechRequest, raw_request: Request)
         result = await handler.create_speech_batch(request)
         if isinstance(result, ErrorResponse):
             return _error_response_to_json_response(result)
-        return JSONResponse(content=result.model_dump())
+        # exclude_none so optional per-item fields are omitted rather than
+        # serialized as null: errored items drop `usage`/`audio_data`/`media_type`,
+        # successful items drop `error`. Matches the documented batch response shape.
+        return JSONResponse(content=result.model_dump(exclude_none=True))
     except (EngineGenerateError, EngineDeadError) as exc:
         return _create_engine_error_json_response(raw_request, exc)
     except ValueError as e:
@@ -1594,6 +1603,23 @@ async def streaming_video_chat(websocket: WebSocket):
     await handler.handle_session(websocket)
 
 
+@router.websocket("/v1/realtime/video")
+async def streaming_video_output(websocket: WebSocket):
+    """WebSocket endpoint for streaming generated video output chunks."""
+    handler = getattr(websocket.app.state, "openai_streaming_video_output", None)
+    if handler is None:
+        await websocket.accept()
+        await websocket.send_json(
+            {
+                "type": "error",
+                "message": "Streaming video generation is not available",
+            }
+        )
+        await websocket.close()
+        return
+    await handler.handle_session(websocket)
+
+
 @router.websocket("/v1/realtime")
 async def realtime_websocket(websocket: WebSocket):
     """WebSocket endpoint for OpenAI-style realtime interactions."""
@@ -1683,6 +1709,7 @@ async def show_available_models(raw_request: Request) -> JSONResponse:
 @router.post(
     "/v1/images/generations",
     dependencies=[Depends(validate_json_request)],
+    response_model=None,
     responses={
         HTTPStatus.OK.value: {"model": ImageGenerationResponse},
         HTTPStatus.BAD_REQUEST.value: {"model": ErrorResponse},
@@ -1691,7 +1718,9 @@ async def show_available_models(raw_request: Request) -> JSONResponse:
     },
 )
 @with_cancellation
-async def generate_images(request: ImageGenerationRequest, raw_request: Request):
+async def generate_images(
+    request: ImageGenerationRequest, raw_request: Request
+) -> ImageGenerationResponse | StreamingResponse:
     """Generate images from text prompts using diffusion models.
 
     OpenAI DALL-E compatible endpoint for text-to-image generation.
@@ -1883,7 +1912,10 @@ async def generate_images(request: ImageGenerationRequest, raw_request: Request)
         }
         if request.size:
             response_kwargs["size"] = size_str
-        return ImageGenerationResponse(**response_kwargs)
+        response = ImageGenerationResponse(**response_kwargs)
+        if request.response_format != ResponseFormat.FILE:
+            return response
+        return response.stream_response()
 
     except (EngineGenerateError, EngineDeadError) as exc:
         return _create_engine_error_json_response(raw_request, exc)

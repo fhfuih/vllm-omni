@@ -19,7 +19,7 @@ from collections.abc import Generator
 from dataclasses import asdict, dataclass
 from io import BytesIO
 from pathlib import Path
-from typing import Any, NamedTuple
+from typing import Any, NamedTuple, cast
 from urllib.parse import quote
 
 import psutil
@@ -2084,6 +2084,9 @@ class OpenAIClientHandler:
         normalized_form_data = {key: str(value) for key, value in form_data.items() if value is not None}
         files: dict[str, tuple[str, BytesIO, str]] = {}
         image_reference = request_config.get("image_reference")
+        video_reference = request_config.get("video_reference")
+        if image_reference and video_reference:
+            raise ValueError("Only one of image_reference or video_reference can be provided")
         if image_reference:
             if image_reference.startswith("data:image"):
                 header, encoded = image_reference.split(",", 1)
@@ -2093,6 +2096,15 @@ class OpenAIClientHandler:
                 files["input_reference"] = (f"reference.{extension}", BytesIO(file_data), content_type)
             else:
                 normalized_form_data["image_reference"] = json.dumps({"image_url": image_reference})
+        if video_reference:
+            if video_reference.startswith("data:video"):
+                header, encoded = video_reference.split(",", 1)
+                content_type = header.split(";")[0].removeprefix("data:")
+                extension = content_type.split("/")[-1]
+                file_data = base64.b64decode(encoded)
+                files["input_reference"] = (f"reference.{extension}", BytesIO(file_data), content_type)
+            else:
+                normalized_form_data["video_reference"] = json.dumps({"video_url": video_reference})
 
         result = DiffusionResponse()
         create_url = self._build_url("/v1/videos")
@@ -2167,6 +2179,102 @@ class OpenAIClientHandler:
             headers={"Accept": "application/json"} if not files else {"Accept": "application/json"},
             timeout=timeout,
         )
+
+    def send_streaming_video_diffusion_request(
+        self,
+        request_config: dict[str, Any],
+        request_num: int = 1,
+        *,
+        timeout_seconds: float = 600.0,
+    ) -> list[DiffusionResponse]:
+        """
+        Send a native ``/v1/realtime/video`` WebSocket request and return one
+        finalized MP4 artifact assembled from the streamed binary fragments.
+        """
+        if request_num != 1:
+            raise NotImplementedError("Concurrent streaming video diffusion requests are not currently implemented")
+
+        response = asyncio.run(
+            self._send_streaming_video_diffusion_request_once(
+                request_config,
+                timeout_seconds=timeout_seconds,
+            )
+        )
+        assert_diffusion_response(response, request_config, run_level=self.run_level)
+        if response.e2e_latency is not None:
+            self._print_client_stat(f"[diffusion.stream] request#1 success in {response.e2e_latency:.3f}s")
+        else:
+            self._print_client_stat("[diffusion.stream] request#1 completed")
+        return [response]
+
+    async def _send_streaming_video_diffusion_request_once(
+        self,
+        request_config: dict[str, Any],
+        *,
+        timeout_seconds: float,
+    ) -> DiffusionResponse:
+        form_data = request_config.get("form_data")
+        if not isinstance(form_data, dict):
+            raise ValueError("Video request_config must contain 'form_data'")
+        payload: dict[str, Any] = {
+            "type": "session.start",
+            **{key: value for key, value in form_data.items() if value is not None},
+        }
+        model = request_config.get("model")
+        if model is not None:
+            payload["model"] = model
+        payload.setdefault("format", "m4s")
+
+        fps = float(payload.get("fps") or 16)
+        stream_format = payload["format"]
+        url = self._build_ws_url("/v1/realtime/video")
+
+        result = DiffusionResponse()
+        chunks: list[bytes] = []
+        start_time = time.perf_counter()
+        deadline = start_time + timeout_seconds
+
+        import websockets
+
+        async with websockets.connect(url, max_size=None) as websocket:
+            await websocket.send(json.dumps(payload))
+
+            while True:
+                remaining = deadline - time.perf_counter()
+                if remaining <= 0:
+                    raise TimeoutError(f"Streaming video request did not complete within {timeout_seconds}s")
+
+                message = await asyncio.wait_for(websocket.recv(), timeout=remaining)
+                if isinstance(message, bytes):
+                    chunks.append(message)
+                    continue
+
+                msg = json.loads(message)
+                msg_type = msg.get("type")
+                if msg_type == "video.start":
+                    stream_format = msg.get("format") or stream_format
+                    continue
+                if msg_type == "session.done":
+                    break
+                if msg_type == "error":
+                    raise RuntimeError(str(msg.get("message", msg)))
+
+        from vllm_omni.diffusion.utils.media_utils import finalize_streaming_video_bytes
+        from vllm_omni.entrypoints.openai.video_api_utils import StreamingVideoFormat
+
+        streamed_bytes = b"".join(chunks)
+        if not streamed_bytes:
+            raise RuntimeError("Streaming video request completed without binary video chunks")
+        result.videos = [
+            finalize_streaming_video_bytes(
+                streamed_bytes,
+                input_format=cast(StreamingVideoFormat, stream_format),
+                fps=fps,
+            )
+        ]
+        result.e2e_latency = time.perf_counter() - start_time
+        result.success = True
+        return result
 
     def _wait_until_video_completed(
         self, video_id: str, poll_interval_seconds: int = 2, timeout_seconds: int = 300
