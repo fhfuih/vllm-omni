@@ -126,18 +126,15 @@ Call `self.diffuse` in your pipeline's forward function:
 
 ```python
 import torch.nn as nn
-from vllm_omni.diffusion.request import OmniDiffusionRequest
+from vllm_omni.diffusion.worker.request_batch import DiffusionRequestBatch
 
 class YourModelPipeline(nn.Module, CFGParallelMixin):
-    def forward(self, req: OmniDiffusionRequest):
+    def forward(
+        self,
+        req: DiffusionRequestBatch,
+    ) -> list[DiffusionOutput]:
         # Read prompts and sampling params from the request
-        sp = req.sampling_params
-        first_prompt = req.prompts[0]
-        prompt = first_prompt if isinstance(first_prompt, str) else first_prompt.get("prompt", "")
-        negative_prompt = None if isinstance(first_prompt, str) else first_prompt.get("negative_prompt")
-        num_inference_steps = sp.num_inference_steps or 50
-        guidance_scale = sp.guidance_scale or 3.5
-
+        ...
         # Encode prompts, initialize latents, get timesteps
         ...
         # Run diffusion loop (calls the mixin's diffuse method)

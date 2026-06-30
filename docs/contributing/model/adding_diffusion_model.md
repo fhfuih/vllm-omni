@@ -368,30 +368,6 @@ See some parameters in `OmniDiffusionSamplingParams` as follows:
 
 **Extract parameters from request:**
 
-The `OmniDiffusionRequest` object primarily contains two parts.
-
-1. **`prompts`**: a list of pure-string or multimodal prompts. It matches the [data structure of vLLM](https://docs.vllm.ai/en/stable/features/multimodal_inputs/#image-inputs). Each prompt in the list can be a string or a TypedDict. The dict version allows image input at `["multi_modal_data"]["image"]` and negative prompt at `["negative_prompt"]`.
-    - If your model requires a preprocess function, intermediate preprocessed values can be stored at the `["additional_information"]` field of a TypedDict prompt.
-    - If your model does not support batched input, check the length of `req.prompts` and raise a clear error. In that case, users should send one prompt per request.
-    - For example, an image editing model may expect `req.prompts` to look like:
-    ```python
-    [
-        {
-            "prompt": "turn this cat to a dog",
-            "multi_modal_data": {"image": input_image},
-        },
-    ]
-    ```
-
-2. **`sampling_params`**: common sampling parameters shared across diffusion models. See [`OmniDiffusionSamplingParams`](https://docs.vllm.ai/projects/vllm-omni/en/latest/api/vllm_omni/inputs/data/#vllm_omni.inputs.data.OmniDiffusionSamplingParams) for defaults.
-    - Read standard fields (`num_inference_steps`, `guidance_scale`, `height`, `width`, `generator`, etc.) directly from `req.sampling_params`.
-    - Read model-specific primitive parameters from `req.sampling_params.extra_args` only. Register honored keys in `vllm_omni/model_extras/` so API `extra_body` fields are routed into `extra_args` automatically (see the model extras registry in #4225). Document the `extra_args` your pipeline honors in model docs or your PR.
-    - If you believe a sampling parameter is common enough for `OmniDiffusionSamplingParams`, open an issue or note it in your PR.
-
-`DiffusionEngine` calls `pipeline.forward(req)` with the request only — do not add per-parameter kwargs to `forward()`.
-
-Below is an example way to extract prompts and sampling parameters from the request.
-
 ```python
 from vllm_omni.diffusion.data import DiffusionOutput
 from vllm_omni.diffusion.worker.request_batch import DiffusionRequestBatch
@@ -405,15 +381,6 @@ def forward(
         p if isinstance(p, str) else (p.get("prompt") or "")
         for p in req.prompts
     ]
-
-    first_prompt = req.prompts[0]
-    if not isinstance(first_prompt, str):
-        negative_prompt = first_prompt.get("negative_prompt")
-        multi_modal_data = first_prompt.get("multi_modal_data", {})
-        input_image = multi_modal_data.get("image")
-        # Pre-processed tensors may be attached by a preprocess function
-        additional_info = first_prompt.get("additional_information", {})
-        preprocessed_image = additional_info.get("preprocessed_image")
 
     # Extract common sampling parameters
     sampling_params = req.sampling_params
