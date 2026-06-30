@@ -26,7 +26,7 @@ from vllm_omni.diffusion.models.sd3.sd3_transformer import (
     SD3Transformer2DModel,
 )
 from vllm_omni.diffusion.profiler.diffusion_pipeline_profiler import DiffusionPipelineProfilerMixin
-from vllm_omni.diffusion.request import OmniDiffusionRequest
+from vllm_omni.diffusion.worker.request_batch import DiffusionRequestBatch, split_diffusion_output_by_request
 from vllm_omni.model_executor.model_loader.weight_utils import (
     download_weights_from_hf_specific,
 )
@@ -132,6 +132,8 @@ def retrieve_timesteps(
 
 
 class StableDiffusion3Pipeline(nn.Module, CFGParallelMixin, DiffusionPipelineProfilerMixin, SupportsComponentDiscovery):
+    supports_request_batch = True
+
     _dit_modules: ClassVar[list[str]] = ["transformer"]
     _encoder_modules: ClassVar[list[str]] = ["text_encoder", "text_encoder_2", "text_encoder_3"]
     _vae_modules: ClassVar[list[str]] = ["vae"]
@@ -434,6 +436,7 @@ class StableDiffusion3Pipeline(nn.Module, CFGParallelMixin, DiffusionPipelinePro
         prompt_2: str | list[str],
         prompt_3: str | list[str],
         prompt_embeds: torch.Tensor | None = None,
+        pooled_prompt_embeds: torch.Tensor | None = None,
         max_sequence_length: int = 256,
         num_images_per_prompt: int = 1,
     ):
@@ -457,7 +460,6 @@ class StableDiffusion3Pipeline(nn.Module, CFGParallelMixin, DiffusionPipelinePro
 
         prompt = [prompt] if isinstance(prompt, str) else prompt
 
-        pooled_prompt_embeds = None
         if prompt_embeds is None:
             prompt_2 = prompt_2 or prompt
             prompt_2 = [prompt_2] if isinstance(prompt_2, str) else prompt_2
@@ -626,32 +628,53 @@ class StableDiffusion3Pipeline(nn.Module, CFGParallelMixin, DiffusionPipelinePro
 
         return latents
 
-    def forward(self, req: OmniDiffusionRequest) -> DiffusionOutput:
+    def forward(self, req: DiffusionRequestBatch) -> list[DiffusionOutput]:
         # TODO: In online mode, sometimes it receives [{"negative_prompt": None}, {...}], so cannot use .get("...", "")
         # TODO: May be some data formatting operations on the API side. Hack for now.
+        sampling_params_list = req.sampling_params_list
+        common_sampling_params = sampling_params_list[0]
         prompt = [p if isinstance(p, str) else (p.get("prompt") or "") for p in req.prompts]
         negative_prompt = ["" if isinstance(p, str) else (p.get("negative_prompt") or "") for p in req.prompts]
-
+        prompt_2 = ""
+        prompt_3 = ""
+        negative_prompt_2 = ""
+        negative_prompt_3 = ""
         prompt_embeds = None
         negative_prompt_embeds = None
 
-        height = req.sampling_params.height or self.default_sample_size * self.vae_scale_factor
-        width = req.sampling_params.width or self.default_sample_size * self.vae_scale_factor
-        sigmas = req.sampling_params.sigmas
-        max_sequence_length = req.sampling_params.max_sequence_length or 256
-        num_inference_steps = req.sampling_params.num_inference_steps or 28
-        generator = req.sampling_params.generator
+        height = common_sampling_params.height or self.default_sample_size * self.vae_scale_factor
+        width = common_sampling_params.width or self.default_sample_size * self.vae_scale_factor
+        sigmas = common_sampling_params.sigmas
+        max_sequence_length = common_sampling_params.max_sequence_length or 256
+        num_inference_steps = common_sampling_params.num_inference_steps or 28
         num_images_per_prompt = (
-            req.sampling_params.num_outputs_per_prompt if req.sampling_params.num_outputs_per_prompt > 0 else 1
+            common_sampling_params.num_outputs_per_prompt if common_sampling_params.num_outputs_per_prompt > 0 else 1
         )
-        latents = req.sampling_params.latents
-        output_type = req.sampling_params.output_type or self.output_type
+        generator = req.collate_request_generators(num_images_per_prompt, None)
+        latents = req.collate_request_tensors("latents", None)
+        output_type = common_sampling_params.output_type or "pil"
 
-        extra_args = getattr(req.sampling_params, "extra_args", {}) or {}
-        prompt_2: str | list[str] = extra_args.get("prompt_2", "")
-        prompt_3: str | list[str] = extra_args.get("prompt_3", "")
-        negative_prompt_2: str | list[str] = extra_args.get("negative_prompt_2", "")
-        negative_prompt_3: str | list[str] = extra_args.get("negative_prompt_3", "")
+        prompt_fields = DiffusionRequestBatch.collate_prompt_field_map(
+            req.prompts,
+            {
+                "prompt_embeds": prompt_embeds,
+                "negative_prompt_embeds": negative_prompt_embeds,
+                "pooled_prompt_embeds": None,
+                "negative_pooled_prompt_embeds": None,
+            },
+        )
+        prompt_embeds = prompt_fields["prompt_embeds"]
+        negative_prompt_embeds = prompt_fields["negative_prompt_embeds"]
+        pooled_prompt_embeds = prompt_fields["pooled_prompt_embeds"]
+        negative_pooled_prompt_embeds = prompt_fields["negative_pooled_prompt_embeds"]
+        if prompt_embeds is not None:
+            prompt = None
+            prompt_2 = None
+            prompt_3 = None
+        if negative_prompt_embeds is not None:
+            negative_prompt = None
+            negative_prompt_2 = None
+            negative_prompt_3 = None
         # 1. check inputs
         # 2. encode prompts
         # 3. prepare latents and timesteps
@@ -672,17 +695,21 @@ class StableDiffusion3Pipeline(nn.Module, CFGParallelMixin, DiffusionPipelinePro
             max_sequence_length=max_sequence_length,
         )
 
-        self._guidance_scale = req.sampling_params.guidance_scale
+        self._guidance_scale = common_sampling_params.guidance_scale
         self._current_timestep = None
         self._interrupt = False
 
-        batch_size = len(prompt)
+        if prompt is not None:
+            batch_size = len(prompt)
+        else:
+            batch_size = prompt_embeds.shape[0]
 
         prompt_embeds, pooled_prompt_embeds = self.encode_prompt(
             prompt=prompt,
             prompt_2=prompt_2,
             prompt_3=prompt_3,
             prompt_embeds=prompt_embeds,
+            pooled_prompt_embeds=pooled_prompt_embeds,
             max_sequence_length=max_sequence_length,
         )
 
@@ -693,6 +720,7 @@ class StableDiffusion3Pipeline(nn.Module, CFGParallelMixin, DiffusionPipelinePro
                 prompt_2=negative_prompt_2,
                 prompt_3=negative_prompt_3,
                 prompt_embeds=negative_prompt_embeds,
+                pooled_prompt_embeds=negative_pooled_prompt_embeds,
                 max_sequence_length=max_sequence_length,
             )
 
@@ -732,8 +760,13 @@ class StableDiffusion3Pipeline(nn.Module, CFGParallelMixin, DiffusionPipelinePro
 
             image = self.vae.decode(latents, return_dict=False)[0]
 
-        return DiffusionOutput(
-            output=image, stage_durations=self.stage_durations if hasattr(self, "stage_durations") else None
+        return split_diffusion_output_by_request(
+            DiffusionOutput(
+                output=image,
+                stage_durations=self.stage_durations if hasattr(self, "stage_durations") else None,
+            ),
+            req,
+            num_outputs_per_prompt=num_images_per_prompt,
         )
 
     def load_weights(self, weights: Iterable[tuple[str, torch.Tensor]]) -> set[str]:
