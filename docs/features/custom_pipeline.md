@@ -54,7 +54,7 @@ Create a custom pipeline class that extends an existing pipeline. In this exampl
 
 ```python
 # custom_pipeline.py
-from vllm_omni.diffusion.data import DiffusionOutput, OmniDiffusionConfig
+from vllm_omni.diffusion.data import OmniDiffusionConfig
 from vllm_omni.diffusion.models.qwen_image.pipeline_qwen_image_edit import QwenImageEditPipeline
 from vllm_omni.diffusion.worker.request_batch import DiffusionRequestBatch
 import torch
@@ -63,7 +63,7 @@ class CustomPipeline(QwenImageEditPipeline):
     def __init__(self, *, od_config: OmniDiffusionConfig, prefix: str = ""):
         super().__init__(od_config=od_config, prefix=prefix)
 
-    def forward(self, req: DiffusionRequestBatch) -> list[DiffusionOutput]:
+    def forward(self, req: DiffusionRequestBatch):
         # Optionally customize sampling parameters
         actual_num_steps = req.sampling_params.num_inference_steps or 50
         req.sampling_params.num_inference_steps = actual_num_steps
