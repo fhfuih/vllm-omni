@@ -192,6 +192,7 @@ def _make_request_batch_prompt_sampling(**overrides):
         "true_cfg_scale": None,
         "guidance_scale_provided": False,
         "guidance_scale": 1.0,
+        "output_type": None,
     }
     values.update(overrides)
     return SimpleNamespace(**values)
