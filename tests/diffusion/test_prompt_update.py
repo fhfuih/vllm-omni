@@ -50,7 +50,7 @@ def _make_diffusion_request_state(*, request_id: str = "req-1") -> DiffusionRequ
     state = DiffusionRequestState(
         request_id=request_id,
         sampling=SimpleNamespace(num_outputs_per_prompt=1, max_sequence_length=226),  # pyright: ignore[reportArgumentType]
-        prompts=["hello"],
+        prompt="hello",
     )
     state.prompt_embeds = torch.zeros(1, 4, 2)
     state.extra = {}
@@ -106,7 +106,7 @@ class TestPromptUpdateExecution:
         state = DiffusionRequestState(
             request_id="req-1",
             sampling=SimpleNamespace(),  # pyright: ignore[reportArgumentType]
-            prompts=["hello"],
+            prompt="hello",
         )
         state.prompt_embeds = torch.zeros(1, 2, 3)
         state.latents = torch.zeros(1, 2)
@@ -153,6 +153,10 @@ class TestPromptUpdateExecution:
             pipeline._apply_prompt_update_at_chunk_boundary(state)
 
         assert torch.allclose(state.prompt_embeds, torch.full((1, 4, 2), 2.0))  # pyright: ignore[reportArgumentType]
+        assert state.extra["prompt_update_version"] == 4
+
+        # Further chunk boundaries after completion must not bump the version.
+        pipeline._apply_prompt_update_at_chunk_boundary(state)
         assert state.extra["prompt_update_version"] == 4
 
 

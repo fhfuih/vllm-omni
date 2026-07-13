@@ -96,28 +96,27 @@ class PromptUpdateMixin:
         next_chunk_index = state.chunk_index
 
         # If current transition is not complete, advance it.
+        # After completion, leave prompt_update_state in place (so a later pending
+        # update can abort/overwrite), but do not keep bumping the version.
         if update_state is not None:
-            was_in_transition = (
+            in_transition = (
                 update_state.transition_duration_chunks > 0
                 and update_state.elapsed_transition_chunks < update_state.transition_duration_chunks
             )
-            update_state.advance_transition()
-            state.prompt_embeds = update_state.blended_prompt_embeds()
-            embeds_changed = True
-            if (
-                was_in_transition
-                and update_state.elapsed_transition_chunks >= update_state.transition_duration_chunks
-                and update_state.target_prompt is not None
-            ):
-                logger.debug(
-                    "prompt_update transition complete request_id=%s next_chunk_index=%d prompt=%.20s...",
-                    state.request_id,
-                    next_chunk_index,
-                    update_state.target_prompt,
-                )
-            if update_state.elapsed_transition_chunks >= update_state.transition_duration_chunks:
-                state.prompt_embeds = update_state.target_prompt_embeds
-                update_state.source_prompt_embeds = update_state.target_prompt_embeds
+            if in_transition:
+                update_state.advance_transition()
+                state.prompt_embeds = update_state.blended_prompt_embeds()
+                embeds_changed = True
+                if update_state.elapsed_transition_chunks >= update_state.transition_duration_chunks:
+                    state.prompt_embeds = update_state.target_prompt_embeds
+                    update_state.source_prompt_embeds = update_state.target_prompt_embeds
+                    if update_state.target_prompt is not None:
+                        logger.debug(
+                            "prompt_update transition complete request_id=%s next_chunk_index=%d prompt=%.20s...",
+                            state.request_id,
+                            next_chunk_index,
+                            update_state.target_prompt,
+                        )
 
         # If a new prompt update is pending, start a new transition.
         if pending is not None:

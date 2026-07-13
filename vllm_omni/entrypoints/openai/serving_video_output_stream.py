@@ -311,14 +311,25 @@ class OmniStreamingVideoOutputHandler:
             await self._send_error(websocket, "session.prompt_update requires a non-empty prompt", send_lock=send_lock)
             return
 
-        transition_duration_chunks: int | None = None
-        if "transition_duration_chunks" in msg and msg["transition_duration_chunks"] is not None:
+        transition_duration_chunks = msg.get("transition_duration_chunks")
+        if transition_duration_chunks is not None:
             try:
-                transition_duration_chunks = int(msg["transition_duration_chunks"])
+                if not isinstance(transition_duration_chunks, int) or (
+                    isinstance(transition_duration_chunks, float) and not transition_duration_chunks.is_integer()
+                ):
+                    raise ValueError
+                transition_duration_chunks = int(transition_duration_chunks)
             except (TypeError, ValueError):
                 await self._send_error(
                     websocket,
                     "session.prompt_update transition_duration_chunks must be an integer",
+                    send_lock=send_lock,
+                )
+                return
+            if transition_duration_chunks < 0:
+                await self._send_error(
+                    websocket,
+                    "session.prompt_update transition_duration_chunks must be >= 0",
                     send_lock=send_lock,
                 )
                 return

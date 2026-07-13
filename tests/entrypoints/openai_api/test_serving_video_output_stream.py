@@ -613,8 +613,20 @@ class TestStreamingVideoOutputPromptUpdate:
 
         engine_client.add_prompt_update_async.assert_not_called()
 
-    def test_prompt_update_rejects_invalid_transition_duration_chunks(self, mocker: MockerFixture):
-        """Non-integer transition_duration_chunks returns an error."""
+    @pytest.mark.parametrize(
+        ("transition_duration_chunks"),
+        [
+            ("not-an-int"),
+            (2.9),
+            (-1),
+        ],
+    )
+    def test_prompt_update_rejects_invalid_transition_duration_chunks(
+        self,
+        mocker: MockerFixture,
+        transition_duration_chunks: object,
+    ):
+        """Non-integral or negative transition_duration_chunks returns an error."""
 
         async def mock_generate(*_args, **_kwargs):
             yield OmniRequestOutput.from_diffusion(
@@ -647,12 +659,11 @@ class TestStreamingVideoOutputPromptUpdate:
                     {
                         "type": "session.prompt_update",
                         "prompt": "new scene",
-                        "transition_duration_chunks": "not-an-int",
+                        "transition_duration_chunks": transition_duration_chunks,
                     }
                 )
                 err = ws.receive_json()
                 assert err["type"] == "error"
-                assert "transition_duration_chunks must be an integer" in err["message"]
 
                 assert ws.receive_bytes() == b"mp4-chunk-1"
                 assert ws.receive_json()["type"] == "session.done"
