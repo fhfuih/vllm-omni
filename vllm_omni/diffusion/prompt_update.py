@@ -65,6 +65,10 @@ class PromptUpdateMixin:
         """
         if not prompt:
             raise ValueError("prompt must be non-empty")
+        if state.prompt_embeds is None:
+            raise ValueError(
+                f"prompt_update is not allowed before initial generation has started (request_id={state.request_id!r})"
+            )
         duration = (
             DEFAULT_TRANSITION_DURATION_CHUNKS if transition_duration_chunks is None else transition_duration_chunks
         )
@@ -121,7 +125,10 @@ class PromptUpdateMixin:
         # If a new prompt update is pending, start a new transition.
         if pending is not None:
             if state.prompt_embeds is None:
-                return
+                raise RuntimeError(
+                    "internal error: trying to apply a pending prompt update but "
+                    f"current prompt_embeds is None (request_id={state.request_id!r})"
+                )
             source = state.prompt_embeds.detach().clone()
             target = pending["target_prompt_embeds"]
             duration = int(pending["transition_duration_chunks"])

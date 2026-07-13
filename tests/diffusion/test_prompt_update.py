@@ -132,6 +132,16 @@ class TestPromptUpdateExecution:
         assert pending["transition_duration_chunks"] == 2
         assert torch.equal(state.prompt_embeds, torch.zeros(1, 4, 2))  # pyright: ignore[reportArgumentType]
 
+    def test_helios_prepare_prompt_update_rejects_before_initial_generation(self, pipeline: HeliosPipeline) -> None:
+        """Reject prompt updates submitted before initial prompt embeds exist."""
+        state = _make_diffusion_request_state()
+        state.prompt_embeds = None
+
+        with pytest.raises(ValueError, match="prompt_update is not allowed before initial generation has started"):
+            pipeline.prepare_prompt_update(state, "new scene", transition_duration_chunks=2)
+
+        assert "pending_prompt_update" not in state.extra
+
     def test_helios_apply_prompt_update_at_chunk_boundary_starts_transition(self, pipeline: HeliosPipeline) -> None:
         """At chunk boundary, starts transition state and bumps prompt_update_version."""
         state = _make_diffusion_request_state()
