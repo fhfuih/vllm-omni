@@ -314,8 +314,10 @@ class OmniStreamingVideoOutputHandler:
         transition_duration_chunks = msg.get("transition_duration_chunks")
         if transition_duration_chunks is not None:
             try:
-                if not isinstance(transition_duration_chunks, int) or (
-                    isinstance(transition_duration_chunks, float) and not transition_duration_chunks.is_integer()
+                if (
+                    isinstance(transition_duration_chunks, bool)
+                    or not isinstance(transition_duration_chunks, (int, float))
+                    or (isinstance(transition_duration_chunks, float) and not transition_duration_chunks.is_integer())
                 ):
                     raise ValueError
                 transition_duration_chunks = int(transition_duration_chunks)

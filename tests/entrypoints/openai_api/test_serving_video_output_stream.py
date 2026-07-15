@@ -615,11 +615,7 @@ class TestStreamingVideoOutputPromptUpdate:
 
     @pytest.mark.parametrize(
         ("transition_duration_chunks"),
-        [
-            ("not-an-int"),
-            (2.9),
-            (-1),
-        ],
+        ["not-an-int", 2.9, True, -1],
     )
     def test_prompt_update_rejects_invalid_transition_duration_chunks(
         self,

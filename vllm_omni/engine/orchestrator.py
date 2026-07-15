@@ -604,11 +604,27 @@ class Orchestrator:
             )
             return
 
-        await self.stage_pools[stage_id].submit_prompt_update(
-            request_id,
-            prompt=msg.prompt,
-            transition_duration_chunks=msg.transition_duration_chunks,
-        )
+        try:
+            await self.stage_pools[stage_id].submit_prompt_update(
+                request_id,
+                prompt=msg.prompt,
+                transition_duration_chunks=msg.transition_duration_chunks,
+            )
+        except Exception as exc:
+            logger.info(
+                "[Orchestrator] Failed prompt_update for req %s: %s",
+                request_id,
+                exc,
+                exc_info=True,
+            )
+            await self.output_async_queue.put(
+                ErrorMessage(
+                    error=f"Failed prompt_update for request {request_id}: {exc}",
+                    fatal=False,
+                    request_id=request_id,
+                    stage_id=stage_id,
+                )
+            )
 
     async def _abort_request_ids(self, request_ids: list[str]) -> None:
         """Forward abort requests to all stage pools."""

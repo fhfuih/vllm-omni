@@ -8,7 +8,7 @@ import asyncio
 import queue
 import time
 from types import SimpleNamespace
-from typing import Any
+from typing import Any, cast
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -22,8 +22,11 @@ from vllm_omni.diffusion.worker.diffusion_model_runner import DiffusionModelRunn
 from vllm_omni.diffusion.worker.input_batch import InputBatch
 from vllm_omni.diffusion.worker.utils import DiffusionRequestState
 from vllm_omni.engine.async_omni_engine import StageRuntimeInfo
-from vllm_omni.engine.messages import PromptUpdateMessage, ShutdownRequestMessage, StageSubmissionMessage
+from vllm_omni.engine.messages import ErrorMessage, PromptUpdateMessage, ShutdownRequestMessage, StageSubmissionMessage
+from vllm_omni.engine.orchestrator import Orchestrator, OrchestratorRequestState
+from vllm_omni.engine.stage_client import StagePoolClient
 from vllm_omni.engine.stage_init_utils import StageMetadata
+from vllm_omni.engine.stage_pool import StagePool
 from vllm_omni.entrypoints.async_omni import AsyncEventResolver, AsyncOmni
 from vllm_omni.inputs.data import OmniDiffusionSamplingParams
 from vllm_omni.outputs import OmniRequestOutput
@@ -172,6 +175,80 @@ class TestPromptUpdateExecution:
 
 class TestPromptUpdateIntegration:
     """AsyncOmni prompt update through orchestrator, inline client, and runner."""
+
+    @pytest.mark.asyncio
+    async def test_orchestrator_prompt_update_failure_surfaces_non_fatal_error(self) -> None:
+        """Worker-side prompt_update rejection is reported without crashing the orchestrator."""
+
+        class _RejectingStagePool:
+            async def submit_prompt_update(self, *args: Any, **kwargs: Any) -> None:
+                del args, kwargs
+                raise ValueError("prompt embeds are not ready")
+
+        output_queue: asyncio.Queue[ErrorMessage] = asyncio.Queue()
+        orchestrator = object.__new__(Orchestrator)
+        orchestrator.stage_pools = [_RejectingStagePool()]  # pyright: ignore[reportAttributeAccessIssue]
+        orchestrator.output_async_queue = output_queue  # pyright: ignore[reportAttributeAccessIssue]
+        orchestrator.request_states = {"req-1": OrchestratorRequestState(request_id="req-1")}
+
+        await orchestrator._handle_prompt_update(
+            PromptUpdateMessage(
+                request_id="req-1",
+                prompt="new scene",
+                transition_duration_chunks=2,
+            )
+        )
+
+        msg = output_queue.get_nowait()
+        assert msg == ErrorMessage(
+            error="Failed prompt_update for request req-1: prompt embeds are not ready",
+            fatal=False,
+            request_id="req-1",
+            stage_id=0,
+        )
+
+    @pytest.mark.asyncio
+    async def test_runner_prompt_update_failure_surfaces_non_fatal_error(self, pipeline: HeliosPipeline) -> None:
+        """Runner-side prepare_prompt_update rejection is reported through the orchestrator."""
+        pipeline.prepare_prompt_update = MagicMock(  # pyright: ignore[reportAttributeAccessIssue, reportMethodAssignment]
+            side_effect=ValueError("prompt embeds are not ready")
+        )
+        runner = _make_diffusion_model_runner(pipeline=pipeline)
+        runner.state_cache["req-1"] = _make_diffusion_request_state(request_id="req-1")
+        prompt_update_engine = self._PromptUpdateEngine(self._IncrementalStreamingPipeline(), runner)
+        inline_client = self._make_inline_pipeline_client(prompt_update_engine)
+
+        output_queue: asyncio.Queue[ErrorMessage] = asyncio.Queue()
+        orchestrator = object.__new__(Orchestrator)
+        orchestrator.stage_pools = [  # pyright: ignore[reportAttributeAccessIssue]
+            StagePool(0, cast(StagePoolClient, inline_client))
+        ]
+        orchestrator.output_async_queue = output_queue  # pyright: ignore[reportAttributeAccessIssue]
+        orchestrator.request_states = {"req-1": OrchestratorRequestState(request_id="req-1")}
+
+        try:
+            await orchestrator._handle_prompt_update(
+                PromptUpdateMessage(
+                    request_id="req-1",
+                    prompt="new scene",
+                    transition_duration_chunks=2,
+                )
+            )
+        finally:
+            inline_client.shutdown()
+
+        pipeline.prepare_prompt_update.assert_called_once_with(  # pyright: ignore[reportAttributeAccessIssue]
+            runner.state_cache["req-1"],
+            "new scene",
+            2,
+        )
+        msg = output_queue.get_nowait()
+        assert msg == ErrorMessage(
+            error="Failed prompt_update for request req-1: prompt embeds are not ready",
+            fatal=False,
+            request_id="req-1",
+            stage_id=0,
+        )
 
     @pytest.mark.asyncio
     async def test_prompt_update_reaches_runner_from_async_omni(self, pipeline: HeliosPipeline) -> None:
