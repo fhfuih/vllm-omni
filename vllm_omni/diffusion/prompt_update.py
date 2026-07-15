@@ -14,6 +14,7 @@ from __future__ import annotations
 import logging
 from collections.abc import Sequence
 from dataclasses import dataclass
+from threading import Lock
 from typing import ClassVar, TypedDict, cast
 
 import torch
@@ -31,6 +32,11 @@ class PromptUpdateExtra(TypedDict, total=False):
     pending_prompt_update: _PendingPromptUpdate
     prompt_update_state: _PromptUpdateState
     prompt_update_version: int  # Bumped when prompt_embeds change; invalidates InputBatch cache.
+
+    # The lock for storing/updating pending prompt updates.
+    # Saved in state.extra to be naturally cleaned up with the request state.
+    # As PromptUpdateMixin (the pipeline) currently lacks an obvious request-finish hook
+    prompt_update_lock: Lock
 
 
 def prompt_update_versions(states: Sequence[DiffusionRequestState]) -> tuple[int, ...]:
@@ -51,6 +57,10 @@ class PromptUpdateMixin:
     """
 
     supports_prompt_update: ClassVar[bool] = True
+
+    @staticmethod
+    def _prompt_update_lock(extra: PromptUpdateExtra) -> Lock:
+        return extra.setdefault("prompt_update_lock", Lock())
 
     def prepare_prompt_update(
         self,
@@ -85,17 +95,19 @@ class PromptUpdateMixin:
             dtype=self.transformer.dtype,
         )
         extra = cast(PromptUpdateExtra, state.extra)
-        extra["pending_prompt_update"] = {
-            "prompt": prompt,
-            "target_prompt_embeds": target_prompt_embeds,
-            "transition_duration_chunks": duration,
-        }
+        with self._prompt_update_lock(extra):
+            extra["pending_prompt_update"] = {
+                "prompt": prompt,
+                "target_prompt_embeds": target_prompt_embeds,
+                "transition_duration_chunks": duration,
+            }
 
     def _apply_prompt_update_at_chunk_boundary(self, state: DiffusionRequestState) -> None:
         """Advance or start prompt interpolation before the next chunk."""
         extra = cast(PromptUpdateExtra, state.extra)
         update_state: _PromptUpdateState | None = extra.get("prompt_update_state")
-        pending = extra.pop("pending_prompt_update", None)
+        with self._prompt_update_lock(extra):
+            pending = extra.pop("pending_prompt_update", None)
         embeds_changed = False
         next_chunk_index = state.chunk_index
 
