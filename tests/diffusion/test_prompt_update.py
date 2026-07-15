@@ -22,7 +22,7 @@ from vllm_omni.diffusion.worker.diffusion_model_runner import DiffusionModelRunn
 from vllm_omni.diffusion.worker.input_batch import InputBatch
 from vllm_omni.diffusion.worker.utils import DiffusionRequestState
 from vllm_omni.engine.async_omni_engine import StageRuntimeInfo
-from vllm_omni.engine.messages import ErrorMessage, PromptUpdateMessage, ShutdownRequestMessage, StageSubmissionMessage
+from vllm_omni.engine.messages import ErrorMessage, InteractionMessage, ShutdownRequestMessage, StageSubmissionMessage
 from vllm_omni.engine.orchestrator import Orchestrator, OrchestratorRequestState
 from vllm_omni.engine.stage_client import StagePoolClient
 from vllm_omni.engine.stage_init_utils import StageMetadata
@@ -75,17 +75,17 @@ def _make_diffusion_model_runner(*, pipeline, streaming_output: bool = True) -> 
 class TestPromptUpdateExecution:
     """Runner, InputBatch cache, and pipeline chunk-boundary behavior."""
 
-    def test_runner_prompt_update_delegates_to_helios_pipeline(self, pipeline: HeliosPipeline) -> None:
+    def test_runner_interaction_delegates_to_helios_pipeline(self, pipeline: HeliosPipeline) -> None:
         """Runner encodes the new prompt and queues pending embeds on the request state."""
         runner = _make_diffusion_model_runner(pipeline=pipeline)
         state = _make_diffusion_request_state()
         runner.state_cache["req-1"] = state
 
-        runner.prompt_update("req-1", "updated", transition_duration_chunks=2)
+        runner.submit_interaction("req-1", {"prompt": "updated", "transition_chunks": 2})
 
         pipeline.encode_prompt.assert_called_once()  # pyright: ignore[reportAttributeAccessIssue]
         pending = state.extra["pending_prompt_update"]
-        assert pending["transition_duration_chunks"] == 2
+        assert pending["transition_chunks"] == 2
         assert torch.equal(pending["target_prompt_embeds"], torch.full((1, 4, 2), 2.0))
 
     def test_runner_prompt_update_rejects_unsupported_pipeline(self) -> None:
@@ -96,13 +96,33 @@ class TestPromptUpdateExecution:
 
         runner = _make_diffusion_model_runner(pipeline=_UnsupportedPipeline())
         with pytest.raises(ValueError, match="not supported"):
-            runner.prompt_update("req-1", "updated")
+            runner.submit_interaction("req-1", {"prompt": "updated"})
 
     def test_runner_prompt_update_rejects_missing_request(self, pipeline) -> None:
         """Runner rejects prompt updates when no active request state exists."""
         runner = _make_diffusion_model_runner(pipeline=pipeline)
         with pytest.raises(ValueError, match="No active request state"):
-            runner.prompt_update("missing", "updated")
+            runner.submit_interaction("missing", {"prompt": "updated"})
+
+    @pytest.mark.parametrize(
+        "interaction",
+        [
+            {},
+            {"multi_modal_data": {"camera": {"type": "pose"}}},
+            {"prompt": "updated", "multi_modal_data": {"camera": {"type": "pose"}}},
+        ],
+    )
+    def test_runner_interaction_rejects_structural_payloads_until_implemented(
+        self,
+        pipeline: HeliosPipeline,
+        interaction: dict[str, Any],
+    ) -> None:
+        """Unsupported interaction dict shapes are preserved to and rejected by the runner."""
+        runner = _make_diffusion_model_runner(pipeline=pipeline)
+        runner.state_cache["req-1"] = _make_diffusion_request_state()
+
+        with pytest.raises(NotImplementedError, match="Only text-only prompt update interactions"):
+            runner.submit_interaction("req-1", cast(Any, interaction))
 
     def test_input_batch_refreshes_prompt_embeds_on_version_change(self) -> None:
         """InputBatch rebuilds prompt_embeds when prompt_update_version changes."""
@@ -128,11 +148,11 @@ class TestPromptUpdateExecution:
         """HeliosPipeline queues target embeds without mutating current prompt_embeds."""
         state = _make_diffusion_request_state()
 
-        pipeline.prepare_prompt_update(state, "new scene", transition_duration_chunks=2)
+        pipeline.prepare_prompt_update(state, "new scene", transition_chunks=2)
 
         pending = state.extra["pending_prompt_update"]
         assert torch.equal(pending["target_prompt_embeds"], torch.full((1, 4, 2), 2.0))
-        assert pending["transition_duration_chunks"] == 2
+        assert pending["transition_chunks"] == 2
         assert torch.equal(state.prompt_embeds, torch.zeros(1, 4, 2))  # pyright: ignore[reportArgumentType]
 
     def test_helios_prepare_prompt_update_rejects_before_initial_generation(self, pipeline: HeliosPipeline) -> None:
@@ -141,14 +161,14 @@ class TestPromptUpdateExecution:
         state.prompt_embeds = None
 
         with pytest.raises(ValueError, match="prompt_update is not allowed before initial generation has started"):
-            pipeline.prepare_prompt_update(state, "new scene", transition_duration_chunks=2)
+            pipeline.prepare_prompt_update(state, "new scene", transition_chunks=2)
 
         assert "pending_prompt_update" not in state.extra
 
     def test_helios_apply_prompt_update_at_chunk_boundary_starts_transition(self, pipeline: HeliosPipeline) -> None:
         """At chunk boundary, starts transition state and bumps prompt_update_version."""
         state = _make_diffusion_request_state()
-        pipeline.prepare_prompt_update(state, "new scene", transition_duration_chunks=2)
+        pipeline.prepare_prompt_update(state, "new scene", transition_chunks=2)
 
         pipeline._apply_prompt_update_at_chunk_boundary(state)
 
@@ -159,7 +179,7 @@ class TestPromptUpdateExecution:
     def test_helios_apply_prompt_update_advances_transition_over_chunks(self, pipeline: HeliosPipeline) -> None:
         """At chunk boundary, interpolates embeds until the target prompt is reached."""
         state = _make_diffusion_request_state()
-        pipeline.prepare_prompt_update(state, "new scene", transition_duration_chunks=3)
+        pipeline.prepare_prompt_update(state, "new scene", transition_chunks=3)
         pipeline._apply_prompt_update_at_chunk_boundary(state)
 
         for _ in range(3):
@@ -181,7 +201,7 @@ class TestPromptUpdateIntegration:
         """Worker-side prompt_update rejection is reported without crashing the orchestrator."""
 
         class _RejectingStagePool:
-            async def submit_prompt_update(self, *args: Any, **kwargs: Any) -> None:
+            async def submit_interaction(self, *args: Any, **kwargs: Any) -> None:
                 del args, kwargs
                 raise ValueError("prompt embeds are not ready")
 
@@ -191,17 +211,16 @@ class TestPromptUpdateIntegration:
         orchestrator.output_async_queue = output_queue  # pyright: ignore[reportAttributeAccessIssue]
         orchestrator.request_states = {"req-1": OrchestratorRequestState(request_id="req-1")}
 
-        await orchestrator._handle_prompt_update(
-            PromptUpdateMessage(
+        await orchestrator._handle_interaction(
+            InteractionMessage(
                 request_id="req-1",
-                prompt="new scene",
-                transition_duration_chunks=2,
+                interaction={"prompt": "new scene", "transition_chunks": 2},
             )
         )
 
         msg = output_queue.get_nowait()
         assert msg == ErrorMessage(
-            error="Failed prompt_update for request req-1: prompt embeds are not ready",
+            error="Failed interaction for request req-1: prompt embeds are not ready",
             fatal=False,
             request_id="req-1",
             stage_id=0,
@@ -227,11 +246,10 @@ class TestPromptUpdateIntegration:
         orchestrator.request_states = {"req-1": OrchestratorRequestState(request_id="req-1")}
 
         try:
-            await orchestrator._handle_prompt_update(
-                PromptUpdateMessage(
+            await orchestrator._handle_interaction(
+                InteractionMessage(
                     request_id="req-1",
-                    prompt="new scene",
-                    transition_duration_chunks=2,
+                    interaction={"prompt": "new scene", "transition_chunks": 2},
                 )
             )
         finally:
@@ -244,7 +262,7 @@ class TestPromptUpdateIntegration:
         )
         msg = output_queue.get_nowait()
         assert msg == ErrorMessage(
-            error="Failed prompt_update for request req-1: prompt embeds are not ready",
+            error="Failed interaction for request req-1: prompt embeds are not ready",
             fatal=False,
             request_id="req-1",
             stage_id=0,
@@ -272,16 +290,15 @@ class TestPromptUpdateIntegration:
             )
             internal_request_id = next(iter(runner.state_cache))
 
-            await omni.add_prompt_update_async(
+            await omni.submit_interaction_async(
                 "req-omni",
-                prompt="new scene",
-                transition_duration_chunks=2,
+                interaction={"prompt": "new scene", "transition_chunks": 2},
             )
 
             outputs = await generate_task
 
             pending = runner.state_cache[internal_request_id].extra["pending_prompt_update"]
-            assert pending["transition_duration_chunks"] == 2
+            assert pending["transition_chunks"] == 2
             assert torch.equal(pending["target_prompt_embeds"], torch.full((1, 4, 2), 2.0))
             pipeline.encode_prompt.assert_called_once()  # pyright: ignore[reportAttributeAccessIssue]
             assert [output.custom_output["chunk"] for output in outputs] == [0, 1]
@@ -426,18 +443,16 @@ class TestPromptUpdateIntegration:
                 )
             )
 
-        async def add_prompt_update_async(
+        async def submit_interaction_async(
             self,
             request_id: str,
             *,
-            prompt: str,
-            transition_duration_chunks: int | None = None,
+            interaction: dict[str, Any],
         ) -> None:
             self._fixture.request_sync_q.put_nowait(
-                PromptUpdateMessage(
+                InteractionMessage(
                     request_id=request_id,
-                    prompt=prompt,
-                    transition_duration_chunks=transition_duration_chunks,
+                    interaction=cast(Any, interaction),
                 )
             )
 
@@ -510,9 +525,9 @@ class TestPromptUpdateIntegration:
 
         def collective_rpc(self, method, timeout, args, kwargs, unique_reply_rank):
             del timeout, kwargs, unique_reply_rank
-            if method == "prompt_update":
-                request_id, prompt, transition_duration_chunks = args
-                self._runner.prompt_update(request_id, prompt, transition_duration_chunks)
+            if method == "submit_interaction":
+                request_id, interaction = args
+                self._runner.submit_interaction(request_id, interaction)
                 return None
             raise NotImplementedError(f"collective_rpc not mocked for {method!r}")
 

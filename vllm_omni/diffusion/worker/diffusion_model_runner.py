@@ -49,6 +49,7 @@ from vllm_omni.diffusion.worker.utils import (
     merge_stage_durations,
 )
 from vllm_omni.distributed.omni_connectors.kv_transfer_manager import OmniKVTransferManager
+from vllm_omni.inputs.data import OmniInteractionPrompt
 from vllm_omni.platforms import current_omni_platform
 from vllm_omni.worker.omni_connector_model_runner_mixin import OmniConnectorModelRunnerMixin
 
@@ -801,24 +802,42 @@ class DiffusionModelRunner(OmniConnectorModelRunnerMixin):
 
                 return BatchRunnerOutput.from_list(runner_output_list)
 
-    def prompt_update(
+    def submit_interaction(
         self,
         request_id: str,
-        prompt: str,
-        transition_duration_chunks: int | None = None,
+        interaction: OmniInteractionPrompt,
     ) -> None:
-        """Queue a midway prompt update for an active stepwise request."""
+        """Route a midway interaction to the matching active stepwise request feature."""
         assert self.pipeline is not None, "Model not loaded. Call load_model() first."
+        if not self.od_config.streaming_output:
+            raise ValueError("submit_interaction requires streaming_output=True")
+        if not self.supports_step_mode():
+            raise ValueError("submit_interaction requires step execution support")
+
+        if "prompt" in interaction and not (set(interaction) - {"prompt", "transition_chunks"}):
+            # Is a prompt update interaction.
+            self._submit_prompt_update_interaction(request_id, interaction)
+            return
+
+        raise NotImplementedError(
+            "Only text-only prompt update interactions with 'prompt' and optional "
+            "'transition_chunks' are supported in this release"
+        )
+
+    def _submit_prompt_update_interaction(
+        self,
+        request_id: str,
+        interaction: OmniInteractionPrompt,
+    ) -> None:
+        """Queue a prompt-update interaction for an active stepwise request."""
         if not supports_prompt_update(self.pipeline):
             raise ValueError(f"prompt_update is not supported by pipeline {self.od_config.model_class_name!r}")
-        if not self.od_config.streaming_output:
-            raise ValueError("prompt_update requires streaming_output=True")
-        if not self.supports_step_mode():
-            raise ValueError("prompt_update requires step execution support")
 
         state = self.state_cache.get(request_id)
         if state is None:
             raise ValueError(f"No active request state for prompt_update: {request_id!r}")
 
+        prompt = interaction["prompt"]
+        transition_chunks = interaction.get("transition_chunks")
         pipeline = cast(SupportsPromptUpdate, self.pipeline)
-        pipeline.prepare_prompt_update(state, prompt, transition_duration_chunks)
+        pipeline.prepare_prompt_update(state, prompt, transition_chunks)

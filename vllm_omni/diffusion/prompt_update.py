@@ -21,7 +21,7 @@ import torch
 
 from vllm_omni.diffusion.worker.utils import DiffusionRequestState
 
-DEFAULT_TRANSITION_DURATION_CHUNKS = 3
+DEFAULT_TRANSITION_CHUNKS = 3
 
 logger = logging.getLogger(__name__)
 
@@ -50,10 +50,8 @@ def prompt_update_versions(states: Sequence[DiffusionRequestState]) -> tuple[int
 class PromptUpdateMixin:
     """Mixin for chunked streaming pipelines that support midway prompt updates.
 
-    Implements the behavior expected by
-    :class:`~vllm_omni.diffusion.models.interface.SupportsPromptUpdate`.
-    All per-request transition state lives on ``DiffusionRequestState.extra``;
-    this mixin is stateless and safe to use on a shared pipeline instance.
+    Implements the behavior expected by :class:`~vllm_omni.diffusion.models.interface.SupportsPromptUpdate`.
+    All per-request transition state lives on ``DiffusionRequestState.extra``; this mixin itself is stateless.
     """
 
     supports_prompt_update: ClassVar[bool] = True
@@ -66,10 +64,10 @@ class PromptUpdateMixin:
         self,
         state: DiffusionRequestState,
         prompt: str,
-        transition_duration_chunks: int | None = None,
+        transition_chunks: int | None = None,
     ) -> None:
         """Encode and queue a prompt update to apply at the next chunk boundary.
-        It does not actually apply the prompt update.
+        It does not actually apply the prompt transition.
 
         This is an extended interface for the pipeline, to be called by the runner.
         """
@@ -79,11 +77,9 @@ class PromptUpdateMixin:
             raise ValueError(
                 f"prompt_update is not allowed before initial generation has started (request_id={state.request_id!r})"
             )
-        duration = (
-            DEFAULT_TRANSITION_DURATION_CHUNKS if transition_duration_chunks is None else transition_duration_chunks
-        )
+        duration = DEFAULT_TRANSITION_CHUNKS if transition_chunks is None else transition_chunks
         if duration < 0:
-            raise ValueError("transition_duration_chunks must be >= 0")
+            raise ValueError("transition_chunks must be >= 0")
 
         target_prompt_embeds, _ = self.encode_prompt(
             prompt=prompt,
@@ -99,7 +95,7 @@ class PromptUpdateMixin:
             extra["pending_prompt_update"] = {
                 "prompt": prompt,
                 "target_prompt_embeds": target_prompt_embeds,
-                "transition_duration_chunks": duration,
+                "transition_chunks": duration,
             }
 
     def _apply_prompt_update_at_chunk_boundary(self, state: DiffusionRequestState) -> None:
@@ -116,14 +112,14 @@ class PromptUpdateMixin:
         # update can abort/overwrite), but do not keep bumping the version.
         if update_state is not None:
             in_transition = (
-                update_state.transition_duration_chunks > 0
-                and update_state.elapsed_transition_chunks < update_state.transition_duration_chunks
+                update_state.transition_chunks > 0
+                and update_state.elapsed_transition_chunks < update_state.transition_chunks
             )
             if in_transition:
                 update_state.advance_transition()
                 state.prompt_embeds = update_state.blended_prompt_embeds()
                 embeds_changed = True
-                if update_state.elapsed_transition_chunks >= update_state.transition_duration_chunks:
+                if update_state.elapsed_transition_chunks >= update_state.transition_chunks:
                     state.prompt_embeds = update_state.target_prompt_embeds
                     update_state.source_prompt_embeds = update_state.target_prompt_embeds
                     if update_state.target_prompt is not None:
@@ -143,12 +139,12 @@ class PromptUpdateMixin:
                 )
             source = state.prompt_embeds.detach().clone()
             target = pending["target_prompt_embeds"]
-            duration = int(pending["transition_duration_chunks"])
+            duration = int(pending["transition_chunks"])
             prompt = str(pending.get("prompt", ""))
             update_state = _PromptUpdateState(
                 source_prompt_embeds=source,
                 target_prompt_embeds=target,
-                transition_duration_chunks=duration,
+                transition_chunks=duration,
                 target_prompt=prompt,
             )
             extra["prompt_update_state"] = update_state
@@ -182,7 +178,7 @@ class _PromptUpdateState:
 
     source_prompt_embeds: torch.Tensor
     target_prompt_embeds: torch.Tensor
-    transition_duration_chunks: int
+    transition_chunks: int
     elapsed_transition_chunks: int = 0
     target_prompt: str | None = None
 
@@ -193,21 +189,21 @@ class _PromptUpdateState:
         return (1.0 - alpha) * self.source_prompt_embeds + alpha * self.target_prompt_embeds
 
     def advance_transition(self) -> None:
-        if self.transition_duration_chunks <= 0:
+        if self.transition_chunks <= 0:
             self.source_prompt_embeds = self.target_prompt_embeds
             return
         self.elapsed_transition_chunks += 1
-        if self.elapsed_transition_chunks >= self.transition_duration_chunks:
+        if self.elapsed_transition_chunks >= self.transition_chunks:
             self.source_prompt_embeds = self.target_prompt_embeds
-            self.elapsed_transition_chunks = self.transition_duration_chunks
+            self.elapsed_transition_chunks = self.transition_chunks
 
     def _current_alpha(self) -> float:
-        if self.transition_duration_chunks <= 0:
+        if self.transition_chunks <= 0:
             return 1.0
-        return min(1.0, self.elapsed_transition_chunks / self.transition_duration_chunks)
+        return min(1.0, self.elapsed_transition_chunks / self.transition_chunks)
 
 
 class _PendingPromptUpdate(TypedDict):
     prompt: str
     target_prompt_embeds: torch.Tensor
-    transition_duration_chunks: int
+    transition_chunks: int

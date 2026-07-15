@@ -37,7 +37,7 @@ def _build_test_app(
 ) -> tuple[FastAPI, OmniStreamingVideoOutputHandler, MagicMock]:
     engine_client = mocker.MagicMock()
     engine_client.abort = mocker.AsyncMock()
-    engine_client.add_prompt_update_async = mocker.AsyncMock()
+    engine_client.submit_interaction_async = mocker.AsyncMock()
     engine_client.default_sampling_params_list = [OmniDiffusionSamplingParams()]
     engine_client.stage_configs = [SimpleNamespace(stage_type="diffusion")]
     engine_client.generate = mock_generate
@@ -162,7 +162,7 @@ class TestStreamingVideoOutputWebSocket:
     def test_first_message_must_be_session_start(self, mocker: MockerFixture):
         """Control messages sent before session.start are rejected at the handshake.
 
-        This test can practically ensure ``session.prompt_update`` before ``session.start`` is rejected,
+        This test can practically ensure ``session.interaction`` before ``session.start`` is rejected,
         but the implementation is more generic to also guard against other control messages.
         """
 
@@ -178,13 +178,13 @@ class TestStreamingVideoOutputWebSocket:
 
         with TestClient(app) as client:
             with client.websocket_connect("/v1/realtime/video") as ws:
-                ws.send_json({"type": "session.prompt_update", "prompt": "too early"})
+                ws.send_json({"type": "session.interaction", "interaction": {"prompt": "too early"}})
                 err = ws.receive_json()
                 assert err["type"] == "error"
-                assert err["message"] == "Expected session.start, got: session.prompt_update"
+                assert err["message"] == "Expected session.start, got: session.interaction"
 
         engine_client.abort.assert_not_called()
-        engine_client.add_prompt_update_async.assert_not_called()
+        engine_client.submit_interaction_async.assert_not_called()
 
     def test_streaming_session_emits_final_encoder_delta_before_done(self, mocker: MockerFixture):
         """A non-empty encoder close delta is delivered as the final binary chunk."""
@@ -287,7 +287,7 @@ def _build_handler_for_async_tests(
 ) -> tuple[OmniStreamingVideoOutputHandler, MagicMock, _MockVideoOutputWebSocket]:
     engine_client = mocker.MagicMock()
     engine_client.abort = mocker.AsyncMock()
-    engine_client.add_prompt_update_async = mocker.AsyncMock()
+    engine_client.submit_interaction_async = mocker.AsyncMock()
     engine_client.default_sampling_params_list = [OmniDiffusionSamplingParams()]
     engine_client.stage_configs = [SimpleNamespace(stage_type="diffusion")]
     engine_client.generate = mock_generate
@@ -476,10 +476,10 @@ class TestStreamingVideoOutputStallTimeout:
 
 
 class TestStreamingVideoOutputPromptUpdate:
-    """session.prompt_update control messages during streaming."""
+    """session.interaction control messages during streaming."""
 
     def test_prompt_update_accepted_during_streaming(self, mocker: MockerFixture):
-        """A valid prompt_update during generation is forwarded to the engine and acknowledged."""
+        """A valid interaction during generation is forwarded to the engine and acknowledged."""
 
         async def mock_generate(*_args, **_kwargs):
             yield OmniRequestOutput.from_diffusion(
@@ -511,23 +511,22 @@ class TestStreamingVideoOutputPromptUpdate:
 
                 assert ws.receive_bytes() == b"mp4-chunk-0"
 
-                ws.send_json({"type": "session.prompt_update", "prompt": "new scene"})
+                ws.send_json({"type": "session.interaction", "interaction": {"prompt": "new scene"}})
                 accepted = ws.receive_json()
-                assert accepted["type"] == "session.prompt_update.accepted"
+                assert accepted["type"] == "session.interaction.accepted"
 
                 assert ws.receive_bytes() == b"mp4-chunk-1"
                 done = ws.receive_json()
                 assert done["type"] == "session.done"
                 assert done["stopped"] is False
 
-        engine_client.add_prompt_update_async.assert_awaited_once_with(
+        engine_client.submit_interaction_async.assert_awaited_once_with(
             request_id,
-            prompt="new scene",
-            transition_duration_chunks=None,
+            interaction={"prompt": "new scene"},
         )
 
-    def test_prompt_update_forwards_transition_duration_chunks(self, mocker: MockerFixture):
-        """transition_duration_chunks is passed through to the engine client."""
+    def test_prompt_update_forwards_transition_chunks(self, mocker: MockerFixture):
+        """transition_chunks is passed through to the engine client."""
 
         async def mock_generate(*_args, **_kwargs):
             yield OmniRequestOutput.from_diffusion(
@@ -558,19 +557,17 @@ class TestStreamingVideoOutputPromptUpdate:
 
                 ws.send_json(
                     {
-                        "type": "session.prompt_update",
-                        "prompt": "fade to sunset",
-                        "transition_duration_chunks": 5,
+                        "type": "session.interaction",
+                        "interaction": {"prompt": "fade to sunset", "transition_chunks": 5},
                     }
                 )
-                assert ws.receive_json()["type"] == "session.prompt_update.accepted"
+                assert ws.receive_json()["type"] == "session.interaction.accepted"
                 assert ws.receive_bytes() == b"mp4-chunk-1"
                 assert ws.receive_json()["type"] == "session.done"
 
-        engine_client.add_prompt_update_async.assert_awaited_once_with(
+        engine_client.submit_interaction_async.assert_awaited_once_with(
             request_id,
-            prompt="fade to sunset",
-            transition_duration_chunks=5,
+            interaction={"prompt": "fade to sunset", "transition_chunks": 5},
         )
 
     def test_prompt_update_rejects_empty_prompt(self, mocker: MockerFixture):
@@ -603,7 +600,7 @@ class TestStreamingVideoOutputPromptUpdate:
                 assert ws.receive_json()["type"] == "video.start"
                 assert ws.receive_bytes() == b"mp4-chunk-0"
 
-                ws.send_json({"type": "session.prompt_update", "prompt": "   "})
+                ws.send_json({"type": "session.interaction", "interaction": {"prompt": "   "}})
                 err = ws.receive_json()
                 assert err["type"] == "error"
                 assert "non-empty prompt" in err["message"]
@@ -611,18 +608,18 @@ class TestStreamingVideoOutputPromptUpdate:
                 assert ws.receive_bytes() == b"mp4-chunk-1"
                 assert ws.receive_json()["type"] == "session.done"
 
-        engine_client.add_prompt_update_async.assert_not_called()
+        engine_client.submit_interaction_async.assert_not_called()
 
     @pytest.mark.parametrize(
-        ("transition_duration_chunks"),
+        ("transition_chunks"),
         ["not-an-int", 2.9, True, -1],
     )
-    def test_prompt_update_rejects_invalid_transition_duration_chunks(
+    def test_prompt_update_rejects_invalid_transition_chunks(
         self,
         mocker: MockerFixture,
-        transition_duration_chunks: object,
+        transition_chunks: object,
     ):
-        """Non-integral or negative transition_duration_chunks returns an error."""
+        """Non-integral or negative transition_chunks returns an error."""
 
         async def mock_generate(*_args, **_kwargs):
             yield OmniRequestOutput.from_diffusion(
@@ -653,9 +650,8 @@ class TestStreamingVideoOutputPromptUpdate:
 
                 ws.send_json(
                     {
-                        "type": "session.prompt_update",
-                        "prompt": "new scene",
-                        "transition_duration_chunks": transition_duration_chunks,
+                        "type": "session.interaction",
+                        "interaction": {"prompt": "new scene", "transition_chunks": transition_chunks},
                     }
                 )
                 err = ws.receive_json()
@@ -664,10 +660,10 @@ class TestStreamingVideoOutputPromptUpdate:
                 assert ws.receive_bytes() == b"mp4-chunk-1"
                 assert ws.receive_json()["type"] == "session.done"
 
-        engine_client.add_prompt_update_async.assert_not_called()
+        engine_client.submit_interaction_async.assert_not_called()
 
     def test_prompt_update_engine_failure_returns_error(self, mocker: MockerFixture):
-        """Engine failures during prompt_update are surfaced to the client."""
+        """Engine failures during interaction are surfaced to the client."""
 
         async def mock_generate(*_args, **_kwargs):
             yield OmniRequestOutput.from_diffusion(
@@ -689,7 +685,7 @@ class TestStreamingVideoOutputPromptUpdate:
             streaming_chunks=[(b"mp4-chunk-0", False), (b"mp4-chunk-1", True)],
             mock_generate=mock_generate,
         )
-        engine_client.add_prompt_update_async.side_effect = RuntimeError("engine unavailable")
+        engine_client.submit_interaction_async.side_effect = RuntimeError("engine unavailable")
 
         with TestClient(app) as client:
             with client.websocket_connect("/v1/realtime/video") as ws:
@@ -697,19 +693,19 @@ class TestStreamingVideoOutputPromptUpdate:
                 assert ws.receive_json()["type"] == "video.start"
                 assert ws.receive_bytes() == b"mp4-chunk-0"
 
-                ws.send_json({"type": "session.prompt_update", "prompt": "new scene"})
+                ws.send_json({"type": "session.interaction", "interaction": {"prompt": "new scene"}})
                 err = ws.receive_json()
                 assert err["type"] == "error"
-                assert "Failed to apply prompt_update" in err["message"]
+                assert "Failed to apply interaction" in err["message"]
 
                 assert ws.receive_bytes() == b"mp4-chunk-1"
                 assert ws.receive_json()["type"] == "session.done"
 
-        engine_client.add_prompt_update_async.assert_awaited_once()
+        engine_client.submit_interaction_async.assert_awaited_once()
 
     @pytest.mark.asyncio
     async def test_prompt_update_accepted_via_async_handler(self, mocker: MockerFixture):
-        """prompt_update acknowledgement is sent while generation is in progress."""
+        """interaction acknowledgement is sent while generation is in progress."""
 
         release = asyncio.Event()
 
@@ -727,19 +723,18 @@ class TestStreamingVideoOutputPromptUpdate:
             mock_generate=mock_generate,
         )
 
-        async def _send_prompt_update_after_delay() -> None:
+        async def _send_interaction_after_delay() -> None:
             await asyncio.sleep(0.05)
             ws.enqueue(
                 json.dumps(
                     {
-                        "type": "session.prompt_update",
-                        "prompt": "mid-stream update",
-                        "transition_duration_chunks": 2,
+                        "type": "session.interaction",
+                        "interaction": {"prompt": "mid-stream update", "transition_chunks": 2},
                     }
                 )
             )
 
-        prompt_task = asyncio.create_task(_send_prompt_update_after_delay())
+        prompt_task = asyncio.create_task(_send_interaction_after_delay())
         session_task = asyncio.create_task(handler.handle_session(ws))  # type: ignore[arg-type]
         await asyncio.sleep(0.15)
         release.set()
@@ -748,9 +743,8 @@ class TestStreamingVideoOutputPromptUpdate:
 
         start = next(m for m in ws.sent_json if m.get("type") == "video.start")
         request_id = start["request_id"]
-        assert any(m.get("type") == "session.prompt_update.accepted" for m in ws.sent_json)
-        engine_client.add_prompt_update_async.assert_awaited_once_with(
+        assert any(m.get("type") == "session.interaction.accepted" for m in ws.sent_json)
+        engine_client.submit_interaction_async.assert_awaited_once_with(
             request_id,
-            prompt="mid-stream update",
-            transition_duration_chunks=2,
+            interaction={"prompt": "mid-stream update", "transition_chunks": 2},
         )

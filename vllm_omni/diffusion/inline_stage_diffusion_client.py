@@ -21,7 +21,7 @@ from vllm_omni.diffusion.request import OmniDiffusionRequest
 from vllm_omni.engine.stage_client import StageClientBase
 from vllm_omni.engine.stage_init_utils import StageMetadata
 from vllm_omni.errors import client_error_metadata
-from vllm_omni.inputs.data import OmniDiffusionSamplingParams
+from vllm_omni.inputs.data import OmniDiffusionSamplingParams, OmniInteractionPrompt
 from vllm_omni.outputs import OmniRequestOutput
 
 if TYPE_CHECKING:
@@ -174,24 +174,23 @@ class InlineStageDiffusionClient(StageClientBase):
                 task.cancel()
             self._engine.abort(rid)
 
-    async def prompt_update_async(
+    async def submit_interaction_async(
         self,
         request_id: str,
-        prompt: str,
-        transition_duration_chunks: int | None = None,
+        interaction: OmniInteractionPrompt,
         timeout: float | None = None,
     ) -> Any:
-        """Apply a midway prompt update to an active streaming request."""
+        """Apply a midway interaction to an active streaming request."""
         logger.debug(
-            "[InlineStageDiffusionClient] stage-%s [rep-%s] prompt update: %s",
+            "[InlineStageDiffusionClient] stage-%s [rep-%s] interaction: %s",
             self.stage_id,
             self.replica_id,
             request_id,
         )
         return await self.collective_rpc_async(
-            "prompt_update",
+            "submit_interaction",
             timeout=timeout,
-            args=(request_id, prompt, transition_duration_chunks),
+            args=(request_id, interaction),
         )
 
     async def collective_rpc_async(

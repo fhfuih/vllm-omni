@@ -91,24 +91,24 @@
       if (!Number.isFinite(atSeconds) || atSeconds < 0) continue;
 
       const delayMs = Math.max(0, atSeconds * 1000 - (performance.now() - videoStartedAt));
-      const transitionDurationChunks = Number.isFinite(Number(update.transition_duration_chunks))
-        ? Number(update.transition_duration_chunks)
+      const transitionChunks = Number.isFinite(Number(update.transition_chunks))
+        ? Number(update.transition_chunks)
         : 3;
 
       const timer = setTimeout(() => {
         if (!ws || ws.readyState !== WebSocket.OPEN) return;
         const payload = {
-          type: "session.prompt_update",
-          prompt: update.prompt,
-          transition_duration_chunks: transitionDurationChunks,
+          type: "session.interaction",
+          interaction: {
+            prompt: update.prompt,
+            transition_chunks: transitionChunks,
+          },
         };
         try {
           ws.send(JSON.stringify(payload));
-          log(
-            "Sent session.prompt_update at t=" + atSeconds.toFixed(2) + "s: " + JSON.stringify(payload)
-          );
+          log("Sent session.interaction at t=" + atSeconds.toFixed(2) + "s: " + JSON.stringify(payload));
         } catch (err) {
-          log("Failed to send session.prompt_update: " + err.message);
+          log("Failed to send session.interaction: " + err.message);
         }
       }, delayMs);
       promptUpdateTimers.push(timer);
@@ -192,8 +192,8 @@
           if (msg.type === "video.start") {
             log("Video session started: request_id=" + (msg.request_id || "") + " format=" + (msg.format || ""));
             schedulePromptUpdates(config.prompt_updates);
-          } else if (msg.type === "session.prompt_update.accepted") {
-            log("Prompt update accepted by server");
+          } else if (msg.type === "session.interaction.accepted") {
+            log("Interaction accepted by server");
           } else if (msg.type === "session.done") {
             done = true;
             setStatus("Done");

@@ -41,16 +41,16 @@ HELIOS_DISTILLED_EXTRA_PARAMS = {
     "is_amplify_first_chunk": True,
 }
 
-DEFAULT_TRANSITION_DURATION_CHUNKS = 3
+DEFAULT_TRANSITION_CHUNKS = 3
 
 
 @dataclass(frozen=True)
 class ScheduledPromptUpdate:
-    """Client-side schedule entry for a midway ``session.prompt_update``."""
+    """Client-side schedule entry for a midway text ``session.interaction``."""
 
     at: float
     prompt: str
-    transition_duration_chunks: int
+    transition_chunks: int
 
 
 def _parse_extra_params(value: str) -> dict[str, Any]:
@@ -86,20 +86,18 @@ def _parse_prompt_updates(value: str) -> list[ScheduledPromptUpdate]:
             raise argparse.ArgumentTypeError(f"--prompt-updates[{index}].prompt must be a non-empty string")
 
         try:
-            transition_duration_chunks = item.get("transition_duration_chunks", DEFAULT_TRANSITION_DURATION_CHUNKS)
-            transition_duration_chunks = int(transition_duration_chunks)
+            transition_chunks = item.get("transition_chunks", DEFAULT_TRANSITION_CHUNKS)
+            transition_chunks = int(transition_chunks)
         except (TypeError, ValueError) as exc:
-            raise argparse.ArgumentTypeError(
-                f"--prompt-updates[{index}].transition_duration_chunks must be an integer"
-            ) from exc
-        if transition_duration_chunks < 0:
-            raise argparse.ArgumentTypeError(f"--prompt-updates[{index}].transition_duration_chunks must be >= 0")
+            raise argparse.ArgumentTypeError(f"--prompt-updates[{index}].transition_chunks must be an integer") from exc
+        if transition_chunks < 0:
+            raise argparse.ArgumentTypeError(f"--prompt-updates[{index}].transition_chunks must be >= 0")
 
         updates.append(
             ScheduledPromptUpdate(
                 at=at,
                 prompt=prompt,
-                transition_duration_chunks=transition_duration_chunks,
+                transition_chunks=transition_chunks,
             )
         )
 
@@ -157,13 +155,15 @@ async def _run_prompt_update_scheduler(
             await asyncio.sleep(delay)
 
         payload = {
-            "type": "session.prompt_update",
-            "prompt": update.prompt,
-            "transition_duration_chunks": update.transition_duration_chunks,
+            "type": "session.interaction",
+            "interaction": {
+                "prompt": update.prompt,
+                "transition_chunks": update.transition_chunks,
+            },
         }
         async with send_lock:
             await websocket.send(json.dumps(payload, ensure_ascii=False))
-        print(f"Sent session.prompt_update at t={update.at:.2f}s: {json.dumps(payload, ensure_ascii=False)}")
+        print(f"Sent session.interaction at t={update.at:.2f}s: {json.dumps(payload, ensure_ascii=False)}")
 
 
 def _count_decoded_frames(video_bytes: bytes, *, stream_format: str) -> int | None:
@@ -281,8 +281,8 @@ async def stream_video(args: argparse.Namespace) -> None:
                                 send_lock=send_lock,
                             )
                         )
-                elif msg_type == "session.prompt_update.accepted":
-                    print("Prompt update accepted by server")
+                elif msg_type == "session.interaction.accepted":
+                    print("Interaction accepted by server")
                 elif msg_type == "session.done":
                     print(f"Session complete: {json.dumps(msg, ensure_ascii=False)}")
                     done = True
@@ -396,14 +396,14 @@ def parse_args() -> argparse.Namespace:
                         "Swirling sediment and bubbles surround the spilling fortune, highlighting the chaotic power of the storm as it ravages the seabed. "
                         "Close-up shot emphasizing the turbulent motion and destruction."
                     ),
-                    # "transition_duration_chunks": 3,
+                    # "transition_chunks": 3,
                 },
             ]
         ),
         help=(
             "JSON array of scheduled prompt updates. Each object requires "
             "'at' (seconds after video.start) and 'prompt'. Optional "
-            f"'transition_duration_chunks' defaults to {DEFAULT_TRANSITION_DURATION_CHUNKS}."
+            f"'transition_chunks' defaults to {DEFAULT_TRANSITION_CHUNKS}."
         ),
     )
     return parser.parse_args()

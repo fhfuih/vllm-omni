@@ -24,7 +24,7 @@ from vllm_omni.engine.stage_client import (
     StagePoolDiffusionClient,
     StagePoolLLMClient,
 )
-from vllm_omni.inputs.data import OmniDiffusionSamplingParams
+from vllm_omni.inputs.data import OmniDiffusionSamplingParams, OmniInteractionPrompt
 from vllm_omni.metrics import definitions as defs
 from vllm_omni.metrics.stats import StageRequestStats as StageRequestMetrics
 from vllm_omni.metrics.stats import StageStats
@@ -1039,27 +1039,21 @@ class StagePool:
             await self._llm_client(replica_id).add_request_async(request)
         return replica_id
 
-    async def submit_prompt_update(
+    async def submit_interaction(
         self,
         request_id: str,
-        *,
-        prompt: str,
-        transition_duration_chunks: int | None = None,
+        interaction: OmniInteractionPrompt,
     ) -> int:
-        """Submit a midway prompt update to an active diffusion (typically video generation) request."""
+        """Submit a midway interaction to an active diffusion (typically video generation) request."""
         replica_id = self.get_bound_replica_id(request_id)
         if replica_id is None or self.clients[replica_id] is None:
             replica_id = await self._pick_or_select(request_id)
 
         client = self._diffusion_client(replica_id)
-        result = await client.prompt_update_async(
-            request_id,
-            prompt,
-            transition_duration_chunks,
-        )
-        # Prompt update may raise error if underlying check against ODConfig fails
+        result = await client.submit_interaction_async(request_id, interaction)
+        # Interaction may raise error if underlying check against ODConfig fails.
         if isinstance(result, dict) and result.get("error"):
-            reason = result.get("reason") or "Unknown prompt_update RPC error"
+            reason = result.get("reason") or "Unknown interaction RPC error"
             raise ValueError(str(reason))
         return replica_id
 

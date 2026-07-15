@@ -120,7 +120,7 @@ class SupportsPromptUpdate(Protocol):
         self,
         state: DiffusionRequestState,
         prompt: str,
-        transition_duration_chunks: int | None = None,
+        transition_chunks: int | None = None,
     ) -> None:
         """Encode and queue a prompt update on request-local state."""
         ...

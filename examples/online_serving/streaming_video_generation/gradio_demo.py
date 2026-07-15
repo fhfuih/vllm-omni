@@ -24,7 +24,7 @@ except ImportError:
     raise ImportError("gradio is required to run this demo. Install it with: pip install 'vllm-omni[demo]'") from None
 
 DEFAULT_PROMPT = "A vibrant tropical fish swimming gracefully among colorful coral reefs in a clear, turquoise ocean. The fish has bright blue and yellow scales with a small, distinctive orange spot on its side, its fins moving fluidly. The coral reefs are alive with a variety of marine life, including small schools of colorful fish and sea turtles gliding by. The water is crystal clear, allowing for a view of the sandy ocean floor below. The reef itself is adorned with a mix of hard and soft corals in shades of red, orange, and green. The photo captures the fish from a slightly elevated angle, emphasizing its lively movements and the vivid colors of its surroundings. A close-up shot with dynamic movement."
-DEFAULT_TRANSITION_DURATION_CHUNKS = 3
+DEFAULT_TRANSITION_CHUNKS = 3
 PROMPT_UPDATE_HEADERS = ["At (s)", "Prompt", "Transition Chunks"]
 PROMPT_UPDATE_VALUES = [
     [
@@ -57,7 +57,7 @@ VIDEO_STREAM_VIEW_JS = Path(__file__).with_name("video-stream-view.js")
 class ScheduledPromptUpdate(TypedDict):
     at: float
     prompt: str
-    transition_duration_chunks: int
+    transition_chunks: int
 
 
 def _maybe_set(payload: dict[str, Any], key: str, value: Any) -> None:
@@ -114,19 +114,19 @@ def _parse_prompt_update_row(row: list[Any] | tuple[Any, ...], *, index: int) ->
     if not prompt:
         raise gr.Error(f"{row_label}: Prompt must be a non-empty string.")
 
-    transition_duration_chunks = DEFAULT_TRANSITION_DURATION_CHUNKS
+    transition_chunks = DEFAULT_TRANSITION_CHUNKS
     if transition_val is not None:
         try:
-            transition_duration_chunks = int(transition_val)
+            transition_chunks = int(transition_val)
         except (TypeError, ValueError) as exc:
             raise gr.Error(f"{row_label}: Transition Chunks must be an integer.") from exc
-        if transition_duration_chunks < 0:
+        if transition_chunks < 0:
             raise gr.Error(f"{row_label}: Transition Chunks must be >= 0.")
 
     return {
         "at": at,
         "prompt": prompt,
-        "transition_duration_chunks": transition_duration_chunks,
+        "transition_chunks": transition_chunks,
     }
 
 
@@ -329,7 +329,7 @@ def create_demo() -> gr.Blocks:
 
                 with gr.Accordion("Prompt Updates", open=True):
                     gr.Markdown(
-                        "Schedule midway `session.prompt_update` messages after `video.start`. "
+                        "Schedule midway text `session.interaction` messages after `video.start`. "
                         "With one row, leave it fully empty or fill both **At (s)** and **Prompt**. "
                         "With multiple rows, every row must be complete."
                     )

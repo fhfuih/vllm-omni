@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: Copyright contributors to the vLLM project
-"""Entrypoint contract tests for ``AsyncOmni.add_prompt_update_async``."""
+"""Entrypoint contract tests for ``AsyncOmni.submit_interaction_async``."""
 
 from __future__ import annotations
 
@@ -38,72 +38,70 @@ def _make_async_omni(*, num_stages: int = 1, stage_type: str = "diffusion") -> A
     omni.engine = SimpleNamespace(  # pyright: ignore[reportAttributeAccessIssue]
         num_stages=num_stages,
         get_stage_metadata=lambda stage_id: SimpleNamespace(stage_type=stage_type),
-        add_prompt_update_async=AsyncMock(),
+        submit_interaction_async=AsyncMock(),
     )
     return omni
 
 
 @pytest.mark.asyncio
-async def test_add_prompt_update_async_maps_external_to_internal_id() -> None:
+async def test_submit_interaction_async_maps_external_to_internal_id() -> None:
     omni = _make_async_omni()
     with pytest.raises(ValueError, match="exactly one active request"):
-        await omni.add_prompt_update_async("external-abc", prompt="new prompt", transition_duration_chunks=2)
+        await omni.submit_interaction_async(
+            "external-abc", interaction={"prompt": "new prompt", "transition_chunks": 2}
+        )
 
     omni.request_states.pop("external-abc-uuid-2")
-    await omni.add_prompt_update_async(
+    await omni.submit_interaction_async(
         "external-abc",
-        prompt="new prompt",
-        transition_duration_chunks=2,
+        interaction={"prompt": "new prompt", "transition_chunks": 2},
     )
-    omni.engine.add_prompt_update_async.assert_awaited_once_with(  # pyright: ignore[reportAttributeAccessIssue]
+    omni.engine.submit_interaction_async.assert_awaited_once_with(  # pyright: ignore[reportAttributeAccessIssue]
         "external-abc-uuid-1",
-        prompt="new prompt",
-        transition_duration_chunks=2,
+        interaction={"prompt": "new prompt", "transition_chunks": 2},
     )
 
 
 @pytest.mark.asyncio
-async def test_add_prompt_update_async_passes_none_transition_duration_chunks() -> None:
+async def test_submit_interaction_async_passes_missing_transition_chunks() -> None:
     omni = _make_async_omni()
     omni.request_states.pop("external-abc-uuid-2")
-    await omni.add_prompt_update_async("external-abc", prompt="new prompt")
-    omni.engine.add_prompt_update_async.assert_awaited_once_with(  # pyright: ignore[reportAttributeAccessIssue]
+    await omni.submit_interaction_async("external-abc", interaction={"prompt": "new prompt"})
+    omni.engine.submit_interaction_async.assert_awaited_once_with(  # pyright: ignore[reportAttributeAccessIssue]
         "external-abc-uuid-1",
-        prompt="new prompt",
-        transition_duration_chunks=None,
+        interaction={"prompt": "new prompt"},
     )
 
 
 @pytest.mark.asyncio
-async def test_add_prompt_update_async_rejects_empty_prompt() -> None:
+async def test_submit_interaction_async_rejects_empty_prompt() -> None:
     omni = _make_async_omni()
     omni.request_states.pop("external-abc-uuid-2")
     with pytest.raises(ValueError, match="prompt must be non-empty"):
-        await omni.add_prompt_update_async("external-abc", prompt="")
+        await omni.submit_interaction_async("external-abc", interaction={"prompt": ""})
 
 
 @pytest.mark.asyncio
-async def test_add_prompt_update_async_rejects_negative_transition_duration_chunks() -> None:
+async def test_submit_interaction_async_rejects_negative_transition_chunks() -> None:
     omni = _make_async_omni()
     omni.request_states.pop("external-abc-uuid-2")
-    with pytest.raises(ValueError, match="transition_duration_chunks must be >= 0"):
-        await omni.add_prompt_update_async(
+    with pytest.raises(ValueError, match="transition_chunks must be >= 0"):
+        await omni.submit_interaction_async(
             "external-abc",
-            prompt="new prompt",
-            transition_duration_chunks=-1,
+            interaction={"prompt": "new prompt", "transition_chunks": -1},
         )
 
 
 @pytest.mark.asyncio
-async def test_add_prompt_update_async_rejects_inactive_request() -> None:
+async def test_submit_interaction_async_rejects_inactive_request() -> None:
     omni = _make_async_omni()
     omni.request_states.clear()
     with pytest.raises(ValueError, match="No active request"):
-        await omni.add_prompt_update_async("missing", prompt="new prompt", transition_duration_chunks=2)
+        await omni.submit_interaction_async("missing", interaction={"prompt": "new prompt", "transition_chunks": 2})
 
 
 @pytest.mark.asyncio
-async def test_add_prompt_update_async_rejects_non_diffusion() -> None:
+async def test_submit_interaction_async_rejects_non_diffusion() -> None:
     omni = _make_async_omni(stage_type="llm")
     omni.request_states = {
         "req-uuid": ClientRequestState(
@@ -113,4 +111,20 @@ async def test_add_prompt_update_async_rejects_non_diffusion() -> None:
         ),
     }
     with pytest.raises(ValueError, match="requires a diffusion stage"):
-        await omni.add_prompt_update_async("req", prompt="new prompt", transition_duration_chunks=2)
+        await omni.submit_interaction_async("req", interaction={"prompt": "new prompt", "transition_chunks": 2})
+
+
+@pytest.mark.asyncio
+async def test_submit_interaction_async_forwards_unsupported_dict_shape_to_engine() -> None:
+    omni = _make_async_omni()
+    omni.request_states.pop("external-abc-uuid-2")
+
+    await omni.submit_interaction_async(
+        "external-abc",
+        interaction={"multi_modal_data": {"camera": {"type": "pose"}}, "transition_chunks": 2},
+    )
+
+    omni.engine.submit_interaction_async.assert_awaited_once_with(  # pyright: ignore[reportAttributeAccessIssue]
+        "external-abc-uuid-1",
+        interaction={"multi_modal_data": {"camera": {"type": "pose"}}, "transition_chunks": 2},
+    )

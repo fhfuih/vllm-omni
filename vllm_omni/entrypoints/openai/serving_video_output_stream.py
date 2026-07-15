@@ -5,14 +5,17 @@
 Protocol:
     Client -> Server:
         {"type": "session.start", "model": "...", "prompt": "...", "format": "m4s", ...}
-        {"type": "session.prompt_update", "prompt": "...", "transition_duration_chunks": (optional, integer)}
+        {
+            "type": "session.interaction",
+            "interaction": {"prompt": "...", "transition_chunks": (optional, integer)},
+        }
         {"type": "session.stop"}
         {"type": "session.ping"}  # optional; refreshes stall clock
 
     Server -> Client:
         {"type": "video.start", "request_id": "...", "config": {...}, "format": "m4s"}
         <binary frame: fragmented MP4 bytes>
-        {"type": "session.prompt_update.accepted"}
+        {"type": "session.interaction.accepted"}
         {"type": "session.done", ...}
         {"type": "session.pong"}  # reply to session.ping
         {"type": "error", "message": "..."}
@@ -41,7 +44,7 @@ from vllm_omni.entrypoints.openai.stage_params import (
 )
 from vllm_omni.entrypoints.openai.utils import get_stage_type, parse_lora_request
 from vllm_omni.entrypoints.openai.video_api_utils import StreamingVideoFormat, create_streaming_video_encoder
-from vllm_omni.inputs.data import OmniDiffusionSamplingParams, OmniTextPrompt
+from vllm_omni.inputs.data import OmniDiffusionSamplingParams, OmniInteractionPrompt, OmniTextPrompt
 
 logger = init_logger(__name__)
 
@@ -282,8 +285,8 @@ class OmniStreamingVideoOutputHandler:
                 except Exception:
                     pass
                 continue
-            if msg_type == "session.prompt_update":
-                await self._handle_prompt_update(
+            if msg_type == "session.interaction":
+                await self._handle_interaction(
                     websocket,
                     msg,
                     request_id=request_id,
@@ -298,7 +301,7 @@ class OmniStreamingVideoOutputHandler:
         except Exception:
             logger.debug("Failed to abort streaming video request %s", request_id, exc_info=True)
 
-    async def _handle_prompt_update(
+    async def _handle_interaction(
         self,
         websocket: WebSocket,
         msg: dict[str, Any],
@@ -306,60 +309,64 @@ class OmniStreamingVideoOutputHandler:
         request_id: str,
         send_lock: asyncio.Lock,
     ) -> None:
-        prompt = msg.get("prompt")
-        if not isinstance(prompt, str) or not prompt.strip():
-            await self._send_error(websocket, "session.prompt_update requires a non-empty prompt", send_lock=send_lock)
+        interaction = msg.get("interaction")
+        if not isinstance(interaction, dict):
+            await self._send_error(websocket, "session.interaction requires an interaction object", send_lock=send_lock)
             return
 
-        transition_duration_chunks = msg.get("transition_duration_chunks")
-        if transition_duration_chunks is not None:
+        prompt = interaction.get("prompt")
+        if "prompt" in interaction and (not isinstance(prompt, str) or not prompt.strip()):
+            await self._send_error(websocket, "session.interaction requires a non-empty prompt", send_lock=send_lock)
+            return
+
+        transition_chunks = interaction.get("transition_chunks")
+        if transition_chunks is not None:
             try:
                 if (
-                    isinstance(transition_duration_chunks, bool)
-                    or not isinstance(transition_duration_chunks, (int, float))
-                    or (isinstance(transition_duration_chunks, float) and not transition_duration_chunks.is_integer())
+                    isinstance(transition_chunks, bool)
+                    or not isinstance(transition_chunks, (int, float))
+                    or (isinstance(transition_chunks, float) and not transition_chunks.is_integer())
                 ):
                     raise ValueError
-                transition_duration_chunks = int(transition_duration_chunks)
+                interaction["transition_chunks"] = int(transition_chunks)
             except (TypeError, ValueError):
                 await self._send_error(
                     websocket,
-                    "session.prompt_update transition_duration_chunks must be an integer",
+                    "session.interaction transition_chunks must be an integer",
                     send_lock=send_lock,
                 )
                 return
-            if transition_duration_chunks < 0:
+            if interaction["transition_chunks"] < 0:
                 await self._send_error(
                     websocket,
-                    "session.prompt_update transition_duration_chunks must be >= 0",
+                    "session.interaction transition_chunks must be >= 0",
                     send_lock=send_lock,
                 )
                 return
 
-        if "negative_prompt" in msg and msg["negative_prompt"] is not None:
+        if "negative_prompt" in interaction and interaction["negative_prompt"] is not None:
             await self._send_error(
                 websocket,
-                "session.prompt_update negative_prompt is not supported in this release",
+                "session.interaction negative_prompt is not supported in this release",
                 send_lock=send_lock,
             )
             return
 
         try:
-            await self._engine_client.add_prompt_update_async(
+            await self._engine_client.submit_interaction_async(
                 request_id,
-                prompt=prompt,
-                transition_duration_chunks=transition_duration_chunks,
+                interaction=cast(OmniInteractionPrompt, interaction),
             )
         except Exception:
-            logger.exception("Failed to apply prompt_update for request %s", request_id, exc_info=True)
-            await self._send_error(websocket, "Failed to apply prompt_update", send_lock=send_lock)
+            logger.exception("Failed to apply interaction for request %s", request_id, exc_info=True)
+            await self._send_error(websocket, "Failed to apply interaction", send_lock=send_lock)
             return
 
         try:
             async with send_lock:
-                await websocket.send_json({"type": "session.prompt_update.accepted"})
+                await websocket.send_json({"type": "session.interaction.accepted"})
         except Exception:
-            logger.debug("Failed to send prompt_update acknowledgement for %s", request_id, exc_info=True)
+            logger.debug("Failed to send interaction acknowledgement for %s", request_id, exc_info=True)
 
     async def _stream_video_bytes(
         self,

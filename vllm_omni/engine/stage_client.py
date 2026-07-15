@@ -8,7 +8,12 @@ from typing import TYPE_CHECKING, Any, Protocol
 if TYPE_CHECKING:
     from vllm.v1.engine import EngineCoreOutput, EngineCoreOutputs, EngineCoreRequest
 
-    from vllm_omni.inputs.data import OmniDiffusionSamplingParams, OmniPromptType, OmniTokensPrompt
+    from vllm_omni.inputs.data import (
+        OmniDiffusionSamplingParams,
+        OmniInteractionPrompt,
+        OmniPromptType,
+        OmniTokensPrompt,
+    )
     from vllm_omni.outputs import OmniRequestOutput
 
 from vllm_omni.engine.output_modality import FinalOutputModalityType
@@ -102,10 +107,9 @@ class StagePoolDiffusionClient(StagePoolClient, Protocol):
 
     def get_diffusion_output_nowait(self) -> OmniRequestOutput | None: ...
 
-    async def prompt_update_async(
+    async def submit_interaction_async(
         self,
         request_id: str,
-        prompt: str,
-        transition_duration_chunks: int | None = None,
+        interaction: OmniInteractionPrompt,
         timeout: float | None = None,
     ) -> Any: ...

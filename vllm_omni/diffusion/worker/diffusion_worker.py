@@ -50,6 +50,7 @@ from vllm_omni.diffusion.sched.interface import DiffusionSchedulerOutput
 from vllm_omni.diffusion.worker.diffusion_model_runner import DiffusionModelRunner
 from vllm_omni.diffusion.worker.utils import BaseRunnerOutput, BatchRunnerOutput
 from vllm_omni.engine.stage_init_utils import set_death_signal
+from vllm_omni.inputs.data import OmniInteractionPrompt
 from vllm_omni.lora.request import LoRARequest
 from vllm_omni.platforms import current_omni_platform
 from vllm_omni.profiler import OmniTorchProfilerWrapper, create_omni_profiler
@@ -513,15 +514,14 @@ class DiffusionWorker:
         # for the frontend server yet.
         return self.lora_manager.add_adapter(lora_request)
 
-    def prompt_update(
+    def submit_interaction(
         self,
         request_id: str,
-        prompt: str,
-        transition_duration_chunks: int | None = None,
+        interaction: OmniInteractionPrompt,
     ) -> None:
-        """Apply a midway prompt update to an active stepwise request."""
+        """Apply a midway interaction to an active stepwise request."""
         assert self.model_runner is not None, "Model runner not initialized"
-        self.model_runner.prompt_update(request_id, prompt, transition_duration_chunks)
+        self.model_runner.submit_interaction(request_id, interaction)
 
     def list_loras(self) -> list[int]:
         return self.lora_manager.list_adapters()

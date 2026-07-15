@@ -37,8 +37,8 @@ from vllm_omni.engine.messages import (
     CollectiveRPCResultMessage,
     EngineQueueMessage,
     ErrorMessage,
+    InteractionMessage,
     OutputMessage,
-    PromptUpdateMessage,
     RegisterRemoteReplicaMessage,
     ShutdownRequestMessage,
     StageMetricsMessage,
@@ -408,8 +408,8 @@ class Orchestrator:
                 await self._handle_add_companion(msg)
             elif msg_type == "abort":
                 await self._handle_abort(msg)
-            elif msg_type == "prompt_update":
-                await self._handle_prompt_update(msg)
+            elif msg_type == "interaction":
+                await self._handle_interaction(msg)
             elif msg_type == "collective_rpc":
                 await self._handle_collective_rpc(msg)
             elif isinstance(msg, RegisterRemoteReplicaMessage):
@@ -587,16 +587,16 @@ class Orchestrator:
         )
         logger.info("[Orchestrator] Aborted request(s) %s", request_ids)
 
-    async def _handle_prompt_update(self, msg: PromptUpdateMessage) -> None:
-        """Handle a midway prompt update for an active streaming diffusion request."""
+    async def _handle_interaction(self, msg: InteractionMessage) -> None:
+        """Handle a midway interaction for an active streaming diffusion request."""
         stage_id = 0
         request_id = msg.request_id
         req_state = self.request_states.get(request_id)
         if req_state is None:
-            logger.info("[Orchestrator] Dropping prompt_update for inactive req %s", request_id)
+            logger.info("[Orchestrator] Dropping interaction for inactive req %s", request_id)
             await self.output_async_queue.put(
                 ErrorMessage(
-                    error=f"No active request for prompt_update: {request_id}",
+                    error=f"No active request for interaction: {request_id}",
                     fatal=False,
                     request_id=request_id,
                     stage_id=stage_id,
@@ -605,21 +605,17 @@ class Orchestrator:
             return
 
         try:
-            await self.stage_pools[stage_id].submit_prompt_update(
-                request_id,
-                prompt=msg.prompt,
-                transition_duration_chunks=msg.transition_duration_chunks,
-            )
+            await self.stage_pools[stage_id].submit_interaction(request_id, msg.interaction)
         except Exception as exc:
             logger.info(
-                "[Orchestrator] Failed prompt_update for req %s: %s",
+                "[Orchestrator] Failed interaction for req %s: %s",
                 request_id,
                 exc,
                 exc_info=True,
             )
             await self.output_async_queue.put(
                 ErrorMessage(
-                    error=f"Failed prompt_update for request {request_id}: {exc}",
+                    error=f"Failed interaction for request {request_id}: {exc}",
                     fatal=False,
                     request_id=request_id,
                     stage_id=stage_id,
