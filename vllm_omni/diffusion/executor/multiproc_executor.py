@@ -7,14 +7,15 @@ import time
 import weakref
 from collections.abc import Callable
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any
+from multiprocessing.synchronize import Event
+from typing import TYPE_CHECKING, Any, cast
 
 import zmq
-from vllm.distributed.device_communicators.shm_broadcast import MessageQueue
+from vllm.distributed.device_communicators.shm_broadcast import Handle, MessageQueue
 from vllm.logger import init_logger
 from vllm.v1.engine.exceptions import EngineDeadError
 
-from vllm_omni.diffusion.data import SHUTDOWN_MESSAGE, DiffusionOutput
+from vllm_omni.diffusion.data import SHUTDOWN_MESSAGE, DiffusionOutput, OmniDiffusionConfig
 from vllm_omni.diffusion.executor.abstract import DiffusionExecutor
 from vllm_omni.diffusion.ipc import DIFFUSION_RPC_RESULT_ENVELOPE, unpack_diffusion_output_shm
 from vllm_omni.diffusion.worker import WorkerProc
@@ -29,29 +30,21 @@ _DEQUEUE_TIMEOUT_S = 5.0
 
 
 @dataclass
-class BackgroundResources:
-    """
-    Used as a finalizer for clean shutdown.
-    """
+class _ExecutorShutdownCleaner:
+    """Finalizer that shuts down executor worker processes."""
 
     broadcast_mq: MessageQueue | None = None
-    result_mq: MessageQueue | None = None
     num_workers: int = 0
     processes: list[mp.Process] | None = None
 
-    def __call__(self):
+    def __call__(self) -> None:
         """Clean up background resources."""
-        if hasattr(self, "wake_events") and self.wake_events:
-            for ev in self.wake_events:
-                ev.set()
-
         if self.broadcast_mq is not None:
             try:
                 for _ in range(self.num_workers):
                     self.broadcast_mq.enqueue(SHUTDOWN_MESSAGE, timeout=1.0)
 
                 self.broadcast_mq = None
-                self.result_mq = None
             except Exception as exc:
                 logger.warning("Failed to send shutdown signal: %s", exc)
 
@@ -69,13 +62,14 @@ class BackgroundResources:
 class MultiprocDiffusionExecutor(DiffusionExecutor):
     uses_multiproc: bool = True
 
-    def _init_executor(self) -> None:
+    def __init__(self, od_config: OmniDiffusionConfig) -> None:
+        super().__init__(od_config)
         self._processes: list[mp.Process] = []
         self._closed = False
-        self.is_failed = False
+        self._is_failed = False
         self._failure_callbacks: list[Callable[[], None]] = []
 
-        num_workers = self.od_config.num_gpus
+        num_workers = cast(int, self.od_config.num_gpus)
         self.wake_events = [mp.Event() for _ in range(num_workers)]
 
         self._broadcast_mq = self._init_broadcast_queue(num_workers)
@@ -86,15 +80,15 @@ class MultiprocDiffusionExecutor(DiffusionExecutor):
         self._result_mq = self._init_result_queue(result_handle)
         self._processes = processes
 
-        self.resources = BackgroundResources(
+        shutdown_cleaner = _ExecutorShutdownCleaner(
             broadcast_mq=self._broadcast_mq,
-            result_mq=self._result_mq,
             num_workers=num_workers,
             processes=self._processes,
         )
-        self._finalizer = weakref.finalize(self, self.resources)
+        self._shutdown_cleaner: _ExecutorShutdownCleaner | None = shutdown_cleaner
+        self._finalizer = weakref.finalize(self, shutdown_cleaner)
 
-        self.start_worker_monitor()
+        self._start_worker_monitor()
 
     def _init_broadcast_queue(self, num_workers: int) -> MessageQueue:
         return MessageQueue(
@@ -103,20 +97,17 @@ class MultiprocDiffusionExecutor(DiffusionExecutor):
             local_reader_ranks=list(range(num_workers)),
         )
 
-    def _init_result_queue(self, result_handle) -> MessageQueue | None:
+    def _init_result_queue(self, result_handle: Handle | None) -> MessageQueue:
         if result_handle is None:
-            logger.error("Failed to get result queue handle from workers")
-            return None
+            raise RuntimeError("Failed to get result queue handle from workers")
         return MessageQueue.create_from_handle(result_handle, 0)
 
     def _ensure_open(self) -> None:
         if self._closed:
             raise RuntimeError("DiffusionExecutor is closed.")
-        if self._result_mq is None:
-            raise RuntimeError("Result queue not initialized")
 
     def _dequeue_one_with_failure_polling(self, deadline: float | None, method: str) -> Any:
-        """Block until one result message, polling ``is_failed`` between chunk timeouts."""
+        """Block until one result message, polling ``_is_failed`` between chunk timeouts."""
         while True:
             if deadline is None:
                 chunk_timeout = _DEQUEUE_TIMEOUT_S
@@ -128,7 +119,7 @@ class MultiprocDiffusionExecutor(DiffusionExecutor):
             try:
                 return self._result_mq.dequeue(timeout=chunk_timeout)
             except (TimeoutError, zmq.error.Again):
-                if self.is_failed:
+                if self._is_failed:
                     raise EngineDeadError()
                 continue
 
@@ -183,11 +174,15 @@ class MultiprocDiffusionExecutor(DiffusionExecutor):
         MultiprocDiffusionExecutor._raise_for_rpc_error_dict(response)
         return response
 
-    def _launch_workers(self, broadcast_handle, wake_events):
+    def _launch_workers(
+        self,
+        broadcast_handle: Handle,
+        wake_events: list[Event],
+    ) -> tuple[list[mp.Process], Handle | None]:
         od_config = self.od_config
         logger.info("Starting server...")
 
-        num_gpus = od_config.num_gpus
+        num_gpus = cast(int, od_config.num_gpus)
         mp.set_start_method("spawn", force=True)
         processes = []
 
@@ -221,7 +216,6 @@ class MultiprocDiffusionExecutor(DiffusionExecutor):
             processes.append(process)
 
         # Wait for all workers to be ready
-        scheduler_infos = []
         result_handle = None
         for writer in scheduler_pipe_writers:
             writer.close()
@@ -241,14 +235,18 @@ class MultiprocDiffusionExecutor(DiffusionExecutor):
             if i == 0:
                 result_handle = data.get("result_handle")
 
-            scheduler_infos.append(data)
             reader.close()
 
         logger.debug("All workers are ready")
 
         return processes, result_handle
 
-    def start_worker_monitor(self) -> None:
+    @property
+    def is_dead(self) -> bool:
+        """Whether the executor is shut down or a worker has failed fatally."""
+        return self._closed or self._is_failed
+
+    def _start_worker_monitor(self) -> None:
         # Monitors worker process liveness. If any die unexpectedly,
         # logs an error, shuts down the executor and invokes the failure
         # callback to inform the engine.
@@ -287,7 +285,7 @@ class MultiprocDiffusionExecutor(DiffusionExecutor):
                     "Diffusion worker(s) died unexpectedly: %s",
                     details,
                 )
-                self.is_failed = True
+                self._is_failed = True
 
             self.shutdown()
 
@@ -440,12 +438,12 @@ class MultiprocDiffusionExecutor(DiffusionExecutor):
             raise
 
     def check_health(self) -> None:
-        if self.is_failed:
+        if self._is_failed:
             raise EngineDeadError()
         self._ensure_open()
         for p in self._processes:
             if not p.is_alive():
-                self.is_failed = True
+                self._is_failed = True
                 raise EngineDeadError(f"Worker process {p.name} is dead")
 
     def shutdown(self) -> None:
@@ -454,6 +452,5 @@ class MultiprocDiffusionExecutor(DiffusionExecutor):
             self._finalizer()
         finally:
             self._broadcast_mq = None
-            self._result_mq = None
-            self.resources = None
+            self._shutdown_cleaner = None
             self._processes = []
