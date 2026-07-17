@@ -13,7 +13,7 @@ import multiprocessing as mp
 import os
 import signal
 import traceback
-from collections.abc import Iterable, Iterator
+from collections.abc import Iterator
 from contextlib import AbstractContextManager, contextmanager, nullcontext
 from dataclasses import dataclass
 from typing import Any
@@ -355,7 +355,7 @@ class DiffusionWorker:
             set_current_vllm_config(self.vllm_config),
             cutlass_fp8_context,
         ):
-            self.model_runner.load_model(
+            self.model_runner.launch_model(
                 memory_pool_context_fn=self._maybe_get_memory_pool_context,
                 load_format=load_format,
                 custom_pipeline_name=custom_pipeline_name,
@@ -505,11 +505,6 @@ class DiffusionWorker:
             if lora_request is not None:
                 raise
             logger.warning("LoRA activation skipped: %s", exc)
-
-    def load_weights(self, weights) -> set[str]:
-        """Load weights by delegating to the model runner."""
-        assert self.model_runner is not None, "Model runner not initialized"
-        return self.model_runner.load_weights(weights)
 
     def remove_lora(self, adapter_id: int) -> bool:
         return self.lora_manager.remove_adapter(adapter_id)
@@ -1173,18 +1168,6 @@ class WorkerWrapperBase:
     def execute_stepwise(self, scheduler_output: DiffusionSchedulerOutput) -> BaseRunnerOutput:
         """Execute one diffusion step."""
         return self.worker.execute_stepwise(scheduler_output)
-
-    def load_weights(self, weights: Iterable[tuple[str, torch.Tensor]]) -> set[str]:
-        """
-        Load model weights.
-
-        Args:
-            weights: Iterable of (name, tensor) tuples
-
-        Returns:
-            Set of loaded weight names
-        """
-        return self.worker.load_weights(weights)
 
     def sleep(self, level: int = 1) -> bool:
         """

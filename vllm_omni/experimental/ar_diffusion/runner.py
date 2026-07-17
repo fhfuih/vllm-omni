@@ -128,8 +128,8 @@ class ARDiffusionModelRunner(DiffusionModelRunner):
 
     # -- preallocation at load -------------------------------------------------
 
-    def load_model(self, *args, **kwargs):
-        super().load_model(*args, **kwargs)
+    def launch_model(self, *args, **kwargs):
+        super().launch_model(*args, **kwargs)
         if self.ar_diffusion_kv_config.enable and self.pipeline is not None:
             self._preallocate_kv_cache()
             # Pre-capture the CUDA graphs for every window-fill shape at load time

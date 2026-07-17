@@ -98,7 +98,7 @@ class _ChunkStepPipeline:
         return output
 
 
-def _make_request(skip_cache_refresh: bool = True):
+def _make_request():
     sampling_params = SimpleNamespace(
         generator=None,
         seed=None,
@@ -109,7 +109,6 @@ def _make_request(skip_cache_refresh: bool = True):
         request_id="req-test",
         prompt="a prompt",
         sampling_params=sampling_params,
-        skip_cache_refresh=skip_cache_refresh,
         kv_sender_info=None,
     )
 
@@ -120,7 +119,6 @@ def _make_request_with_params(req_id: str, sampling_params):
         prompt=f"prompt-{req_id}",
         prompts=[f"prompt-{req_id}"],
         sampling_params=sampling_params,
-        skip_cache_refresh=True,
     )
 
 
@@ -199,7 +197,7 @@ def test_execute_stepwise_streaming_returns_chunks_at_boundaries(monkeypatch):
     runner.pipeline = _ChunkStepPipeline(chunks)
     runner.od_config.streaming_output = True
     runner.od_config.step_execution = True
-    req = _make_request(skip_cache_refresh=True)
+    req = _make_request()
     req.request_id = "req"
 
     monkeypatch.setattr(model_runner_module, "set_forward_context", _noop_forward_context)
@@ -235,7 +233,7 @@ def test_execute_stepwise_streaming_returns_chunks_at_boundaries(monkeypatch):
 def test_execute_model_skips_cache_summary_without_active_cache_backend(monkeypatch):
     """Guard cache diagnostics with runtime backend state to avoid stale-config crashes."""
     runner = _make_runner(cache_backend=None, cache_backend_name="cache_dit")
-    req = _make_request(skip_cache_refresh=True)
+    req = _make_request()
 
     cache_summary_calls = []
 
@@ -263,7 +261,7 @@ def test_execute_model_emits_cache_summary_with_active_cache_dit_backend(monkeyp
             return True
 
     runner = _make_runner(cache_backend=_EnabledCacheBackend(), cache_backend_name="cache_dit")
-    req = _make_request(skip_cache_refresh=True)
+    req = _make_request()
 
     cache_summary_calls = []
 
@@ -288,7 +286,7 @@ def test_execute_model_emits_cache_summary_with_active_cache_dit_backend(monkeyp
 def test_execute_model_passes_single_request_batch_to_non_admission_pipeline(monkeypatch):
     runner = _make_runner(cache_backend=None, cache_backend_name="none")
     runner.pipeline = _SingleRequestBatchPipeline()
-    req = _make_request(skip_cache_refresh=True)
+    req = _make_request()
 
     monkeypatch.setattr(model_runner_module, "set_forward_context", _noop_forward_context)
 
@@ -304,7 +302,7 @@ def test_execute_model_passes_single_request_batch_to_non_admission_pipeline(mon
 def test_execute_model_accepts_bare_diffusion_output_from_single_request_pipeline(monkeypatch):
     runner = _make_runner(cache_backend=None, cache_backend_name="none")
     runner.pipeline = _SingleRequestDiffusionOutputPipeline()
-    req = _make_request(skip_cache_refresh=True)
+    req = _make_request()
 
     monkeypatch.setattr(model_runner_module, "set_forward_context", _noop_forward_context)
 
@@ -515,7 +513,7 @@ def test_execute_model_runs_forward_after_kv_receive(monkeypatch):
     """execute_model runs the pipeline forward after the KV receive step."""
     runner = _make_runner(cache_backend=None, cache_backend_name=None)
     runner.kv_transfer_manager.receive_multi_kv_cache_distributed = lambda *a, **k: True
-    req = _make_request(skip_cache_refresh=True)
+    req = _make_request()
 
     monkeypatch.setattr(model_runner_module, "set_forward_context", _noop_forward_context)
     monkeypatch.setattr(model_runner_module.current_omni_platform, "reset_peak_memory_stats", lambda: None)
@@ -583,7 +581,7 @@ def test_load_model_clears_cache_backend_for_unsupported_pipeline(monkeypatch):
         model_runner_module, "get_cache_backend", lambda cache_backend, cache_config: dummy_cache_backend
     )
 
-    DiffusionModelRunner.load_model(runner)
+    DiffusionModelRunner.launch_model(runner)
 
     assert runner.cache_backend is None
     assert runner.od_config.cache_backend is None

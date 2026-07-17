@@ -547,4 +547,4 @@ class TestSupportedPipelines:
         monkeypatch.setattr(model_runner_module, "get_cache_backend", lambda *args, **kwargs: None)
 
         with pytest.raises(ValueError, match="NoStepPipeline"):
-            DiffusionModelRunner.load_model(runner)
+            DiffusionModelRunner.launch_model(runner)

@@ -187,19 +187,6 @@ class TestWorkerWrapperBaseDelegation:
         wrapper.worker.execute_model.assert_called_once_with(mock_reqs, mock_od_config, kv_prefetch_jobs=None)
         assert result == mock_output
 
-    def test_load_weights_delegation(self, mocker: MockerFixture, mock_od_config):
-        """Test that load_weights() delegates to worker.load_weights()."""
-        mocker.patch.object(DiffusionWorker, "__init__", return_value=None)
-        wrapper = WorkerWrapperBase(gpu_id=0, od_config=mock_od_config, base_worker_class=DiffusionWorker)
-        expected_result = {"weight1", "weight2"}
-        wrapper.worker.load_weights = mocker.Mock(return_value=expected_result)
-
-        mock_weights = [("weight1", mocker.Mock()), ("weight2", mocker.Mock())]
-        result = wrapper.load_weights(mock_weights)
-
-        wrapper.worker.load_weights.assert_called_once_with(mock_weights)
-        assert result == expected_result
-
     def test_sleep_delegation(self, mocker: MockerFixture, mock_od_config):
         """Test that sleep() delegates to worker.sleep()."""
         mocker.patch.object(DiffusionWorker, "__init__", return_value=None)
