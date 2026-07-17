@@ -15,6 +15,7 @@ import torch
 from vllm.logger import init_logger
 
 from vllm_omni.diffusion.request import OmniDiffusionRequest
+from vllm_omni.diffusion.sched.interface import KVPrefetchJob
 from vllm_omni.platforms import current_omni_platform
 
 from .factory import OmniConnectorFactory
@@ -1205,9 +1206,7 @@ class OmniKVTransferManager:
                 logger.exception("Failed to release KV pool buffer")
         buffers.clear()
 
-    def start_prefetch(
-        self, kv_prefetch_jobs: dict[str, Any] | None, target_device: torch.device | None = None
-    ) -> None:
+    def start_prefetch(self, kv_prefetch_jobs: KVPrefetchJob | None, target_device: torch.device | None = None) -> None:
         """Kick off a background KV load (non-blocking). No-op unless prefetch enabled."""
         if not (self._async_prefetch and self.config.need_recv_cache) or not kv_prefetch_jobs:
             return

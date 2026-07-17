@@ -25,6 +25,7 @@ from vllm.logger import init_logger
 from vllm_omni.diffusion.data import DiffusionOutput, OmniDiffusionConfig
 from vllm_omni.diffusion.models.dreamzero.pipeline_dreamzero import MAX_DREAMZERO_SESSIONS
 from vllm_omni.diffusion.request import OmniDiffusionRequest
+from vllm_omni.diffusion.sched.interface import KVPrefetchJob
 from vllm_omni.diffusion.worker.diffusion_model_runner import DiffusionModelRunner
 from vllm_omni.experimental.ar_diffusion.kv_cache.config import ARDiffusionKVConfig
 from vllm_omni.experimental.ar_diffusion.kv_cache.manager import ARDiffusionKVCache
@@ -234,7 +235,11 @@ class ARDiffusionModelRunner(DiffusionModelRunner):
             num_frame_per_block=num_frame_per_block,
         )
 
-    def execute_model(self, req: OmniDiffusionRequest, kv_prefetch_jobs: dict | None = None) -> DiffusionOutput:
+    def execute_model(
+        self,
+        req: OmniDiffusionRequest,
+        kv_prefetch_jobs: KVPrefetchJob | None = None,
+    ) -> DiffusionOutput:
         # KV disabled -> base behavior, unchanged.
         if self.kv_cache is None:
             return super().execute_model(req, kv_prefetch_jobs=kv_prefetch_jobs)
