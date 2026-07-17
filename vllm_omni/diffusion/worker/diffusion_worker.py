@@ -13,7 +13,7 @@ import multiprocessing as mp
 import os
 import signal
 import traceback
-from collections.abc import Iterable, Iterator
+from collections.abc import Iterator
 from contextlib import AbstractContextManager, contextmanager, nullcontext
 from dataclasses import dataclass
 from typing import Any
@@ -212,7 +212,7 @@ class DiffusionWorker:
         # requests, which only carry their request_id in subsequent ticks.
         self._step_lora_state: dict[str, tuple[LoRARequest | None, float]] = {}
         self.stage_id = getattr(od_config, "stage_id", 0)
-        self.init_device()
+        self._init_device()
         # Create model runner — one decision chain, in precedence order:
         #   1. explicit od_config.diffusion_model_runner_cls (user override),
         #   2. the runner declared by the engine class that engine_backend
@@ -248,10 +248,10 @@ class DiffusionWorker:
         self.profiler: WorkerProfiler | None = self._create_profiler()
         if not skip_load_model:
             self.load_model(load_format=self.od_config.diffusion_load_format)
-            self.init_lora_manager()
+            self._init_lora_manager()
         logger.info(f"Worker {self.rank}: Initialization complete.")
 
-    def init_device(self) -> None:
+    def _init_device(self) -> None:
         """Initialize the device and distributed environment."""
         world_size = self.od_config.num_gpus
         rank = self.rank
@@ -374,7 +374,7 @@ class DiffusionWorker:
         if load_format != "dummy":
             assert self.model_runner.pipeline is not None
 
-    def init_lora_manager(self) -> None:
+    def _init_lora_manager(self) -> None:
         """Initialize the LoRA manager for this worker."""
         if self.model_runner.pipeline is None:
             return
@@ -386,10 +386,6 @@ class DiffusionWorker:
             lora_path=self.od_config.lora_path,
             lora_scale=self.od_config.lora_scale,
         )
-
-    def generate(self, request: OmniDiffusionRequest) -> DiffusionOutput:
-        """Generate output for the given requests."""
-        return self.execute_model(request, self.od_config)
 
     def profile(self, is_start: bool = True, profile_prefix: str | None = None) -> None:
         """Start or stop profiling for this GPU worker.
@@ -506,11 +502,6 @@ class DiffusionWorker:
                 raise
             logger.warning("LoRA activation skipped: %s", exc)
 
-    def load_weights(self, weights) -> set[str]:
-        """Load weights by delegating to the model runner."""
-        assert self.model_runner is not None, "Model runner not initialized"
-        return self.model_runner.load_weights(weights)
-
     def remove_lora(self, adapter_id: int) -> bool:
         return self.lora_manager.remove_adapter(adapter_id)
 
@@ -525,7 +516,7 @@ class DiffusionWorker:
     def pin_lora(self, adapter_id: int) -> bool:
         return self.lora_manager.pin_adapter(adapter_id)
 
-    def sleep(self, level: int = 1) -> bool:
+    def sleep(self, level: int = 1) -> int:
         """
         Put the worker to sleep, offloading model weights.
 
@@ -598,7 +589,7 @@ class DiffusionWorker:
         logger.info(f"[Worker {self.rank}] Wake-up complete.")
         return True
 
-    def handle_sleep_task(self, task: OmniSleepTask) -> OmniACK:
+    def sleep_for_task(self, task: OmniSleepTask | dict) -> OmniACK | None:
         from vllm_omni.platforms import current_omni_platform
 
         try:
@@ -655,7 +646,7 @@ class DiffusionWorker:
                     pass
             return OmniACK(task_id=task.task_id, status="ERROR", error_msg=str(e))
 
-    def handle_wake_task(self, task: OmniWakeTask) -> OmniACK:
+    def wake_for_task(self, task: OmniWakeTask | dict) -> OmniACK | None:
         from vllm_omni.platforms import current_omni_platform
 
         try:
@@ -746,7 +737,7 @@ class CustomPipelineWorkerExtension:
             load_format="custom_pipeline",
             custom_pipeline_name=custom_pipeline_name,
         )
-        self.init_lora_manager()
+        self._init_lora_manager()
 
 
 class WorkerProc:
@@ -798,7 +789,7 @@ class WorkerProc:
         od_config: OmniDiffusionConfig,
         worker_extension_cls: str | None,
         custom_pipeline_args: dict[str, Any] | None = None,
-    ) -> DiffusionWorker:
+    ) -> "WorkerWrapperBase":
         """Create a worker instance. Override in subclasses for different worker types."""
         worker_cls_path = current_omni_platform.get_diffusion_worker_cls()
         base_worker_class = resolve_obj_by_qualname(worker_cls_path)
@@ -811,7 +802,7 @@ class WorkerProc:
         )
         return wrapper
 
-    def return_result(self, output: Any):
+    def _return_result(self, output: Any) -> None:
         """Reply to client, only on rank 0."""
         if self.result_mq is not None:
             if isinstance(output, OmniACK):
@@ -823,10 +814,6 @@ class WorkerProc:
                 if hasattr(output, "output"):
                     logger.warning("SHM pack failed for model output: %s", e)
             self.result_mq.enqueue(output)
-
-    def recv_message(self):
-        """Receive messages from broadcast queue."""
-        return self.mq.dequeue(indefinite=True)
 
     def _gather_rpc_rank_statuses(self, status: dict[str, Any]) -> list[dict[str, Any]]:
         if not torch.distributed.is_initialized():
@@ -840,7 +827,7 @@ class WorkerProc:
             logger.warning("RPC rank status gather returned missing entries for ranks: %s", missing_ranks)
         return [s for s in statuses if s is not None]
 
-    def execute_rpc(self, rpc_request: dict) -> tuple[object | None, bool]:
+    def _execute_rpc(self, rpc_request: dict) -> tuple[object | None, bool]:
         """Execute an RPC request and indicate whether to reply."""
         method = rpc_request["method"]
         args = rpc_request.get("args", ())
@@ -905,7 +892,7 @@ class WorkerProc:
             raise rpc_exception
         return result, should_reply
 
-    def worker_busy_loop(self) -> None:
+    def _worker_busy_loop(self) -> None:
         """Main busy loop for Multiprocessing Workers."""
         logger.info(f"Worker {self.gpu_id} ready to receive requests via shared memory")
 
@@ -929,22 +916,22 @@ class WorkerProc:
 
             if isinstance(msg, dict) and msg.get("type") == "sleep":
                 task = OmniSleepTask(level=msg.get("level", 2), task_id=msg.get("task_id", "local"))
-                ack = self.worker.handle_sleep_task(task)
-                self.return_result(ack)
+                ack = self.worker.sleep_for_task(task)
+                self._return_result(ack)
             elif isinstance(msg, dict) and msg.get("type") == "wake_up":
                 task = OmniWakeTask(tags=msg.get("tags"), task_id=msg.get("task_id", "local"))
-                ack = self.worker.handle_wake_task(task)
-                self.return_result(ack)
+                ack = self.worker.wake_for_task(task)
+                self._return_result(ack)
             # Route message based on type
             elif isinstance(msg, dict) and msg.get("type") == "rpc":
                 try:
-                    result, should_reply = self.execute_rpc(msg)
+                    result, should_reply = self._execute_rpc(msg)
                     if should_reply:
-                        self.return_result(result)
+                        self._return_result(result)
                 except Exception as e:
                     logger.error(f"Error processing RPC: {e}", exc_info=True)
                     if self.result_mq is not None:
-                        self.return_result({"status": "error", "error": str(e)})
+                        self._return_result({"status": "error", "error": str(e)})
 
             elif isinstance(msg, dict) and msg.get("type") == "shutdown":
                 logger.info("Worker %s: Received shutdown message", self.gpu_id)
@@ -963,7 +950,7 @@ class WorkerProc:
                     output = DiffusionOutput.from_exception(e)
 
                 try:
-                    self.return_result(output)
+                    self._return_result(output)
                 except zmq.ZMQError as e:
                     logger.error(f"ZMQ error sending reply: {e}")
                     continue
@@ -1022,7 +1009,7 @@ class WorkerProc:
                     "result_handle": worker_proc.result_mq_handle if rank == 0 else None,
                 }
             )
-            worker_proc.worker_busy_loop()
+            worker_proc._worker_busy_loop()
         except SystemExit:
             logger.info("Worker %d: Shutdown signal received, starting cleanup.", rank)
             raise
@@ -1139,21 +1126,9 @@ class WorkerWrapperBase:
 
         return worker_class
 
-    def generate(self, requests: list[OmniDiffusionRequest]) -> DiffusionOutput:
-        """
-        Generate output for the given requests.
-
-        Args:
-            requests: List of diffusion requests
-
-        Returns:
-            DiffusionOutput with generated results
-        """
-        return self.worker.generate(requests)
-
     def execute_model(
         self,
-        reqs: list[OmniDiffusionRequest],
+        req: OmniDiffusionRequest,
         od_config: OmniDiffusionConfig,
         kv_prefetch_jobs: dict | None = None,
     ) -> DiffusionOutput:
@@ -1161,32 +1136,20 @@ class WorkerWrapperBase:
         Execute a forward pass.
 
         Args:
-            reqs: List of diffusion requests
+            req: Diffusion request.
             od_config: OmniDiffusionConfig configuration
             kv_prefetch_jobs: Optional next-request KV prefetch descriptor.
 
         Returns:
             DiffusionOutput with generated results
         """
-        return self.worker.execute_model(reqs, od_config, kv_prefetch_jobs=kv_prefetch_jobs)
+        return self.worker.execute_model(req, od_config, kv_prefetch_jobs=kv_prefetch_jobs)
 
     def execute_stepwise(self, scheduler_output: DiffusionSchedulerOutput) -> BaseRunnerOutput:
         """Execute one diffusion step."""
         return self.worker.execute_stepwise(scheduler_output)
 
-    def load_weights(self, weights: Iterable[tuple[str, torch.Tensor]]) -> set[str]:
-        """
-        Load model weights.
-
-        Args:
-            weights: Iterable of (name, tensor) tuples
-
-        Returns:
-            Set of loaded weight names
-        """
-        return self.worker.load_weights(weights)
-
-    def sleep(self, level: int = 1) -> bool:
+    def sleep(self, level: int = 1) -> int:
         """
         Put the worker to sleep. The worker should not process any requests.
         The caller should guarantee that no requests are being processed
@@ -1198,7 +1161,7 @@ class WorkerWrapperBase:
                 Currently only support level 1.
 
         Returns:
-            True on success
+            Bytes held by the allocator before sleeping.
         """
         return self.worker.sleep(level)
 
@@ -1219,11 +1182,11 @@ class WorkerWrapperBase:
         """
         return self.worker.wake_up(tags)
 
-    def handle_sleep_task(self, task):
-        return self.worker.handle_sleep_task(task)
+    def sleep_for_task(self, task: OmniSleepTask | dict) -> OmniACK | None:
+        return self.worker.sleep_for_task(task)
 
-    def handle_wake_task(self, task):
-        return self.worker.handle_wake_task(task)
+    def wake_for_task(self, task: OmniWakeTask | dict) -> OmniACK | None:
+        return self.worker.wake_for_task(task)
 
     def shutdown(self) -> None:
         """Shutdown the worker and cleanup resources."""

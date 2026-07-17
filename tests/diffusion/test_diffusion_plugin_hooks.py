@@ -122,7 +122,7 @@ class TestWorkerUsesHook:
         mock_platform.get_diffusion_model_runner_cls.return_value = "custom.path"
         mock_resolve.return_value = mock_runner_cls
 
-        with patch.object(DiffusionWorker, "init_device"):
+        with patch.object(DiffusionWorker, "_init_device"):
             worker = DiffusionWorker(local_rank=0, rank=0, od_config=Mock(), skip_load_model=True)
 
         assert worker.model_runner is mock_runner_instance

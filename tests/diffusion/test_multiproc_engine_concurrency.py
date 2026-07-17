@@ -528,7 +528,7 @@ class TestWorkerProcRpcRankStatus:
 
         monkeypatch.setattr(torch.distributed, "all_gather_object", _all_gather_object)
 
-        result, should_reply = proc.execute_rpc(
+        result, should_reply = proc._execute_rpc(
             {
                 "method": "remove_lora",
                 "args": (),
@@ -551,7 +551,7 @@ class TestWorkerProcRpcRankStatus:
         proc.worker.execute_method = Mock(side_effect=RuntimeError("local boom"))
         monkeypatch.setattr(torch.distributed, "is_initialized", lambda: False)
 
-        result, should_reply = proc.execute_rpc(
+        result, should_reply = proc._execute_rpc(
             {
                 "method": "add_lora",
                 "args": (),
@@ -577,7 +577,7 @@ class TestWorkerProcRpcRankStatus:
         proc = self._make_worker_proc()
 
         with pytest.raises(ValueError, match="collect_rank_status requires exec_all_ranks=True"):
-            proc.execute_rpc(
+            proc._execute_rpc(
                 {
                     "method": "ping",
                     "args": (),
@@ -596,7 +596,7 @@ class TestWorkerProcRpcRankStatus:
         proc.worker.execute_method = Mock(side_effect=original)
 
         with pytest.raises(ValueError) as excinfo:
-            proc.execute_rpc(
+            proc._execute_rpc(
                 {
                     "method": "bad",
                     "args": (),

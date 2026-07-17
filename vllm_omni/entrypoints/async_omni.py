@@ -932,7 +932,7 @@ class AsyncOmni(EngineClient, OmniBase):
         self.event_resolver.watch_task(task_id, expected_count=total_workers)
         logger.info(f"[{self._name}] Sleep initiated (Task: {task_id}). Awaiting {total_workers} ACKs...")
         task = OmniSleepTask(level=level, task_id=task_id)
-        rpc_results = await self.collective_rpc(method="handle_sleep_task", args=(task,), stage_ids=stage_ids)
+        rpc_results = await self.collective_rpc(method="sleep_for_task", args=(task,), stage_ids=stage_ids)
         final_acks = []
         for stage_res in rpc_results:
             worker_acks = stage_res if isinstance(stage_res, list) else [stage_res]
@@ -980,7 +980,7 @@ class AsyncOmni(EngineClient, OmniBase):
         self.event_resolver.watch_task(task_id, expected_count=total_workers)
         logger.info(f"[{self._name}] Wake-up initiated (Task: {task_id}). Awaiting {total_workers} ACKs...")
         task = OmniWakeTask(tags=requested_tags, task_id=task_id)
-        rpc_results = await self.collective_rpc(method="handle_wake_task", args=(task,), stage_ids=stage_ids)
+        rpc_results = await self.collective_rpc(method="wake_for_task", args=(task,), stage_ids=stage_ids)
         final_acks = []
         for stage_res in rpc_results:
             worker_acks = stage_res if isinstance(stage_res, list) else [stage_res]

@@ -22,7 +22,7 @@ def mock_od_config(mocker: MockerFixture):
 @pytest.fixture
 def mock_diffusion_worker_dependencies(mocker: MockerFixture):
     """Patch heavy worker dependencies for focused profiler tests."""
-    mocker.patch.object(DiffusionWorker, "init_device")
+    mocker.patch.object(DiffusionWorker, "_init_device")
     mocker.patch("vllm_omni.diffusion.worker.diffusion_worker.DiffusionModelRunner")
 
 
