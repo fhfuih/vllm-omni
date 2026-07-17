@@ -5,8 +5,6 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 import torch
-import vllm.ir
-from vllm.config import VllmConfig
 
 from vllm_omni.diffusion.attention.backends.abstract import (
     AttentionMetadata,
@@ -23,7 +21,6 @@ class ForwardContext:
     set forward context for diffusion models
     """
 
-    vllm_config: VllmConfig | None = None
     omni_diffusion_config: OmniDiffusionConfig | None = None
     attn_metadata: dict[str, AttentionMetadata] | list[dict[str, AttentionMetadata]] | None = None
     split_text_embed_in_sp: bool = False
@@ -141,14 +138,12 @@ def get_ulysses_mode(*, default: str = "strict") -> str:
 
 
 def create_forward_context(
-    vllm_config: VllmConfig | None = None,
     omni_diffusion_config: OmniDiffusionConfig | None = None,
     attn_metadata: dict[str, AttentionMetadata] | list[dict[str, AttentionMetadata]] | None = None,
     split_text_embed_in_sp: bool = False,
     denoise_step_idx: int | None = None,
 ):
     return ForwardContext(
-        vllm_config=vllm_config,
         omni_diffusion_config=omni_diffusion_config,
         attn_metadata=attn_metadata,
         split_text_embed_in_sp=split_text_embed_in_sp,
@@ -173,7 +168,6 @@ def override_forward_context(forward_context: ForwardContext | None):
 
 @contextmanager
 def set_forward_context(
-    vllm_config: VllmConfig | None = None,
     omni_diffusion_config: OmniDiffusionConfig | None = None,
     attn_metadata: dict[str, AttentionMetadata] | list[dict[str, AttentionMetadata]] | None = None,
     split_text_embed_in_sp: bool = False,
@@ -184,28 +178,13 @@ def set_forward_context(
     Here we can inject common logic for every model forward pass.
     """
     forward_context = create_forward_context(
-        vllm_config=vllm_config,
         omni_diffusion_config=omni_diffusion_config,
         attn_metadata=attn_metadata,
         split_text_embed_in_sp=split_text_embed_in_sp,
         denoise_step_idx=denoise_step_idx,
     )
-    # vLLM CustomOp dispatch (e.g. QKVParallelLinear) requires a global
-    # vLLM config set via set_current_vllm_config().
-    # Also set priority for vLLM IR ops (e.g. RMSNorm), copied from vllm/forward_context.py
     with override_forward_context(forward_context):
-        if vllm_config is None:
-            yield
-        else:
-            # Local import to avoid importing vllm.config.vllm at module import time.
-            from vllm.config.vllm import set_current_vllm_config
-
-            with (
-                set_current_vllm_config(vllm_config),
-                vllm_config.kernel_config.ir_op_priority.set_priority(),
-                vllm.ir.enable_torch_wrap(vllm_config.compilation_config.ir_enable_torch_wrap),
-            ):
-                yield
+        yield
 
 
 def set_forward_context_denoise_step_idx(step_idx: int | None) -> None:

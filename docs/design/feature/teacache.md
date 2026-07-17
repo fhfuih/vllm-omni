@@ -336,7 +336,8 @@ from vllm_omni.diffusion.distributed.parallel_state import (
     init_distributed_environment,
     initialize_model_parallel,
 )
-from vllm.config import VllmConfig
+import vllm.ir
+from vllm.config import VllmConfig, set_current_vllm_config
 ...
 
 if __name__ == "__main__":
@@ -347,17 +348,19 @@ if __name__ == "__main__":
     os.environ["WORLD_SIZE"] = "1"
 
     vllm_config = VllmConfig()
-    init_distributed_environment()
-    initialize_model_parallel()
+    vllm_config.kernel_config.ir_op_priority.set_default()
+    vllm.ir.set_default_torch_wrap(
+        vllm_config.compilation_config.ir_enable_torch_wrap
+    )
 
-    # NOTE: you may have to pass an initialized OmniDiffusionConfig as a kwarg
-    # here to make current sp checks happy; if this is the case, just create one
-    # .from_kwargs() with the model name to get around this check for now,
-    # since your estimator subclass should handle the actual model configuration.
-    #
-    # This will be cleaned up in the future
-    with set_forward_context(vllm_config):
-        <create the estimator + run estimation here>
+    with set_current_vllm_config(vllm_config):
+        init_distributed_environment()
+        initialize_model_parallel()
+
+        # Pass an initialized OmniDiffusionConfig when the estimator exercises
+        # diffusion runtime state such as sequence parallelism.
+        with set_forward_context(omni_diffusion_config=omni_diffusion_config):
+            <create the estimator + run estimation here>
 ```
 
 

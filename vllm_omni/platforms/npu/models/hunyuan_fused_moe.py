@@ -5,7 +5,6 @@ from typing import Any
 
 import torch
 import vllm.forward_context as _vllm_fc
-from vllm.config import VllmConfig
 from vllm.distributed import get_ep_group
 from vllm.distributed.parallel_state import (
     init_model_parallel_group as vllm_init_model_parallel_group,
@@ -35,7 +34,9 @@ def _set_hunyuan_fused_moe_forward_context(num_tokens: int) -> None:
 
     forward_context = _vllm_fc.get_forward_context()
     forward_context.num_tokens = num_tokens
-    forward_context.moe_comm_type = _select_moe_comm_method(vllm_config=omni_get_ctx().vllm_config)
+    od_config = omni_get_ctx().omni_diffusion_config
+    enable_expert_parallel = bool(od_config and od_config.parallel_config.enable_expert_parallel)
+    forward_context.moe_comm_type = _select_moe_comm_method(enable_expert_parallel)
     forward_context.moe_comm_method = _MoECommMethods.get(forward_context.moe_comm_type)
     forward_context.flash_comm_v1_enabled = False
 
@@ -57,9 +58,9 @@ def _init_mc2_group_for_diffusion(
     )
 
 
-def _select_moe_comm_method(vllm_config: VllmConfig) -> MoECommType | None:
+def _select_moe_comm_method(enable_expert_parallel: bool) -> MoECommType | None:
     soc_version = get_ascend_device_type()
-    if not vllm_config.parallel_config.enable_expert_parallel or get_ep_group().world_size == 1:
+    if not enable_expert_parallel or get_ep_group().world_size == 1:
         moe_comm_type = MoECommType.ALLGATHER
     elif soc_version in {AscendDeviceType.A2}:
         moe_comm_type = MoECommType.ALLGATHER
@@ -75,8 +76,9 @@ def _select_moe_comm_method(vllm_config: VllmConfig) -> MoECommType | None:
 
 
 def prepare_hunyuan_fused_moe_runtime() -> None:
-    vllm_config = omni_get_ctx().vllm_config
-    if vllm_config.parallel_config.enable_expert_parallel:
+    od_config = omni_get_ctx().omni_diffusion_config
+    enable_expert_parallel = bool(od_config and od_config.parallel_config.enable_expert_parallel)
+    if enable_expert_parallel:
         backend = torch.distributed.get_backend(get_world_group().device_group)
         local_rank = get_world_group().local_rank
         _init_mc2_group_for_diffusion(
@@ -85,7 +87,7 @@ def prepare_hunyuan_fused_moe_runtime() -> None:
             group_ranks=get_expert_parallel_group_ranks(),
         )
 
-    moe_comm_type = _select_moe_comm_method(vllm_config=vllm_config)
+    moe_comm_type = _select_moe_comm_method(enable_expert_parallel)
     _ensure_forward_context_attr("num_tokens", int | None, None)
     _ensure_forward_context_attr("in_profile_run", bool, False)
     _ensure_forward_context_attr("moe_comm_type", MoECommType | None, moe_comm_type)

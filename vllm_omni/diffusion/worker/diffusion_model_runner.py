@@ -465,7 +465,7 @@ class DiffusionModelRunner(OmniConnectorModelRunnerMixin):
             if is_primary:
                 current_omni_platform.reset_peak_memory_stats()
 
-            with set_forward_context(vllm_config=self.vllm_config, omni_diffusion_config=od_config):
+            with set_forward_context(omni_diffusion_config=od_config):
                 with record_function(record_name):
                     raw_outputs = self.pipeline.forward(batch)
                     outputs = _normalize_pipeline_outputs(
@@ -693,7 +693,6 @@ class DiffusionModelRunner(OmniConnectorModelRunnerMixin):
             attn_metadata = self._prepare_attn_metadata(input_batch)
 
             with set_forward_context(
-                vllm_config=self.vllm_config,
                 omni_diffusion_config=self.od_config,
                 attn_metadata=attn_metadata,
             ):

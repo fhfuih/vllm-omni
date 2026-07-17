@@ -19,6 +19,7 @@ from dataclasses import dataclass
 from typing import Any
 
 import torch
+import vllm.ir
 import zmq
 from vllm.config import CompilationConfig, DeviceConfig, VllmConfig, set_current_vllm_config
 from vllm.distributed.device_communicators.shm_broadcast import MessageQueue
@@ -179,6 +180,12 @@ def _resolve_ir_op_priority(od_config: OmniDiffusionConfig, vllm_config: VllmCon
     return ir_op_priority
 
 
+def _initialize_vllm_ir_runtime(vllm_config: VllmConfig) -> None:
+    """Install process-lifetime vLLM IR settings for this diffusion worker."""
+    vllm_config.kernel_config.ir_op_priority.set_default()
+    vllm.ir.set_default_torch_wrap(vllm_config.compilation_config.ir_enable_torch_wrap)
+
+
 class DiffusionWorker:
     """
     A worker that manages GPU infrastructure and delegates to the model runner.
@@ -267,8 +274,10 @@ class DiffusionWorker:
         self.device = current_omni_platform.get_torch_device(rank)
         current_omni_platform.set_device(self.device)
 
-        # Create vllm_config for parallel configuration. Pass explicit device_config
-        # so DeviceConfig does not rely on current_platform in worker subprocesses.
+        # Build a worker-local compatibility config for vLLM layers and platform
+        # hooks. DiffusionParallelConfig remains the source of truth. Pass an
+        # explicit device_config so worker subprocesses do not rely on
+        # current_platform for device selection.
         vllm_config = _create_diffusion_worker_vllm_config(self.device, self.od_config)
         parallel_config = self.od_config.parallel_config
         vllm_config.parallel_config.tensor_parallel_size = parallel_config.tensor_parallel_size
@@ -282,7 +291,6 @@ class DiffusionWorker:
             )
             vllm_config.parallel_config.prefill_context_parallel_size = parallel_config.sequence_parallel_size
         vllm_config.parallel_config.enable_expert_parallel = parallel_config.enable_expert_parallel
-        vllm_config.profiler_config = self.od_config.profiler_config
         vllm_config.model_config = _make_diffusion_vllm_model_config(self.od_config)  # type: ignore[assignment]
         vllm_config.quant_config = self.od_config.quantization_config
         # Since vLLM v0.20.0, IR wraps GPU ops. Set IR op priority preference to enforce GPU op fusion during wrapping.
@@ -293,10 +301,11 @@ class DiffusionWorker:
         )
         self.vllm_config = vllm_config
         current_omni_platform.init_diffusion_worker_vllm_config(vllm_config)
+        _initialize_vllm_ir_runtime(vllm_config)
 
         # Initialize distributed environment
         with (
-            set_forward_context(vllm_config=self.vllm_config, omni_diffusion_config=self.od_config),
+            set_forward_context(omni_diffusion_config=self.od_config),
             set_current_vllm_config(self.vllm_config),
         ):
             init_distributed_environment(world_size=world_size, rank=rank)
@@ -345,7 +354,7 @@ class DiffusionWorker:
             else nullcontext()
         )
         with (
-            set_forward_context(vllm_config=self.vllm_config, omni_diffusion_config=self.od_config),
+            set_forward_context(omni_diffusion_config=self.od_config),
             set_current_vllm_config(self.vllm_config),
             cutlass_fp8_context,
         ):

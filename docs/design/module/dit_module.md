@@ -376,10 +376,7 @@ def execute_model(self, reqs: list[OmniDiffusionRequest], od_config):
         self.cache_backend.refresh(self.pipeline, req.num_inference_steps)
 
     # Set forward context for parallelism
-    with set_forward_context(
-        vllm_config=self.vllm_config,
-        omni_diffusion_config=self.od_config
-    ):
+    with set_forward_context(omni_diffusion_config=self.od_config):
         output = self.pipeline.forward(req)
     return output
 ```

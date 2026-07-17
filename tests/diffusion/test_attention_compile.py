@@ -77,7 +77,7 @@ def test_attention_keeps_compiled_impl_without_diffusion_config(monkeypatch):
     monkeypatch.setattr(torch.compiler, "is_compiling", lambda: True)
 
     query = torch.empty(1)
-    with set_forward_context(vllm_config=None):
+    with set_forward_context():
         assert Attention.forward(attention, query, query, query) is query
 
     assert calls == ["impl"]
