@@ -49,6 +49,7 @@ from vllm_omni.diffusion.worker.utils import (
     merge_stage_durations,
 )
 from vllm_omni.distributed.omni_connectors.kv_transfer_manager import OmniKVTransferManager
+from vllm_omni.inputs.data import OmniDiffusionSamplingParams
 from vllm_omni.platforms import current_omni_platform
 from vllm_omni.worker.omni_connector_model_runner_mixin import OmniConnectorModelRunnerMixin
 
@@ -366,7 +367,7 @@ class DiffusionModelRunner(OmniConnectorModelRunnerMixin):
 
         self._initialize_generator(req.sampling_params)
 
-    def _initialize_generator(self, sampling_params: Any) -> None:
+    def _initialize_generator(self, sampling_params: OmniDiffusionSamplingParams) -> None:
         if sampling_params.generator is None and sampling_params.seed is not None:
             if sampling_params.generator_device is not None:
                 gen_device = sampling_params.generator_device
@@ -653,10 +654,6 @@ class DiffusionModelRunner(OmniConnectorModelRunnerMixin):
             if interrupted or state.request_denoise_completed:
                 self.state_cache.pop(state.request_id, None)
 
-    def _prepare_attn_metadata(self, input_batch: InputBatch) -> dict[str, Any]:
-        del input_batch
-        return {}
-
     def execute_stepwise(self, scheduler_output: DiffusionSchedulerOutput) -> BatchRunnerOutput:
         """Execute one step for one scheduled request and return runner output."""
         assert self.pipeline is not None, "Model not loaded. Call launch_model() first."
@@ -677,7 +674,7 @@ class DiffusionModelRunner(OmniConnectorModelRunnerMixin):
             if new_request_ids and not had_active_states and is_primary and current_omni_platform.is_available():
                 current_omni_platform.reset_peak_memory_stats()
             input_batch = self._prepare_batch_inputs(states, new_request_ids)
-            attn_metadata = self._prepare_attn_metadata(input_batch)
+            attn_metadata = {}
 
             with set_forward_context(
                 vllm_config=self.vllm_config,
