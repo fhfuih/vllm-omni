@@ -589,7 +589,7 @@ class DiffusionWorker:
         logger.info(f"[Worker {self.rank}] Wake-up complete.")
         return True
 
-    def sleep_for_task(self, task: OmniSleepTask | dict) -> OmniACK | None:
+    def handle_sleep_task(self, task: OmniSleepTask | dict) -> OmniACK | None:
         from vllm_omni.platforms import current_omni_platform
 
         try:
@@ -646,7 +646,7 @@ class DiffusionWorker:
                     pass
             return OmniACK(task_id=task.task_id, status="ERROR", error_msg=str(e))
 
-    def wake_for_task(self, task: OmniWakeTask | dict) -> OmniACK | None:
+    def handle_wake_task(self, task: OmniWakeTask | dict) -> OmniACK | None:
         from vllm_omni.platforms import current_omni_platform
 
         try:
@@ -916,11 +916,11 @@ class WorkerProc:
 
             if isinstance(msg, dict) and msg.get("type") == "sleep":
                 task = OmniSleepTask(level=msg.get("level", 2), task_id=msg.get("task_id", "local"))
-                ack = self.worker.sleep_for_task(task)
+                ack = self.worker.handle_sleep_task(task)
                 self._return_result(ack)
             elif isinstance(msg, dict) and msg.get("type") == "wake_up":
                 task = OmniWakeTask(tags=msg.get("tags"), task_id=msg.get("task_id", "local"))
-                ack = self.worker.wake_for_task(task)
+                ack = self.worker.handle_wake_task(task)
                 self._return_result(ack)
             # Route message based on type
             elif isinstance(msg, dict) and msg.get("type") == "rpc":
@@ -1157,8 +1157,8 @@ class WorkerWrapperBase:
 
         Args:
             level: The sleep level. Level 1 sleep will offload the model
-                weights and discard the kv cache.
-                Currently only support level 1.
+                weights and discard the kv cache. Level 2 also saves buffers.
+                Currently only support level 1 and level 2.
 
         Returns:
             Bytes held by the allocator before sleeping.
@@ -1182,11 +1182,11 @@ class WorkerWrapperBase:
         """
         return self.worker.wake_up(tags)
 
-    def sleep_for_task(self, task: OmniSleepTask | dict) -> OmniACK | None:
-        return self.worker.sleep_for_task(task)
+    def handle_sleep_task(self, task: OmniSleepTask | dict) -> OmniACK | None:
+        return self.worker.handle_sleep_task(task)
 
-    def wake_for_task(self, task: OmniWakeTask | dict) -> OmniACK | None:
-        return self.worker.wake_for_task(task)
+    def handle_wake_task(self, task: OmniWakeTask | dict) -> OmniACK | None:
+        return self.worker.handle_wake_task(task)
 
     def shutdown(self) -> None:
         """Shutdown the worker and cleanup resources."""
