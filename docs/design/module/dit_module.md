@@ -150,7 +150,9 @@ class DiffusionRequestStatus(enum.IntEnum):
 class SchedulerRequestState:
     request_id: str
     req: OmniDiffusionRequest
+    sampling_params_key: StepBatchSamplingParamsKey | RequestBatchSamplingParamsKey | None = None
     status: DiffusionRequestStatus = DiffusionRequestStatus.WAITING
+    error: str | None = None
 ```
 
 **Design Features**:
