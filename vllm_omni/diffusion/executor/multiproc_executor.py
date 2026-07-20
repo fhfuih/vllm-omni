@@ -105,6 +105,10 @@ class MultiprocDiffusionExecutor(DiffusionExecutor):
     def _ensure_open(self) -> None:
         if self._closed:
             raise RuntimeError("DiffusionExecutor is closed.")
+        if self._result_mq is None:
+            raise RuntimeError("Result queue is closed")
+        if self._broadcast_mq is None:
+            raise RuntimeError("Broadcast queue is closed")
 
     def _dequeue_one_with_failure_polling(self, deadline: float | None, method: str) -> Any:
         """Block until one result message, polling ``_is_failed`` between chunk timeouts."""
@@ -117,7 +121,7 @@ class MultiprocDiffusionExecutor(DiffusionExecutor):
                     raise TimeoutError(f"RPC call to {method} timed out.")
                 chunk_timeout = min(_DEQUEUE_TIMEOUT_S, remaining)
             try:
-                return self._result_mq.dequeue(timeout=chunk_timeout)
+                return self._result_mq.dequeue(timeout=chunk_timeout)  # pyright: ignore[reportOptionalMemberAccess] MQ is not None before shutdown
             except (TimeoutError, zmq.error.Again):
                 if self._is_failed:
                     raise EngineDeadError()
@@ -414,7 +418,7 @@ class MultiprocDiffusionExecutor(DiffusionExecutor):
 
         try:
             # Broadcast RPC request to all workers via unified message queue
-            self._broadcast_mq.enqueue(rpc_request)
+            self._broadcast_mq.enqueue(rpc_request)  # pyright: ignore[reportOptionalMemberAccess] MQ is not None before shutdown
 
             # Only rank 0 has a result_mq, so we always expect exactly 1 response
             num_responses = 1
@@ -452,5 +456,6 @@ class MultiprocDiffusionExecutor(DiffusionExecutor):
             self._finalizer()
         finally:
             self._broadcast_mq = None
+            self._result_mq = None
             self._shutdown_cleaner = None
             self._processes = []

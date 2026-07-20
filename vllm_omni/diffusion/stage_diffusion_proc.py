@@ -92,7 +92,6 @@ class StageDiffusionProc:
     def _is_executor_dead(self) -> bool:
         """True iff the multiproc executor has been closed or marked failed.
 
-        Detects the "workers died but the diffusion proc is still pulling
         requests" case: ``MultiprocDiffusionExecutor`` sets ``is_dead`` from its
         worker-monitor thread the moment any worker process exits; every
         subsequent ``execute_request`` / ``collective_rpc`` then raises
