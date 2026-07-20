@@ -177,7 +177,7 @@ class BaseScheduler:
     def update_from_output(
         self,
         sched_output: DiffusionSchedulerOutput,
-        output: DiffusionOutput,
+        output: BaseRunnerOutput,
     ) -> set[str]: ...
 ```
 
