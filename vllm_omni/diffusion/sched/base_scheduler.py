@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+from abc import ABC, abstractmethod
 from collections import deque
 from dataclasses import fields
 
@@ -20,6 +21,7 @@ from vllm_omni.diffusion.sched.interface import (
     SchedulerRequestState,
     StepBatchSamplingParamsKey,
 )
+from vllm_omni.diffusion.worker.utils import RunnerOutput
 
 logger = init_logger(__name__)
 
@@ -32,7 +34,7 @@ _STEP_BATCH_SAMPLING_PARAMS_KEY_FIELD_NAMES = frozenset(field.name for field in 
 }
 
 
-class BaseScheduler:
+class BaseScheduler(ABC):
     """Shared queue/state bookkeeping for diffusion schedulers."""
 
     def __init__(self) -> None:
@@ -136,6 +138,10 @@ class BaseScheduler:
         self._step_id += 1
         self._finished_req_ids.clear()
         return scheduler_output
+
+    @abstractmethod
+    def update_from_output(self, sched_output: DiffusionSchedulerOutput, output: RunnerOutput) -> set[str]:
+        pass
 
     def has_requests(self) -> bool:
         return bool(self._waiting or self._running)
@@ -267,7 +273,7 @@ class BaseScheduler:
 
     def _build_sampling_params_key(
         self, request: OmniDiffusionRequest
-    ) -> StepBatchSamplingParamsKey | RequestBatchSamplingParamsKey:
+    ) -> StepBatchSamplingParamsKey | RequestBatchSamplingParamsKey:  # return type loosened for subclassing
         """Build a step-batch compatibility key from sampling parameters."""
         sampling = request.sampling_params
         # LoRA identity is optional on sampling params (and on test stubs).
