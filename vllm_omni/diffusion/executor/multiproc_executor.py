@@ -15,7 +15,7 @@ from vllm.distributed.device_communicators.shm_broadcast import Handle, MessageQ
 from vllm.logger import init_logger
 from vllm.v1.engine.exceptions import EngineDeadError
 
-from vllm_omni.diffusion.data import SHUTDOWN_MESSAGE, DiffusionOutput, OmniDiffusionConfig
+from vllm_omni.diffusion.data import SHUTDOWN_MESSAGE, DiffusionOutput
 from vllm_omni.diffusion.executor.abstract import DiffusionExecutor
 from vllm_omni.diffusion.ipc import DIFFUSION_RPC_RESULT_ENVELOPE, unpack_diffusion_output_shm
 from vllm_omni.diffusion.worker import WorkerProc
@@ -62,12 +62,12 @@ class _ExecutorShutdownCleaner:
 class MultiprocDiffusionExecutor(DiffusionExecutor):
     uses_multiproc: bool = True
 
-    def __init__(self, od_config: OmniDiffusionConfig) -> None:
-        super().__init__(od_config)
+    def _init_executor(self) -> None:
         self._processes: list[mp.Process] = []
         self._closed = False
         self._is_failed = False
         self._failure_callbacks: list[Callable[[], None]] = []
+        self._result_mq: MessageQueue | None = None
 
         num_workers = cast(int, self.od_config.num_gpus)
         self.wake_events = [mp.Event() for _ in range(num_workers)]
@@ -77,7 +77,6 @@ class MultiprocDiffusionExecutor(DiffusionExecutor):
 
         # Launch workers
         processes, result_handle = self._launch_workers(broadcast_handle, self.wake_events)
-        self._result_mq = self._init_result_queue(result_handle)
         self._processes = processes
 
         shutdown_cleaner = _ExecutorShutdownCleaner(
@@ -87,6 +86,12 @@ class MultiprocDiffusionExecutor(DiffusionExecutor):
         )
         self._shutdown_cleaner: _ExecutorShutdownCleaner | None = shutdown_cleaner
         self._finalizer = weakref.finalize(self, shutdown_cleaner)
+
+        try:
+            self._result_mq = self._init_result_queue(result_handle)
+        except Exception:
+            self.shutdown()
+            raise
 
         self._start_worker_monitor()
 
