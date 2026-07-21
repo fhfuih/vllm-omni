@@ -719,7 +719,7 @@ class TestRunner:
         monkeypatch.setattr(model_runner_module, "get_cache_backend", lambda *args, **kwargs: None)
 
         with pytest.raises(ValueError, match="RequestOnlyPipeline"):
-            DiffusionModelRunner.launch_model(runner)
+            DiffusionModelRunner.load_model(runner)
 
 
 class _RecordingLoRAManager:

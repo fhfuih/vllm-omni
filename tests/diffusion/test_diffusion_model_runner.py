@@ -257,10 +257,17 @@ def test_execute_model_skips_cache_summary_without_active_cache_backend(monkeypa
 @hardware_test(res={"cuda": "L4"}, num_cards=1)
 def test_execute_model_emits_cache_summary_with_active_cache_dit_backend(monkeypatch):
     class _EnabledCacheBackend:
+        def __init__(self):
+            self.refresh_calls = []
+
         def is_enabled(self):
             return True
 
-    runner = _make_runner(cache_backend=_EnabledCacheBackend(), cache_backend_name="cache_dit")
+        def refresh(self, pipeline, num_inference_steps, verbose=True):
+            self.refresh_calls.append((pipeline, num_inference_steps, verbose))
+
+    cache_backend = _EnabledCacheBackend()
+    runner = _make_runner(cache_backend=cache_backend, cache_backend_name="cache_dit")
     req = _make_request()
 
     cache_summary_calls = []
@@ -279,6 +286,7 @@ def test_execute_model_emits_cache_summary_with_active_cache_dit_backend(monkeyp
 
     assert output.output == "ok"
     assert cache_summary_calls == [(runner.pipeline, True)]
+    assert cache_backend.refresh_calls == [(runner.pipeline, 4, True)]
 
 
 @pytest.mark.core_model
@@ -581,7 +589,7 @@ def test_load_model_clears_cache_backend_for_unsupported_pipeline(monkeypatch):
         model_runner_module, "get_cache_backend", lambda cache_backend, cache_config: dummy_cache_backend
     )
 
-    DiffusionModelRunner.launch_model(runner)
+    DiffusionModelRunner.load_model(runner)
 
     assert runner.cache_backend is None
     assert runner.od_config.cache_backend is None

@@ -161,7 +161,7 @@ class DiffusionModelRunner(OmniConnectorModelRunnerMixin):
                 e,
             )
 
-    def launch_model(
+    def load_model(
         self,
         memory_pool_context_fn: Callable[[str], AbstractContextManager[Any]] | None = None,
         load_format: str = "default",
@@ -438,7 +438,7 @@ class DiffusionModelRunner(OmniConnectorModelRunnerMixin):
         kv_prefetch_jobs: dict | None = None,
         record_name: str,
     ) -> BatchRunnerOutput:
-        assert self.pipeline is not None, "Model not loaded. Call launch_model() first."
+        assert self.pipeline is not None, "Model not loaded. Call load_model() first."
         if not reqs:
             return BatchRunnerOutput.from_list([])
         for req in reqs:
@@ -656,7 +656,7 @@ class DiffusionModelRunner(OmniConnectorModelRunnerMixin):
 
     def execute_stepwise(self, scheduler_output: DiffusionSchedulerOutput) -> BatchRunnerOutput:
         """Execute one step for one scheduled request and return runner output."""
-        assert self.pipeline is not None, "Model not loaded. Call launch_model() first."
+        assert self.pipeline is not None, "Model not loaded. Call load_model() first."
         if not self._supports_step_mode():
             raise ValueError("Current pipeline does not support step execution.")
         # Stepwise mode only supports the basic state-driven denoise path for now.

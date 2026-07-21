@@ -355,7 +355,7 @@ class DiffusionWorker:
             set_current_vllm_config(self.vllm_config),
             cutlass_fp8_context,
         ):
-            self.model_runner.launch_model(
+            self.model_runner.load_model(
                 memory_pool_context_fn=self._maybe_get_memory_pool_context,
                 load_format=load_format,
                 custom_pipeline_name=custom_pipeline_name,
