@@ -416,7 +416,7 @@ class DiffusionWorker:
         self,
         req: OmniDiffusionRequest,
         od_config: OmniDiffusionConfig,
-        kv_prefetch_jobs: KVPrefetchJob | None = None,
+        kv_prefetch_job: KVPrefetchJob | None = None,
     ) -> DiffusionOutput:
         """Execute a forward pass by delegating to the model runner."""
         assert self.model_runner is not None, "Model runner not initialized"
@@ -430,7 +430,7 @@ class DiffusionWorker:
         profiler = self._get_profiler()
         ctx = profiler.annotate_context_manager("diffusion_forward") if profiler else nullcontext()
         with ctx:
-            output = self.model_runner.execute_model(req, kv_prefetch_jobs=kv_prefetch_jobs)
+            output = self.model_runner.execute_model(req, kv_prefetch_job=kv_prefetch_job)
         if profiler:
             profiler.step()
         return output
@@ -1155,7 +1155,7 @@ class WorkerWrapperBase:
         self,
         reqs: list[OmniDiffusionRequest],
         od_config: OmniDiffusionConfig,
-        kv_prefetch_jobs: KVPrefetchJob | None = None,
+        kv_prefetch_job: KVPrefetchJob | None = None,
     ) -> DiffusionOutput:
         """
         Execute a forward pass.
@@ -1163,12 +1163,12 @@ class WorkerWrapperBase:
         Args:
             reqs: List of diffusion requests
             od_config: OmniDiffusionConfig configuration
-            kv_prefetch_jobs: Optional next-request KV prefetch descriptor.
+            kv_prefetch_job: Optional next-request KV prefetch descriptor.
 
         Returns:
             DiffusionOutput with generated results
         """
-        return self.worker.execute_model(reqs, od_config, kv_prefetch_jobs=kv_prefetch_jobs)
+        return self.worker.execute_model(reqs, od_config, kv_prefetch_job=kv_prefetch_job)
 
     def execute_stepwise(self, scheduler_output: DiffusionSchedulerOutput) -> BaseRunnerOutput:
         """Execute one diffusion step."""

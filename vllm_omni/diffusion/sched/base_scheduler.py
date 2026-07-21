@@ -113,13 +113,13 @@ class BaseScheduler(ABC):
         # kv_sender_info (would target the wrong sender under multi-replica) or
         # one already finished/aborted (would consume its sender buffer for
         # nothing).
-        kv_prefetch_jobs: KVPrefetchJob | None = None
+        kv_prefetch_job: KVPrefetchJob | None = None
         if self._prefetch_enabled and self._waiting:
             nxt = self._request_states.get(self._waiting[0])
             if nxt is not None and not nxt.is_finished():
                 sender_info = getattr(nxt.req, "kv_sender_info", None)
                 if sender_info:
-                    kv_prefetch_jobs = {
+                    kv_prefetch_job = {
                         "request_id": nxt.request_id,
                         "kv_sender_info": sender_info,
                     }
@@ -131,7 +131,7 @@ class BaseScheduler(ABC):
             finished_req_ids=set(self._finished_req_ids),
             num_running_reqs=len(self._running),
             num_waiting_reqs=len(self._waiting),
-            kv_prefetch_jobs=kv_prefetch_jobs,
+            kv_prefetch_job=kv_prefetch_job,
         )
 
         # update after schedule
@@ -282,3 +282,21 @@ class BaseScheduler(ABC):
             lora_int_id=lora_request.lora_int_id if lora_request is not None else None,
             **{name: getattr(sampling, name) for name in _STEP_BATCH_SAMPLING_PARAMS_KEY_FIELD_NAMES},
         )
+
+
+class SchedulerInterface(BaseScheduler):
+    """Deprecated compatibility base for custom scheduler injection.
+
+    Prefer subclassing :class:`BaseScheduler` directly. Subclassing this name
+    still works but emits a :class:`DeprecationWarning`.
+    """
+
+    def __init_subclass__(cls, **kwargs) -> None:
+        import warnings
+
+        warnings.warn(
+            "SchedulerInterface is deprecated; subclass BaseScheduler instead.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        super().__init_subclass__(**kwargs)

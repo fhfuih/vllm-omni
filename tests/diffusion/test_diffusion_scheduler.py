@@ -154,6 +154,12 @@ class _StubScheduler:
         return None
 
 
+class _ConcreteScheduler(BaseScheduler):
+    def update_from_output(self, sched_output, output) -> set[str]:
+        del sched_output, output
+        return set()
+
+
 class TestGetStepBatchSamplingParamsKey:
     """Tests for the step-batch compatibility key builder on BaseScheduler."""
 
@@ -176,25 +182,25 @@ class TestGetStepBatchSamplingParamsKey:
         )
 
     def test_distinguishes_lora_id(self) -> None:
-        scheduler = BaseScheduler()
+        scheduler = _ConcreteScheduler()
         assert scheduler._build_sampling_params_key(self._make(lora_int_id=1)) != scheduler._build_sampling_params_key(
             self._make(lora_int_id=2)
         )
 
     def test_distinguishes_lora_scale(self) -> None:
-        scheduler = BaseScheduler()
+        scheduler = _ConcreteScheduler()
         assert scheduler._build_sampling_params_key(
             self._make(lora_int_id=1, lora_scale=0.5)
         ) != scheduler._build_sampling_params_key(self._make(lora_int_id=1, lora_scale=1.0))
 
     def test_treats_no_lora_as_distinct_bucket(self) -> None:
-        scheduler = BaseScheduler()
+        scheduler = _ConcreteScheduler()
         assert scheduler._build_sampling_params_key(
             self._make(lora_int_id=None)
         ) != scheduler._build_sampling_params_key(self._make(lora_int_id=1))
 
     def test_equal_for_same_lora_identity(self) -> None:
-        scheduler = BaseScheduler()
+        scheduler = _ConcreteScheduler()
         a = scheduler._build_sampling_params_key(self._make(lora_int_id=1, lora_scale=0.5))
         b = scheduler._build_sampling_params_key(self._make(lora_int_id=1, lora_scale=0.5))
         assert a == b

@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: Copyright contributors to the vLLM project
 
-from vllm_omni.diffusion.sched.base_scheduler import BaseScheduler
+from vllm_omni.diffusion.sched.base_scheduler import BaseScheduler, SchedulerInterface
 from vllm_omni.diffusion.sched.interface import (
     CachedRequestData,
     DiffusionRequestStatus,
@@ -24,6 +24,7 @@ __all__ = [
     "NewRequestData",
     "SchedulerRequestState",
     "BaseScheduler",
+    "SchedulerInterface",
     "StepBatchSamplingParamsKey",
     "RequestScheduler",
     "StepScheduler",

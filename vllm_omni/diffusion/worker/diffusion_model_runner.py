@@ -336,7 +336,7 @@ class DiffusionModelRunner(OmniConnectorModelRunnerMixin):
         req: OmniDiffusionRequest,
         *,
         od_config: OmniDiffusionConfig,
-        kv_prefetch_jobs: KVPrefetchJob | None = None,
+        kv_prefetch_job: KVPrefetchJob | None = None,
         use_prefetch: bool = False,
     ) -> None:
         # Receive AR KV. Single-request execution can use the prefetch path:
@@ -358,8 +358,8 @@ class DiffusionModelRunner(OmniConnectorModelRunnerMixin):
         logger.debug("KV recv for %s %.1fms", req.request_id, kv_recv_ms)
 
         # Kick off the next request's prefetch (+ H2D) to overlap this forward.
-        if use_prefetch and self._kv_prefetch_enabled and kv_prefetch_jobs is not None:
-            self.kv_transfer_manager.start_prefetch(kv_prefetch_jobs, self.target_device)
+        if use_prefetch and self._kv_prefetch_enabled and kv_prefetch_job is not None:
+            self.kv_transfer_manager.start_prefetch(kv_prefetch_job, self.target_device)
 
         if req.sampling_params.generator is None and req.sampling_params.seed is not None:
             if req.sampling_params.generator_device is not None:
@@ -432,7 +432,7 @@ class DiffusionModelRunner(OmniConnectorModelRunnerMixin):
         od_config: OmniDiffusionConfig,
         allow_single_output: bool,
         require_request_batch_support: bool,
-        kv_prefetch_jobs: KVPrefetchJob | None = None,
+        kv_prefetch_job: KVPrefetchJob | None = None,
         record_name: str,
     ) -> BatchRunnerOutput:
         assert self.pipeline is not None, "Model not loaded. Call load_model() first."
@@ -454,7 +454,7 @@ class DiffusionModelRunner(OmniConnectorModelRunnerMixin):
                 self._prepare_request_for_forward(
                     req,
                     od_config=od_config,
-                    kv_prefetch_jobs=kv_prefetch_jobs,
+                    kv_prefetch_job=kv_prefetch_job,
                     use_prefetch=allow_single_output,
                 )
 
@@ -511,7 +511,7 @@ class DiffusionModelRunner(OmniConnectorModelRunnerMixin):
     def execute_model(
         self,
         req: OmniDiffusionRequest,
-        kv_prefetch_jobs: KVPrefetchJob | None = None,
+        kv_prefetch_job: KVPrefetchJob | None = None,
     ) -> DiffusionOutput:
         """
         Execute a forward pass for the given requests.
@@ -533,7 +533,7 @@ class DiffusionModelRunner(OmniConnectorModelRunnerMixin):
             od_config=self.od_config,
             allow_single_output=True,
             require_request_batch_support=False,
-            kv_prefetch_jobs=kv_prefetch_jobs,
+            kv_prefetch_job=kv_prefetch_job,
             record_name="pipeline_forward",
         )
         output = runner_output.runner_outputs[0].result
