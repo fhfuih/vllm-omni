@@ -212,7 +212,7 @@ class DiffusionWorker:
         # requests, which only carry their request_id in subsequent ticks.
         self._step_lora_state: dict[str, tuple[LoRARequest | None, float]] = {}
         self.stage_id = getattr(od_config, "stage_id", 0)
-        self._init_device()
+        self.init_device()
         # Create model runner — one decision chain, in precedence order:
         #   1. explicit od_config.diffusion_model_runner_cls (user override),
         #   2. the runner declared by the engine class that engine_backend
@@ -248,10 +248,10 @@ class DiffusionWorker:
         self.profiler: WorkerProfiler | None = self._create_profiler()
         if not skip_load_model:
             self.load_model(load_format=self.od_config.diffusion_load_format)
-            self._init_lora_manager()
+            self.init_lora_manager()
         logger.info(f"Worker {self.rank}: Initialization complete.")
 
-    def _init_device(self) -> None:
+    def init_device(self) -> None:
         """Initialize the device and distributed environment."""
         world_size = self.od_config.num_gpus
         rank = self.rank
@@ -374,7 +374,7 @@ class DiffusionWorker:
         if load_format != "dummy":
             assert self.model_runner.pipeline is not None
 
-    def _init_lora_manager(self) -> None:
+    def init_lora_manager(self) -> None:
         """Initialize the LoRA manager for this worker."""
         if self.model_runner.pipeline is None:
             return
@@ -737,7 +737,7 @@ class CustomPipelineWorkerExtension:
             load_format="custom_pipeline",
             custom_pipeline_name=custom_pipeline_name,
         )
-        self._init_lora_manager()
+        self.init_lora_manager()
 
 
 class WorkerProc:
