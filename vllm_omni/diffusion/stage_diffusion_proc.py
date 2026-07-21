@@ -40,6 +40,7 @@ from vllm_omni.outputs import OmniRequestOutput
 
 if TYPE_CHECKING:
     from vllm_omni.diffusion.data import OmniDiffusionConfig
+    from vllm_omni.diffusion.executor.abstract import DiffusionExecutor
 
 logger = init_logger(__name__)
 
@@ -101,10 +102,10 @@ class StageDiffusionProc:
         """
         if self._engine is None:
             return False
-        executor = getattr(self._engine, "executor", None)
+        executor: DiffusionExecutor | None = getattr(self._engine, "executor", None)
         if executor is None:
             return False
-        return bool(getattr(executor, "is_dead", False))
+        return executor.is_dead
 
     def _signal_fatal_engine_failure(self, reason: str) -> None:
         """Idempotently signal ``run_loop`` to tear down on a fatal engine error."""
