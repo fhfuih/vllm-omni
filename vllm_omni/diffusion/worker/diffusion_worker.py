@@ -520,7 +520,7 @@ class DiffusionWorker:
     def pin_lora(self, adapter_id: int) -> bool:
         return self.lora_manager.pin_adapter(adapter_id)
 
-    def sleep(self, level: int = 1) -> bool:
+    def sleep(self, level: int = 1) -> int:
         """
         Put the worker to sleep, offloading model weights.
 
@@ -1169,7 +1169,7 @@ class WorkerWrapperBase:
         """Execute one diffusion step."""
         return self.worker.execute_stepwise(scheduler_output)
 
-    def sleep(self, level: int = 1) -> bool:
+    def sleep(self, level: int = 1) -> int:
         """
         Put the worker to sleep. The worker should not process any requests.
         The caller should guarantee that no requests are being processed
