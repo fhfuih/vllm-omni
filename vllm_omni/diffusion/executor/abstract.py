@@ -65,7 +65,7 @@ class DiffusionExecutor(ABC):
 
     @abstractmethod
     def _init_executor(self) -> None:
-        """Initialize executor-specific resources."""
+        """Initialize the executor (e.g., launch workers, setup IPC)."""
         pass
 
     @property
