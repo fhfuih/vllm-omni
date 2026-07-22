@@ -171,7 +171,7 @@ class TestWorkerWrapperBaseDelegation:
         mock_req = mocker.Mock()
         result = wrapper.execute_model(mock_req, mock_od_config)
 
-        wrapper.worker.execute_model.assert_called_once_with(mock_req, mock_od_config, kv_prefetch_jobs=None)
+        wrapper.worker.execute_model.assert_called_once_with(mock_req, mock_od_config, kv_prefetch_job=None)
         assert result == mock_output
 
     def test_sleep_delegation(self, mocker: MockerFixture, mock_od_config):
