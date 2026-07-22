@@ -375,7 +375,6 @@ class TestPromptUpdateIntegration:
         omni.final_output_task = None
         omni.event_resolver = AsyncEventResolver()
         omni._enable_ar_profiler = False
-        omni._is_sleeping = False
         omni.prom_metrics = MagicMock()
         omni.mod_metrics = MagicMock()
         omni.resolve_sampling_params_list = lambda params, allow_delta_coercion: params  # pyright: ignore[reportAttributeAccessIssue]
@@ -411,8 +410,8 @@ class TestPromptUpdateIntegration:
             self.requests.append(request)
             if self._step_index == 0:
                 self._step_index += 1
-                return [DiffusionOutput(custom_output={"chunk": 0}, finished=False)]
-            return [DiffusionOutput(custom_output={"chunk": 1}, finished=True)]
+                return [DiffusionOutput(output={"chunk": 0}, finished=False)]
+            return [DiffusionOutput(output={"chunk": 1}, finished=True)]
 
     class _OrchestratorBridgeEngine:
         """Minimal AsyncOmni engine facade backed by a live Orchestrator harness."""
@@ -509,7 +508,7 @@ class TestPromptUpdateIntegration:
 
             outputs = self.streaming_pipeline.step_outputs(request)
             output = outputs[0]
-            custom_output = output.custom_output or {}
+            custom_output = cast(dict[str, Any], output.output) or {}
             yield [
                 OmniRequestOutput.from_diffusion(
                     request_id=request.request_id,
@@ -527,7 +526,7 @@ class TestPromptUpdateIntegration:
 
             outputs = self.streaming_pipeline.step_outputs(request)
             output = outputs[0]
-            custom_output = output.custom_output or {}
+            custom_output = cast(dict[str, Any], output.output) or {}
             yield [
                 OmniRequestOutput.from_diffusion(
                     request_id=request.request_id,

@@ -453,7 +453,6 @@ class TestPipelineStreamingOutputToEntrypoint:
         omni.final_output_task = None
         omni.event_resolver = AsyncEventResolver()
         omni._enable_ar_profiler = False
-        omni._is_sleeping = False
         omni.prom_metrics = MagicMock()
         omni.mod_metrics = MagicMock()
         omni.resolve_sampling_params_list = lambda params, allow_delta_coercion: params
