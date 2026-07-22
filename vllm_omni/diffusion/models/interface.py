@@ -19,7 +19,7 @@ if TYPE_CHECKING:
 
     from vllm_omni.diffusion.data import DiffusionOutput
     from vllm_omni.diffusion.worker.input_batch import InputBatch
-    from vllm_omni.diffusion.worker.utils import DiffusionRequestState
+    from vllm_omni.diffusion.worker.utils import StepRequestState
 
 
 @runtime_checkable
@@ -56,21 +56,21 @@ class SupportsStepExecution(Protocol):
 
     supports_step_execution: ClassVar[bool] = True
 
-    def prepare_encode(self, state: DiffusionRequestState, **kwargs: Any) -> DiffusionRequestState:
+    def prepare_encode(self, state: StepRequestState, **kwargs: Any) -> StepRequestState:
         """Prepare request-level inputs and return initialized state."""
         ...
 
     def denoise_step(
-        self, input_batch: InputBatch, *, states: Sequence[DiffusionRequestState] | None = None, **kwargs: Any
+        self, input_batch: InputBatch, *, states: Sequence[StepRequestState] | None = None, **kwargs: Any
     ) -> torch.Tensor | None:
         """Run one denoise forward on the runner-assembled batch."""
         ...
 
-    def step_scheduler(self, state: DiffusionRequestState, noise_pred: torch.Tensor, **kwargs: Any) -> None:
+    def step_scheduler(self, state: StepRequestState, noise_pred: torch.Tensor, **kwargs: Any) -> None:
         """Run one scheduler step."""
         ...
 
-    def post_decode(self, state: DiffusionRequestState, **kwargs: Any) -> DiffusionOutput:
+    def post_decode(self, state: StepRequestState, **kwargs: Any) -> DiffusionOutput:
         """Decode output after denoise loop or at a partial chunk boundary."""
         ...
 
@@ -118,7 +118,7 @@ class SupportsPromptUpdate(Protocol):
 
     def prepare_prompt_update(
         self,
-        state: DiffusionRequestState,
+        state: StepRequestState,
         prompt: str,
         transition_chunks: int | None = None,
     ) -> None:

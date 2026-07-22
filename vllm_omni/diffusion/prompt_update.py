@@ -19,7 +19,7 @@ from typing import ClassVar, TypedDict, cast
 
 import torch
 
-from vllm_omni.diffusion.worker.utils import DiffusionRequestState
+from vllm_omni.diffusion.worker.utils import StepRequestState
 
 DEFAULT_TRANSITION_CHUNKS = 3
 
@@ -27,7 +27,7 @@ logger = logging.getLogger(__name__)
 
 
 class PromptUpdateExtra(TypedDict, total=False):
-    """A "protocol" for ``DiffusionRequestState.extra`` keys used by the prompt-update feature."""
+    """A "protocol" for ``StepRequestState.extra`` keys used by the prompt-update feature."""
 
     pending_prompt_update: _PendingPromptUpdate
     prompt_update_state: _PromptUpdateState
@@ -39,7 +39,7 @@ class PromptUpdateExtra(TypedDict, total=False):
     prompt_update_lock: Lock
 
 
-def prompt_update_versions(states: Sequence[DiffusionRequestState]) -> tuple[int, ...]:
+def prompt_update_versions(states: Sequence[StepRequestState]) -> tuple[int, ...]:
     """Return per-request prompt-update versions for batch cache comparison.
 
     To be used by ``InputBatch`` or other external to determine if the cached batch is still valid.
@@ -51,7 +51,7 @@ class PromptUpdateMixin:
     """Mixin for chunked streaming pipelines that support midway prompt updates.
 
     Implements the behavior expected by :class:`~vllm_omni.diffusion.models.interface.SupportsPromptUpdate`.
-    All per-request transition state lives on ``DiffusionRequestState.extra``; this mixin itself is stateless.
+    All per-request transition state lives on ``StepRequestState.extra``; this mixin itself is stateless.
     """
 
     supports_prompt_update: ClassVar[bool] = True
@@ -62,7 +62,7 @@ class PromptUpdateMixin:
 
     def prepare_prompt_update(
         self,
-        state: DiffusionRequestState,
+        state: StepRequestState,
         prompt: str,
         transition_chunks: int | None = None,
     ) -> None:
@@ -98,7 +98,7 @@ class PromptUpdateMixin:
                 "transition_chunks": duration,
             }
 
-    def _apply_prompt_update_at_chunk_boundary(self, state: DiffusionRequestState) -> None:
+    def _apply_prompt_update_at_chunk_boundary(self, state: StepRequestState) -> None:
         """Advance or start prompt interpolation before the next chunk."""
         extra = cast(PromptUpdateExtra, state.extra)
         update_state: _PromptUpdateState | None = extra.get("prompt_update_state")

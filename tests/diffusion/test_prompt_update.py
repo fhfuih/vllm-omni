@@ -14,15 +14,24 @@ from unittest.mock import MagicMock, patch
 import pytest
 import torch
 
-from tests.engine.test_orchestrator import OrchestratorFixture, _build_harness, _wait_for
+from tests.engine.test_orchestrator import (
+    OrchestratorFixture,
+    _build_harness,
+    _wait_for,
+)
 from vllm_omni.diffusion.data import DiffusionOutput, OmniDiffusionConfig
 from vllm_omni.diffusion.inline_stage_diffusion_client import InlineStageDiffusionClient
 from vllm_omni.diffusion.models.helios.pipeline_helios import HeliosPipeline
 from vllm_omni.diffusion.worker.diffusion_model_runner import DiffusionModelRunner
 from vllm_omni.diffusion.worker.input_batch import InputBatch
-from vllm_omni.diffusion.worker.utils import DiffusionRequestState
+from vllm_omni.diffusion.worker.utils import StepRequestState
 from vllm_omni.engine.async_omni_engine import StageRuntimeInfo
-from vllm_omni.engine.messages import ErrorMessage, InteractionMessage, ShutdownRequestMessage, StageSubmissionMessage
+from vllm_omni.engine.messages import (
+    ErrorMessage,
+    InteractionMessage,
+    ShutdownRequestMessage,
+    StageSubmissionMessage,
+)
 from vllm_omni.engine.orchestrator import Orchestrator, OrchestratorRequestState
 from vllm_omni.engine.stage_client import StagePoolClient
 from vllm_omni.engine.stage_init_utils import StageMetadata
@@ -49,8 +58,8 @@ def pipeline() -> HeliosPipeline:
     return pipeline
 
 
-def _make_diffusion_request_state(*, request_id: str = "req-1") -> DiffusionRequestState:
-    state = DiffusionRequestState(
+def _make_diffusion_request_state(*, request_id: str = "req-1") -> StepRequestState:
+    state = StepRequestState(
         request_id=request_id,
         sampling=SimpleNamespace(num_outputs_per_prompt=1, max_sequence_length=226),  # pyright: ignore[reportArgumentType]
         prompt="hello",
@@ -126,7 +135,7 @@ class TestPromptUpdateExecution:
 
     def test_input_batch_refreshes_prompt_embeds_on_version_change(self) -> None:
         """InputBatch rebuilds prompt_embeds when prompt_update_version changes."""
-        state = DiffusionRequestState(
+        state = StepRequestState(
             request_id="req-1",
             sampling=SimpleNamespace(),  # pyright: ignore[reportArgumentType]
             prompt="hello",
@@ -160,7 +169,10 @@ class TestPromptUpdateExecution:
         state = _make_diffusion_request_state()
         state.prompt_embeds = None
 
-        with pytest.raises(ValueError, match="prompt_update is not allowed before initial generation has started"):
+        with pytest.raises(
+            ValueError,
+            match="prompt_update is not allowed before initial generation has started",
+        ):
             pipeline.prepare_prompt_update(state, "new scene", transition_chunks=2)
 
         assert "pending_prompt_update" not in state.extra
@@ -197,7 +209,9 @@ class TestPromptUpdateIntegration:
     """AsyncOmni prompt update through orchestrator, inline client, and runner."""
 
     @pytest.mark.asyncio
-    async def test_orchestrator_prompt_update_failure_surfaces_non_fatal_error(self) -> None:
+    async def test_orchestrator_prompt_update_failure_surfaces_non_fatal_error(
+        self,
+    ) -> None:
         """Worker-side prompt_update rejection is reported without crashing the orchestrator."""
 
         class _RejectingStagePool:
