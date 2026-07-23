@@ -900,6 +900,7 @@ class HeliosPipeline(
 
         output = current_latents if extra["output_type"] == "latent" else current_video
         completed_chunk_index = state.chunk_index
+        prompt_update_metadata = state.extra.pop("prompt_update_chunk_metadata", {})
         state.chunk_index += 1
         finished = state.request_denoise_completed
         if not finished:
@@ -916,6 +917,9 @@ class HeliosPipeline(
             stage_durations=self.stage_durations if hasattr(self, "stage_durations") else {},
             chunk_index=completed_chunk_index,
             total_chunks=state.total_chunks,
+            started_event_ids=prompt_update_metadata.get("started_event_ids", []),
+            active_event_ids=prompt_update_metadata.get("active_event_ids", []),
+            completed_event_ids=prompt_update_metadata.get("completed_event_ids", []),
             finished=finished,
         )
 

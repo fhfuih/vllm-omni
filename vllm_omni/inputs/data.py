@@ -41,13 +41,17 @@ class OmniTextPrompt(TextPrompt):
     additional_information: NotRequired[dict[str, Any]]
 
 
-class OmniInteractionPrompt(OmniTextPrompt, total=False):
-    """Mid-stream interaction prompt payload.
+class OmniInteractionEvent(OmniTextPrompt, total=False):
+    """Prompt-event payload for mid-stream interactions."""
 
-    ``prompt`` and ``multi_modal_data`` inherited from upstream TypedDict.
-    ``prompt`` is optional so data-only interactions (e.g., camera movement) are allowed.
-    """
+    pass
 
+
+class OmniInteractionPrompt(TypedDict, total=False):
+    """Mid-stream interaction payload."""
+
+    event_id: NotRequired[str]
+    event: NotRequired[OmniInteractionEvent]
     transition_chunks: NotRequired[int]
 
 

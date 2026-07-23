@@ -14,7 +14,7 @@ import copy
 import time
 from collections.abc import Iterable
 from contextlib import nullcontext
-from typing import Any, cast
+from typing import TYPE_CHECKING, Any, cast
 
 import torch
 from torch.profiler import record_function
@@ -49,9 +49,11 @@ from vllm_omni.diffusion.worker.utils import (
     merge_stage_durations,
 )
 from vllm_omni.distributed.omni_connectors.kv_transfer_manager import OmniKVTransferManager
-from vllm_omni.inputs.data import OmniInteractionPrompt
 from vllm_omni.platforms import current_omni_platform
 from vllm_omni.worker.omni_connector_model_runner_mixin import OmniConnectorModelRunnerMixin
+
+if TYPE_CHECKING:
+    from vllm_omni.inputs.data import OmniInteractionPrompt
 
 logger = init_logger(__name__)
 
@@ -816,13 +818,14 @@ class DiffusionModelRunner(OmniConnectorModelRunnerMixin):
         if not self.supports_step_mode():
             raise ValueError("submit_interaction requires step execution support")
 
-        if "prompt" in interaction and not (set(interaction) - {"prompt", "transition_chunks"}):
+        event = interaction.get("event")
+        if isinstance(event, dict) and "prompt" in event and "multi_modal_data" not in event:
             # Is a prompt update interaction.
             self._submit_prompt_update_interaction(request_id, interaction)
             return
 
         raise NotImplementedError(
-            "Only text-only prompt update interactions with 'prompt' and optional "
+            "Only text-only prompt update interactions with 'event.prompt' and optional "
             "'transition_chunks' are supported in this release"
         )
 
@@ -839,7 +842,11 @@ class DiffusionModelRunner(OmniConnectorModelRunnerMixin):
         if state is None:
             raise ValueError(f"No active request state for prompt_update: {request_id!r}")
 
-        prompt = interaction["prompt"]
+        event = cast(dict[str, Any], interaction.get("event"))
+        prompt = event["prompt"]
         transition_chunks = interaction.get("transition_chunks")
+        event_id = interaction.get("event_id")
+        if not isinstance(event_id, str) or not event_id:
+            raise ValueError("event_id must be non-empty")
         pipeline = cast(SupportsPromptUpdate, self.pipeline)
-        pipeline.prepare_prompt_update(state, prompt, transition_chunks)
+        pipeline.prepare_prompt_update(state, prompt, event_id, transition_chunks)

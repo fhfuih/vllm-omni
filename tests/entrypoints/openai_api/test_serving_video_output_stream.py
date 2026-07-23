@@ -16,6 +16,7 @@ from fastapi import FastAPI, WebSocket
 from pytest_mock import MockerFixture
 from starlette.testclient import TestClient
 
+from tests.helpers.media import generate_synthetic_image
 from vllm_omni.entrypoints.openai.serving_video_output_stream import OmniStreamingVideoOutputHandler
 from vllm_omni.inputs.data import OmniDiffusionSamplingParams
 from vllm_omni.outputs import OmniRequestOutput
@@ -25,6 +26,12 @@ pytestmark = [pytest.mark.core_model, pytest.mark.cpu]
 
 def _fake_video_frames(num_frames: int = 2) -> list[np.ndarray]:
     return [np.full((4, 4, 3), fill_value=i, dtype=np.uint8) for i in range(num_frames)]
+
+
+def _receive_video_chunk(ws) -> tuple[dict, bytes]:
+    metadata = ws.receive_json()
+    assert metadata["type"] == "video.chunk_metadata"
+    return metadata, ws.receive_bytes()
 
 
 def _build_test_app(
@@ -127,8 +134,13 @@ class TestStreamingVideoOutputWebSocket:
                 assert "format" not in start["config"]
                 assert "request_id" in start
 
-                assert ws.receive_bytes() == b"mp4-chunk-0"
-                assert ws.receive_bytes() == b"mp4-chunk-1"
+                metadata, chunk = _receive_video_chunk(ws)
+                assert metadata["transport_chunk_index"] == 0
+                assert metadata["kind"] == "media"
+                assert chunk == b"mp4-chunk-0"
+                metadata, chunk = _receive_video_chunk(ws)
+                assert metadata["transport_chunk_index"] == 1
+                assert chunk == b"mp4-chunk-1"
 
                 done = ws.receive_json()
                 assert done["type"] == "session.done"
@@ -138,6 +150,48 @@ class TestStreamingVideoOutputWebSocket:
         engine_client.abort.assert_not_called()
         engine_client.streaming_encoder_factory.assert_called_once()
         assert engine_client.streaming_encoder_factory.call_args.kwargs["output_format"] == "m4s"
+
+    def test_streaming_session_accepts_initial_image_reference(self, mocker: MockerFixture):
+        """session.start forwards image_reference as prompt multi_modal_data.image."""
+        captured_prompts: list[dict[str, object]] = []
+
+        async def mock_generate(*_args, **kwargs):
+            captured_prompts.append(kwargs["prompt"])
+            yield OmniRequestOutput.from_diffusion(
+                request_id="req-ws",
+                images=[_fake_video_frames(2)],
+                final_output_type="image",
+                finished=True,
+            )
+
+        app, _handler, engine_client = _build_test_app(
+            mocker=mocker,
+            streaming_chunks=[(b"mp4-chunk-0", True)],
+            mock_generate=mock_generate,
+        )
+
+        synth_image = generate_synthetic_image(4, 4)
+        image_url = f"data:image/jpeg;base64,{synth_image['base64']}"
+
+        with TestClient(app) as client:
+            with client.websocket_connect("/v1/realtime/video") as ws:
+                ws.send_json(
+                    {
+                        "type": "session.start",
+                        "prompt": "animate this image",
+                        "width": 4,
+                        "height": 4,
+                        "image_reference": {"image_url": image_url},
+                    }
+                )
+                assert ws.receive_json()["type"] == "video.start"
+                assert _receive_video_chunk(ws)[1] == b"mp4-chunk-0"
+                assert ws.receive_json()["type"] == "session.done"
+
+        prompt = captured_prompts[0]
+        image = prompt["multi_modal_data"]["image"]  # type: ignore[index]
+        assert image.size == (4, 4)
+        engine_client.abort.assert_not_called()
 
     def test_streaming_session_rejects_unknown_format(self, mocker: MockerFixture):
         async def mock_generate(*_args, **_kwargs):
@@ -178,7 +232,7 @@ class TestStreamingVideoOutputWebSocket:
 
         with TestClient(app) as client:
             with client.websocket_connect("/v1/realtime/video") as ws:
-                ws.send_json({"type": "session.interaction", "interaction": {"prompt": "too early"}})
+                ws.send_json({"type": "session.interaction", "interaction": {"event": {"prompt": "too early"}}})
                 err = ws.receive_json()
                 assert err["type"] == "error"
                 assert err["message"] == "Expected session.start, got: session.interaction"
@@ -208,8 +262,13 @@ class TestStreamingVideoOutputWebSocket:
             with client.websocket_connect("/v1/realtime/video") as ws:
                 ws.send_json({"type": "session.start", "prompt": "A cat walking in the rain"})
                 assert ws.receive_json()["type"] == "video.start"
-                assert ws.receive_bytes() == b"mp4-chunk-0"
-                assert ws.receive_bytes() == b"mp4-trailer"
+                metadata, chunk = _receive_video_chunk(ws)
+                assert metadata["kind"] == "media"
+                assert chunk == b"mp4-chunk-0"
+                metadata, chunk = _receive_video_chunk(ws)
+                assert metadata["kind"] == "trailer"
+                assert metadata["generation_chunk_index"] is None
+                assert chunk == b"mp4-trailer"
 
                 done = ws.receive_json()
                 assert done["type"] == "session.done"
@@ -241,7 +300,7 @@ class TestStreamingVideoOutputWebSocket:
             with client.websocket_connect("/v1/realtime/video") as ws:
                 ws.send_json({"type": "session.start", "prompt": "hello"})
                 assert ws.receive_json()["type"] == "video.start"
-                assert ws.receive_bytes() == b"mp4-chunk-0"
+                assert _receive_video_chunk(ws)[1] == b"mp4-chunk-0"
                 err = ws.receive_json()
                 assert err["type"] == "error"
                 assert error_message in err["message"]
@@ -369,8 +428,8 @@ class TestStreamingVideoOutputStallTimeout:
             with client.websocket_connect("/v1/realtime/video") as ws:
                 ws.send_json({"type": "session.start", "prompt": "slow generation"})
                 assert ws.receive_json()["type"] == "video.start"
-                assert ws.receive_bytes() == b"mp4-chunk-0"
-                assert ws.receive_bytes() == b"mp4-chunk-1"
+                assert _receive_video_chunk(ws)[1] == b"mp4-chunk-0"
+                assert _receive_video_chunk(ws)[1] == b"mp4-chunk-1"
                 done = ws.receive_json()
                 assert done["type"] == "session.done"
                 assert done["stopped"] is False
@@ -509,20 +568,87 @@ class TestStreamingVideoOutputPromptUpdate:
                 assert start["type"] == "video.start"
                 request_id = start["request_id"]
 
-                assert ws.receive_bytes() == b"mp4-chunk-0"
+                assert _receive_video_chunk(ws)[1] == b"mp4-chunk-0"
 
-                ws.send_json({"type": "session.interaction", "interaction": {"prompt": "new scene"}})
-                accepted = ws.receive_json()
-                assert accepted["type"] == "session.interaction.accepted"
+                ws.send_json(
+                    {
+                        "type": "session.interaction",
+                        "interaction": {
+                            "event_id": "ui-update-42",
+                            "event": {"prompt": "new scene"},
+                        },
+                    }
+                )
+                queued = ws.receive_json()
+                assert queued["type"] == "session.interaction.queued"
+                assert queued["request_id"] == request_id
+                assert queued["event_id"] == "ui-update-42"
 
-                assert ws.receive_bytes() == b"mp4-chunk-1"
+                assert _receive_video_chunk(ws)[1] == b"mp4-chunk-1"
                 done = ws.receive_json()
                 assert done["type"] == "session.done"
                 assert done["stopped"] is False
 
         engine_client.submit_interaction_async.assert_awaited_once_with(
             request_id,
-            interaction={"prompt": "new scene"},
+            interaction={"event_id": "ui-update-42", "event": {"prompt": "new scene"}},
+        )
+
+    def test_prompt_update_rejects_duplicate_event_id(self, mocker: MockerFixture):
+        """Any repeated event_id is rejected at the session API boundary."""
+
+        async def mock_generate(*_args, **_kwargs):
+            yield OmniRequestOutput.from_diffusion(
+                request_id="req-ws",
+                images=[_fake_video_frames(2)],
+                final_output_type="image",
+                finished=False,
+            )
+            await asyncio.sleep(0.3)
+            yield OmniRequestOutput.from_diffusion(
+                request_id="req-ws",
+                images=[_fake_video_frames(2)],
+                final_output_type="image",
+                finished=True,
+            )
+
+        app, _handler, engine_client = _build_test_app(
+            mocker=mocker,
+            streaming_chunks=[(b"mp4-chunk-0", False), (b"mp4-chunk-1", True)],
+            mock_generate=mock_generate,
+        )
+
+        interaction = {
+            "type": "session.interaction",
+            "interaction": {
+                "event_id": "ui-update-42",
+                "event": {"prompt": "new scene"},
+            },
+        }
+
+        with TestClient(app) as client:
+            with client.websocket_connect("/v1/realtime/video") as ws:
+                ws.send_json({"type": "session.start", "prompt": "initial scene"})
+                request_id = ws.receive_json()["request_id"]
+                assert _receive_video_chunk(ws)[1] == b"mp4-chunk-0"
+
+                ws.send_json(interaction)
+                queued = ws.receive_json()
+                assert queued["type"] == "session.interaction.queued"
+
+                ws.send_json(interaction)
+                err = ws.receive_json()
+                assert err["type"] == "error"
+                assert err["code"] == "event_id_conflict"
+                assert err["request_id"] == request_id
+                assert err["event_id"] == "ui-update-42"
+
+                assert _receive_video_chunk(ws)[1] == b"mp4-chunk-1"
+                assert ws.receive_json()["type"] == "session.done"
+
+        engine_client.submit_interaction_async.assert_awaited_once_with(
+            request_id,
+            interaction={"event_id": "ui-update-42", "event": {"prompt": "new scene"}},
         )
 
     def test_prompt_update_forwards_transition_chunks(self, mocker: MockerFixture):
@@ -553,21 +679,29 @@ class TestStreamingVideoOutputPromptUpdate:
             with client.websocket_connect("/v1/realtime/video") as ws:
                 ws.send_json({"type": "session.start", "prompt": "initial"})
                 request_id = ws.receive_json()["request_id"]
-                assert ws.receive_bytes() == b"mp4-chunk-0"
+                assert _receive_video_chunk(ws)[1] == b"mp4-chunk-0"
 
                 ws.send_json(
                     {
                         "type": "session.interaction",
-                        "interaction": {"prompt": "fade to sunset", "transition_chunks": 5},
+                        "interaction": {
+                            "event_id": "ui-update-42",
+                            "event": {"prompt": "fade to sunset"},
+                            "transition_chunks": 5,
+                        },
                     }
                 )
-                assert ws.receive_json()["type"] == "session.interaction.accepted"
-                assert ws.receive_bytes() == b"mp4-chunk-1"
+                assert ws.receive_json()["type"] == "session.interaction.queued"
+                assert _receive_video_chunk(ws)[1] == b"mp4-chunk-1"
                 assert ws.receive_json()["type"] == "session.done"
 
         engine_client.submit_interaction_async.assert_awaited_once_with(
             request_id,
-            interaction={"prompt": "fade to sunset", "transition_chunks": 5},
+            interaction={
+                "event_id": "ui-update-42",
+                "event": {"prompt": "fade to sunset"},
+                "transition_chunks": 5,
+            },
         )
 
     def test_prompt_update_rejects_empty_prompt(self, mocker: MockerFixture):
@@ -598,14 +732,14 @@ class TestStreamingVideoOutputPromptUpdate:
             with client.websocket_connect("/v1/realtime/video") as ws:
                 ws.send_json({"type": "session.start", "prompt": "initial"})
                 assert ws.receive_json()["type"] == "video.start"
-                assert ws.receive_bytes() == b"mp4-chunk-0"
+                assert _receive_video_chunk(ws)[1] == b"mp4-chunk-0"
 
-                ws.send_json({"type": "session.interaction", "interaction": {"prompt": "   "}})
+                ws.send_json({"type": "session.interaction", "interaction": {"event": {"prompt": "   "}}})
                 err = ws.receive_json()
                 assert err["type"] == "error"
-                assert "non-empty prompt" in err["message"]
+                assert "non-empty event.prompt" in err["message"]
 
-                assert ws.receive_bytes() == b"mp4-chunk-1"
+                assert _receive_video_chunk(ws)[1] == b"mp4-chunk-1"
                 assert ws.receive_json()["type"] == "session.done"
 
         engine_client.submit_interaction_async.assert_not_called()
@@ -646,18 +780,21 @@ class TestStreamingVideoOutputPromptUpdate:
             with client.websocket_connect("/v1/realtime/video") as ws:
                 ws.send_json({"type": "session.start", "prompt": "initial"})
                 assert ws.receive_json()["type"] == "video.start"
-                assert ws.receive_bytes() == b"mp4-chunk-0"
+                assert _receive_video_chunk(ws)[1] == b"mp4-chunk-0"
 
                 ws.send_json(
                     {
                         "type": "session.interaction",
-                        "interaction": {"prompt": "new scene", "transition_chunks": transition_chunks},
+                        "interaction": {
+                            "event": {"prompt": "new scene"},
+                            "transition_chunks": transition_chunks,
+                        },
                     }
                 )
                 err = ws.receive_json()
                 assert err["type"] == "error"
 
-                assert ws.receive_bytes() == b"mp4-chunk-1"
+                assert _receive_video_chunk(ws)[1] == b"mp4-chunk-1"
                 assert ws.receive_json()["type"] == "session.done"
 
         engine_client.submit_interaction_async.assert_not_called()
@@ -691,14 +828,24 @@ class TestStreamingVideoOutputPromptUpdate:
             with client.websocket_connect("/v1/realtime/video") as ws:
                 ws.send_json({"type": "session.start", "prompt": "initial"})
                 assert ws.receive_json()["type"] == "video.start"
-                assert ws.receive_bytes() == b"mp4-chunk-0"
+                assert _receive_video_chunk(ws)[1] == b"mp4-chunk-0"
 
-                ws.send_json({"type": "session.interaction", "interaction": {"prompt": "new scene"}})
+                ws.send_json(
+                    {
+                        "type": "session.interaction",
+                        "interaction": {
+                            "event_id": "ui-update-42",
+                            "event": {"prompt": "new scene"},
+                        },
+                    }
+                )
                 err = ws.receive_json()
                 assert err["type"] == "error"
                 assert "Failed to apply interaction" in err["message"]
+                assert err["code"] == "interaction_failed"
+                assert err["event_id"] == "ui-update-42"
 
-                assert ws.receive_bytes() == b"mp4-chunk-1"
+                assert _receive_video_chunk(ws)[1] == b"mp4-chunk-1"
                 assert ws.receive_json()["type"] == "session.done"
 
         engine_client.submit_interaction_async.assert_awaited_once()
@@ -729,7 +876,11 @@ class TestStreamingVideoOutputPromptUpdate:
                 json.dumps(
                     {
                         "type": "session.interaction",
-                        "interaction": {"prompt": "mid-stream update", "transition_chunks": 2},
+                        "interaction": {
+                            "event_id": "ui-update-42",
+                            "event": {"prompt": "mid-stream update"},
+                            "transition_chunks": 2,
+                        },
                     }
                 )
             )
@@ -743,8 +894,12 @@ class TestStreamingVideoOutputPromptUpdate:
 
         start = next(m for m in ws.sent_json if m.get("type") == "video.start")
         request_id = start["request_id"]
-        assert any(m.get("type") == "session.interaction.accepted" for m in ws.sent_json)
+        assert any(m.get("type") == "session.interaction.queued" for m in ws.sent_json)
         engine_client.submit_interaction_async.assert_awaited_once_with(
             request_id,
-            interaction={"prompt": "mid-stream update", "transition_chunks": 2},
+            interaction={
+                "event_id": "ui-update-42",
+                "event": {"prompt": "mid-stream update"},
+                "transition_chunks": 2,
+            },
         )

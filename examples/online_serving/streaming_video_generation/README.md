@@ -21,12 +21,13 @@ The `--diffusion-streaming-output` CLI flag is forwarded as `streaming_output=Tr
 | Direction | Message | Format | Description |
 | --- | --- | --- | --- |
 | Client to server | `session.start` | JSON text: `{"type":"session.start","model":"...","prompt":"...","format":"m4s"}` | Starts generation. `format` is optional and accepts `m4s` (default). Sampling fields such as `width`, `height`, `fps`, `num_frames`, and `extra_params` may be included. |
-| Client to server | `session.interaction` | JSON text: `{"type":"session.interaction","interaction":{"prompt":"...","transition_chunks":3}}` | Updates the active prompt midway through generation. `transition_chunks` is optional and defaults to `3`. |
+| Client to server | `session.interaction` | JSON text: `{"type":"session.interaction","interaction":{"event_id":"xxx","event":{"prompt":"..."},"transition_chunks":3}}` | Updates the active prompt midway through generation. `event_id` is optional and `transition_chunks` defaults to the model setting. |
 | Server to client | `video.start` | JSON text: `{"type":"video.start","request_id":"...","format":"m4s","config":{...}}` | Confirms the session and mirrors the accepted `format`. |
+| Server to client | `video.chunk_metadata` | JSON text: `{"type":"video.chunk_metadata","request_id":"...","kind":"media","transport_chunk_index":0,"generation_chunk_index":0,"num_frames":9,"byte_length":1234,"started_event_ids":[],"active_event_ids":[],"completed_event_ids":[]}` | Precedes each binary frame and describes the immediately following payload. |
 | Server to client | Video chunk | Binary WebSocket frame | Fragmented MP4 (`m4s`) video bytes. |
 | Client to server | `session.stop` | JSON text: `{"type":"session.stop"}` | Requests cancellation of the active session. |
 | Client to server | `session.ping` | JSON text: `{"type":"session.ping"}` | Optional keepalive; refreshes the server stall clock. |
-| Server to client | `session.interaction.accepted` | JSON text: `{"type":"session.interaction.accepted"}` | Confirms the server queued the interaction for the active request. |
+| Server to client | `session.interaction.queued` | JSON text: `{"type":"session.interaction.queued","request_id":"...","event_id":"xxx"}` | Confirms the server queued the interaction for the active request. |
 | Server to client | `session.done` | JSON text: `{"type":"session.done","request_id":"...","chunks":3,"stopped":false}` | Ends a completed or stopped session. |
 | Server to client | `session.pong` | JSON text: `{"type":"session.pong"}` | Reply to `session.ping`. |
 | Server to client | `error` | JSON text: `{"type":"error","message":"..."}` | Reports invalid input, unsupported formats, inactive requests, unsupported prompt updates, generation failures, control-message errors, or stall timeout. |

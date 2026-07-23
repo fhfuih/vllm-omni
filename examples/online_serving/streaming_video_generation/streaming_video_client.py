@@ -157,7 +157,8 @@ async def _run_prompt_update_scheduler(
         payload = {
             "type": "session.interaction",
             "interaction": {
-                "prompt": update.prompt,
+                "event_id": f"scheduled-{update.at:.3f}",
+                "event": {"prompt": update.prompt},
                 "transition_chunks": update.transition_chunks,
             },
         }
@@ -224,6 +225,7 @@ async def stream_video(args: argparse.Namespace) -> None:
     ws = None
     send_lock = asyncio.Lock()
     prompt_update_task: asyncio.Task[None] | None = None
+    pending_chunk_metadata: dict[str, Any] | None = None
 
     try:
         async with connect(url, max_size=None) as websocket:
@@ -240,6 +242,9 @@ async def stream_video(args: argparse.Namespace) -> None:
                 now = time.perf_counter()
 
                 if isinstance(message, bytes):
+                    # Use chunk metadata just received before video chunks
+                    metadata = pending_chunk_metadata or {}
+                    pending_chunk_metadata = None
                     chunks.append(message)
                     chunk_bytes = len(message)
                     chunk_elapsed = now - last_chunk_at
@@ -257,8 +262,11 @@ async def stream_video(args: argparse.Namespace) -> None:
                     total_elapsed = now - started_at
                     print(
                         f"[chunk {len(chunks):03d}] "
+                        f"kind={metadata.get('kind', 'media')} "
                         f"bytes={chunk_bytes} "
-                        f"frames={chunk_frames} "
+                        f"frames={metadata.get('num_frames', chunk_frames)} "
+                        f"generation_chunk={metadata.get('generation_chunk_index')} "
+                        f"active_interactions={metadata.get('active_event_ids', [])} "
                         f"elapsed={chunk_elapsed:.2f}s "
                         f"total_bytes={total_bytes} "
                         f"total_frames={total_frames} "
@@ -281,8 +289,11 @@ async def stream_video(args: argparse.Namespace) -> None:
                                 send_lock=send_lock,
                             )
                         )
-                elif msg_type == "session.interaction.accepted":
-                    print("Interaction accepted by server")
+                elif msg_type == "video.chunk_metadata":
+                    # Save the metadata for the incoming video chunk
+                    pending_chunk_metadata = msg
+                elif msg_type == "session.interaction.queued":
+                    print(f"Interaction queued by server: event_id={msg.get('event_id')}")
                 elif msg_type == "session.done":
                     print(f"Session complete: {json.dumps(msg, ensure_ascii=False)}")
                     done = True

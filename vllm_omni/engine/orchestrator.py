@@ -591,6 +591,7 @@ class Orchestrator:
         """Handle a midway interaction for an active streaming diffusion request."""
         stage_id = 0
         request_id = msg.request_id
+        event_id = msg.interaction.get("event_id")
         req_state = self.request_states.get(request_id)
         if req_state is None:
             logger.info("[Orchestrator] Dropping interaction for inactive req %s", request_id)
@@ -599,6 +600,7 @@ class Orchestrator:
                     error=f"No active request for interaction: {request_id}",
                     fatal=False,
                     request_id=request_id,
+                    event_id=event_id,
                     stage_id=stage_id,
                 )
             )
@@ -618,6 +620,7 @@ class Orchestrator:
                     error=f"Failed interaction for request {request_id}: {exc}",
                     fatal=False,
                     request_id=request_id,
+                    event_id=event_id,
                     stage_id=stage_id,
                 )
             )

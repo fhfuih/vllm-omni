@@ -37,7 +37,7 @@ from vllm_omni.engine.stage_client import StagePoolClient
 from vllm_omni.engine.stage_init_utils import StageMetadata
 from vllm_omni.engine.stage_pool import StagePool
 from vllm_omni.entrypoints.async_omni import AsyncEventResolver, AsyncOmni
-from vllm_omni.inputs.data import OmniDiffusionSamplingParams
+from vllm_omni.inputs.data import OmniDiffusionSamplingParams, OmniInteractionPrompt
 from vllm_omni.outputs import OmniRequestOutput
 
 pytestmark = [pytest.mark.core_model, pytest.mark.diffusion, pytest.mark.cpu]
@@ -81,6 +81,21 @@ def _make_diffusion_model_runner(*, pipeline, streaming_output: bool = True) -> 
     return runner
 
 
+def _prompt_interaction(
+    prompt: str = "updated",
+    *,
+    event_id: str = "ui-update-1",
+    transition_chunks: int | None = None,
+) -> OmniInteractionPrompt:
+    interaction: dict[str, Any] = {
+        "event_id": event_id,
+        "event": {"prompt": prompt},
+    }
+    if transition_chunks is not None:
+        interaction["transition_chunks"] = transition_chunks
+    return cast(OmniInteractionPrompt, interaction)
+
+
 class TestPromptUpdateExecution:
     """Runner, InputBatch cache, and pipeline chunk-boundary behavior."""
 
@@ -90,10 +105,11 @@ class TestPromptUpdateExecution:
         state = _make_diffusion_request_state()
         runner.state_cache["req-1"] = state
 
-        runner.submit_interaction("req-1", {"prompt": "updated", "transition_chunks": 2})
+        runner.submit_interaction("req-1", _prompt_interaction(transition_chunks=2))
 
         pipeline.encode_prompt.assert_called_once()  # pyright: ignore[reportAttributeAccessIssue]
         pending = state.extra["pending_prompt_update"]
+        assert pending["event_id"] == "ui-update-1"
         assert pending["transition_chunks"] == 2
         assert torch.equal(pending["target_prompt_embeds"], torch.full((1, 4, 2), 2.0))
 
@@ -105,20 +121,20 @@ class TestPromptUpdateExecution:
 
         runner = _make_diffusion_model_runner(pipeline=_UnsupportedPipeline())
         with pytest.raises(ValueError, match="not supported"):
-            runner.submit_interaction("req-1", {"prompt": "updated"})
+            runner.submit_interaction("req-1", _prompt_interaction())
 
     def test_runner_prompt_update_rejects_missing_request(self, pipeline) -> None:
         """Runner rejects prompt updates when no active request state exists."""
         runner = _make_diffusion_model_runner(pipeline=pipeline)
         with pytest.raises(ValueError, match="No active request state"):
-            runner.submit_interaction("missing", {"prompt": "updated"})
+            runner.submit_interaction("missing", _prompt_interaction())
 
     @pytest.mark.parametrize(
         "interaction",
         [
             {},
             {"multi_modal_data": {"camera": {"type": "pose"}}},
-            {"prompt": "updated", "multi_modal_data": {"camera": {"type": "pose"}}},
+            {"event": {"prompt": "updated", "multi_modal_data": {"camera": {"type": "pose"}}}},
         ],
     )
     def test_runner_interaction_rejects_structural_payloads_until_implemented(
@@ -157,7 +173,7 @@ class TestPromptUpdateExecution:
         """HeliosPipeline queues target embeds without mutating current prompt_embeds."""
         state = _make_diffusion_request_state()
 
-        pipeline.prepare_prompt_update(state, "new scene", transition_chunks=2)
+        pipeline.prepare_prompt_update(state, "new scene", "ui-update-1", transition_chunks=2)
 
         pending = state.extra["pending_prompt_update"]
         assert torch.equal(pending["target_prompt_embeds"], torch.full((1, 4, 2), 2.0))
@@ -173,36 +189,43 @@ class TestPromptUpdateExecution:
             ValueError,
             match="prompt_update is not allowed before initial generation has started",
         ):
-            pipeline.prepare_prompt_update(state, "new scene", transition_chunks=2)
+            pipeline.prepare_prompt_update(state, "new scene", "ui-update-1", transition_chunks=2)
 
         assert "pending_prompt_update" not in state.extra
 
     def test_helios_apply_prompt_update_at_chunk_boundary_starts_transition(self, pipeline: HeliosPipeline) -> None:
         """At chunk boundary, starts transition state and bumps prompt_update_version."""
         state = _make_diffusion_request_state()
-        pipeline.prepare_prompt_update(state, "new scene", transition_chunks=2)
+        pipeline.prepare_prompt_update(state, "new scene", "ui-update-1", transition_chunks=2)
 
         pipeline._apply_prompt_update_at_chunk_boundary(state)
 
         assert state.extra.get("prompt_update_state") is not None
-        assert torch.equal(state.prompt_embeds, torch.zeros(1, 4, 2))  # pyright: ignore[reportArgumentType]
+        assert torch.equal(state.prompt_embeds, torch.ones(1, 4, 2))  # pyright: ignore[reportArgumentType]
         assert state.extra["prompt_update_version"] == 1
+        assert state.extra["prompt_update_chunk_metadata"] == {
+            "started_event_ids": ["ui-update-1"],
+            "active_event_ids": ["ui-update-1"],
+            "completed_event_ids": [],
+        }
 
     def test_helios_apply_prompt_update_advances_transition_over_chunks(self, pipeline: HeliosPipeline) -> None:
         """At chunk boundary, interpolates embeds until the target prompt is reached."""
         state = _make_diffusion_request_state()
-        pipeline.prepare_prompt_update(state, "new scene", transition_chunks=3)
+        pipeline.prepare_prompt_update(state, "new scene", "ui-update-1", transition_chunks=3)
         pipeline._apply_prompt_update_at_chunk_boundary(state)
 
-        for _ in range(3):
+        assert torch.allclose(state.prompt_embeds, torch.full((1, 4, 2), 2.0 / 3.0))  # pyright: ignore[reportArgumentType]
+
+        for _ in range(2):
             pipeline._apply_prompt_update_at_chunk_boundary(state)
 
         assert torch.allclose(state.prompt_embeds, torch.full((1, 4, 2), 2.0))  # pyright: ignore[reportArgumentType]
-        assert state.extra["prompt_update_version"] == 4
+        assert state.extra["prompt_update_version"] == 3
 
         # Further chunk boundaries after completion must not bump the version.
         pipeline._apply_prompt_update_at_chunk_boundary(state)
-        assert state.extra["prompt_update_version"] == 4
+        assert state.extra["prompt_update_version"] == 3
 
 
 class TestPromptUpdateIntegration:
@@ -228,7 +251,7 @@ class TestPromptUpdateIntegration:
         await orchestrator._handle_interaction(
             InteractionMessage(
                 request_id="req-1",
-                interaction={"prompt": "new scene", "transition_chunks": 2},
+                interaction=_prompt_interaction("new scene", event_id="ui-update-1", transition_chunks=2),
             )
         )
 
@@ -237,6 +260,7 @@ class TestPromptUpdateIntegration:
             error="Failed interaction for request req-1: prompt embeds are not ready",
             fatal=False,
             request_id="req-1",
+            event_id="ui-update-1",
             stage_id=0,
         )
 
@@ -263,7 +287,7 @@ class TestPromptUpdateIntegration:
             await orchestrator._handle_interaction(
                 InteractionMessage(
                     request_id="req-1",
-                    interaction={"prompt": "new scene", "transition_chunks": 2},
+                    interaction=_prompt_interaction("new scene", event_id="ui-update-1", transition_chunks=2),
                 )
             )
         finally:
@@ -272,6 +296,7 @@ class TestPromptUpdateIntegration:
         pipeline.prepare_prompt_update.assert_called_once_with(  # pyright: ignore[reportAttributeAccessIssue]
             runner.state_cache["req-1"],
             "new scene",
+            "ui-update-1",
             2,
         )
         msg = output_queue.get_nowait()
@@ -279,6 +304,7 @@ class TestPromptUpdateIntegration:
             error="Failed interaction for request req-1: prompt embeds are not ready",
             fatal=False,
             request_id="req-1",
+            event_id="ui-update-1",
             stage_id=0,
         )
 
@@ -306,7 +332,7 @@ class TestPromptUpdateIntegration:
 
             await omni.submit_interaction_async(
                 "req-omni",
-                interaction={"prompt": "new scene", "transition_chunks": 2},
+                interaction=_prompt_interaction("new scene", event_id="ui-update-1", transition_chunks=2),
             )
 
             outputs = await generate_task

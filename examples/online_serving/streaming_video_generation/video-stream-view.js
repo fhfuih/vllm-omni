@@ -100,7 +100,8 @@
         const payload = {
           type: "session.interaction",
           interaction: {
-            prompt: update.prompt,
+            event_id: "scheduled-" + atSeconds.toFixed(3),
+            event: { prompt: update.prompt },
             transition_chunks: transitionChunks,
           },
         };
@@ -192,8 +193,10 @@
           if (msg.type === "video.start") {
             log("Video session started: request_id=" + (msg.request_id || "") + " format=" + (msg.format || ""));
             schedulePromptUpdates(config.prompt_updates);
-          } else if (msg.type === "session.interaction.accepted") {
-            log("Interaction accepted by server");
+          } else if (msg.type === "video.chunk_metadata") {
+            log("Chunk metadata: " + JSON.stringify(msg));
+          } else if (msg.type === "session.interaction.queued") {
+            log("Interaction queued by server: event_id=" + (msg.event_id || ""));
           } else if (msg.type === "session.done") {
             done = true;
             setStatus("Done");

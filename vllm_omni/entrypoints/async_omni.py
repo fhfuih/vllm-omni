@@ -818,8 +818,9 @@ class AsyncOmni(EngineClient, OmniBase):
         ``request_id`` is the external id created by the server-side session,
         matching the value passed to :meth:`generate`.
         """
-        prompt = interaction.get("prompt")
-        if "prompt" in interaction and (not isinstance(prompt, str) or not prompt):
+        event = interaction.get("event")
+        prompt = event.get("prompt") if isinstance(event, dict) else None
+        if isinstance(event, dict) and "prompt" in event and (not isinstance(prompt, str) or not prompt):
             raise ValueError("prompt must be non-empty")
         transition_chunks = interaction.get("transition_chunks")
         if transition_chunks is not None and transition_chunks < 0:

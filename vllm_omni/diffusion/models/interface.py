@@ -120,6 +120,7 @@ class SupportsPromptUpdate(Protocol):
         self,
         state: StepRequestState,
         prompt: str,
+        event_id: str,
         transition_chunks: int | None = None,
     ) -> None:
         """Encode and queue a prompt update on request-local state."""

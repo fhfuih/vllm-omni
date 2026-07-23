@@ -31,6 +31,7 @@ class PromptUpdateExtra(TypedDict, total=False):
 
     pending_prompt_update: _PendingPromptUpdate
     prompt_update_state: _PromptUpdateState
+    prompt_update_chunk_metadata: _PromptUpdateChunkMetadata
     prompt_update_version: int  # Bumped when prompt_embeds change; invalidates InputBatch cache.
 
     # The lock for storing/updating pending prompt updates.
@@ -64,6 +65,7 @@ class PromptUpdateMixin:
         self,
         state: StepRequestState,
         prompt: str,
+        event_id: str,
         transition_chunks: int | None = None,
     ) -> None:
         """Encode and queue a prompt update to apply at the next chunk boundary.
@@ -73,6 +75,8 @@ class PromptUpdateMixin:
         """
         if not prompt:
             raise ValueError("prompt must be non-empty")
+        if not event_id:
+            raise ValueError("event_id must be non-empty")
         if state.prompt_embeds is None:
             raise ValueError(
                 f"prompt_update is not allowed before initial generation has started (request_id={state.request_id!r})"
@@ -93,6 +97,7 @@ class PromptUpdateMixin:
         extra = cast(PromptUpdateExtra, state.extra)
         with self._prompt_update_lock(extra):
             extra["pending_prompt_update"] = {
+                "event_id": event_id,
                 "prompt": prompt,
                 "target_prompt_embeds": target_prompt_embeds,
                 "transition_chunks": duration,
@@ -106,6 +111,9 @@ class PromptUpdateMixin:
             pending = extra.pop("pending_prompt_update", None)
         embeds_changed = False
         next_chunk_index = state.chunk_index
+        started_event_ids: list[str] = []
+        active_event_ids: list[str] = []
+        completed_event_ids: list[str] = []
 
         # If current transition is not complete, advance it.
         # After completion, leave prompt_update_state in place (so a later pending
@@ -119,9 +127,11 @@ class PromptUpdateMixin:
                 update_state.advance_transition()
                 state.prompt_embeds = update_state.blended_prompt_embeds()
                 embeds_changed = True
+                active_event_ids.append(update_state.event_id)
                 if update_state.elapsed_transition_chunks >= update_state.transition_chunks:
                     state.prompt_embeds = update_state.target_prompt_embeds
                     update_state.source_prompt_embeds = update_state.target_prompt_embeds
+                    completed_event_ids.append(update_state.event_id)
                     if update_state.target_prompt is not None:
                         logger.debug(
                             "prompt_update transition complete request_id=%s next_chunk_index=%d prompt=%.20s...",
@@ -141,15 +151,21 @@ class PromptUpdateMixin:
             target = pending["target_prompt_embeds"]
             duration = int(pending["transition_chunks"])
             prompt = str(pending.get("prompt", ""))
+            event_id = pending.get("event_id")
             update_state = _PromptUpdateState(
                 source_prompt_embeds=source,
                 target_prompt_embeds=target,
                 transition_chunks=duration,
+                event_id=event_id,
                 target_prompt=prompt,
             )
             extra["prompt_update_state"] = update_state
+            started_event_ids.append(event_id)
+            active_event_ids.append(event_id)
             if duration <= 0:
+                # A hard/immediate transition
                 state.prompt_embeds = target
+                completed_event_ids.append(event_id)
                 logger.debug(
                     "prompt_update sharp transition request_id=%s next_chunk_index=%d prompt=%.20s...",
                     state.request_id,
@@ -157,7 +173,13 @@ class PromptUpdateMixin:
                     prompt,
                 )
             else:
+                # A transition that really takes some time
+                update_state.advance_transition()
                 state.prompt_embeds = update_state.blended_prompt_embeds()
+                if update_state.elapsed_transition_chunks >= update_state.transition_chunks:
+                    state.prompt_embeds = update_state.target_prompt_embeds
+                    update_state.source_prompt_embeds = update_state.target_prompt_embeds
+                    completed_event_ids.append(event_id)
                 logger.debug(
                     "prompt_update transition start request_id=%s next_chunk_index=%d prompt=%.20s...",
                     state.request_id,
@@ -171,6 +193,12 @@ class PromptUpdateMixin:
             new_version = int(extra.get("prompt_update_version", 0)) + 1
             extra["prompt_update_version"] = new_version
 
+        extra["prompt_update_chunk_metadata"] = {
+            "started_event_ids": started_event_ids,
+            "active_event_ids": active_event_ids,
+            "completed_event_ids": completed_event_ids,
+        }
+
 
 @dataclass
 class _PromptUpdateState:
@@ -179,6 +207,7 @@ class _PromptUpdateState:
     source_prompt_embeds: torch.Tensor
     target_prompt_embeds: torch.Tensor
     transition_chunks: int
+    event_id: str
     elapsed_transition_chunks: int = 0
     target_prompt: str | None = None
 
@@ -204,6 +233,13 @@ class _PromptUpdateState:
 
 
 class _PendingPromptUpdate(TypedDict):
+    event_id: str
     prompt: str
     target_prompt_embeds: torch.Tensor
     transition_chunks: int
+
+
+class _PromptUpdateChunkMetadata(TypedDict):
+    started_event_ids: list[str]
+    active_event_ids: list[str]
+    completed_event_ids: list[str]
