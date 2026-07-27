@@ -1,0 +1,148 @@
+[
+  {
+    "test_name": "test_qwen_image_edit_2511_cfg2",
+    "mark": [
+      {
+        "hardware_marks": {
+          "res": {
+            "cuda": "H100"
+          },
+          "num_cards": 2
+        }
+      },
+      "full_model",
+      "diffusion"
+    ],
+    "description": "CFG parallel=2 with the on-device modulate-index cache",
+    "server_type": "vllm-omni",
+    "server_params": {
+      "model": "Qwen/Qwen-Image-Edit-2511",
+      "serve_args": {
+        "cfg-parallel-size": 2,
+        "enable-diffusion-pipeline-profiler": true
+      }
+    },
+    "benchmark_params": [
+      {
+        "name": "1024x1024_steps20_i2i_2img",
+        "dataset": "random",
+        "task": "i2i",
+        "width": 1024,
+        "height": 1024,
+        "num-inference-steps": 20,
+        "num-prompts": 3,
+        "max-concurrency": 1,
+        "num-input-images": 2,
+        "enable-negative-prompt": true,
+        "warmup-requests": 1,
+        "warmup-concurrency": 1,
+        "warmup-num-inference-steps": 2,
+        "baseline": {
+          "throughput_qps": 0.08,
+          "latency_mean": 12.25,
+          "peak_memory_mb_max": 63000.0,
+          "peak_memory_mb_mean": 63000.0
+        }
+      }
+    ]
+  },
+  {
+    "test_name": "test_qwen_image_edit_2511_cfg2_vae_patch2",
+    "mark": [
+      {
+        "hardware_marks": {
+          "res": {
+            "cuda": "H100"
+          },
+          "num_cards": 2
+        }
+      },
+      "full_model",
+      "diffusion"
+    ],
+    "description": "CFG parallel=2 + VAE patch parallel=2 with the on-device modulate-index cache",
+    "server_type": "vllm-omni",
+    "server_params": {
+      "model": "Qwen/Qwen-Image-Edit-2511",
+      "serve_args": {
+        "cfg-parallel-size": 2,
+        "vae-patch-parallel-size": 2,
+        "vae-use-tiling": true,
+        "enable-diffusion-pipeline-profiler": true
+      }
+    },
+    "benchmark_params": [
+      {
+        "name": "1024x1024_steps20_i2i_2img",
+        "dataset": "random",
+        "task": "i2i",
+        "width": 1024,
+        "height": 1024,
+        "num-inference-steps": 20,
+        "num-prompts": 3,
+        "max-concurrency": 1,
+        "num-input-images": 2,
+        "enable-negative-prompt": true,
+        "warmup-requests": 1,
+        "warmup-concurrency": 1,
+        "warmup-num-inference-steps": 2,
+        "baseline": {
+          "throughput_qps": 0.077,
+          "latency_mean": 12.75,
+          "peak_memory_mb_max": 59400.0,
+          "peak_memory_mb_mean": 59400.0
+        }
+      }
+    ]
+  },
+  {
+    "test_name": "test_qwen_image_edit_2511_cfg2_ulysses2_vae_patch4",
+    "mark": [
+      {
+        "hardware_marks": {
+          "res": {
+            "cuda": "H100"
+          },
+          "num_cards": 4
+        }
+      },
+      "full_model",
+      "diffusion"
+    ],
+    "description": "CFG parallel=2 + Ulysses=2 + VAE patch parallel=4 with the on-device modulate-index cache",
+    "server_type": "vllm-omni",
+    "server_params": {
+      "model": "Qwen/Qwen-Image-Edit-2511",
+      "serve_args": {
+        "cfg-parallel-size": 2,
+        "ulysses-degree": 2,
+        "vae-patch-parallel-size": 4,
+        "vae-use-tiling": true,
+        "enable-diffusion-pipeline-profiler": true
+      }
+    },
+    "benchmark_params": [
+      {
+        "name": "1024x1024_steps20_i2i_2img",
+        "dataset": "random",
+        "task": "i2i",
+        "width": 1024,
+        "height": 1024,
+        "num-inference-steps": 20,
+        "num-prompts": 3,
+        "max-concurrency": 1,
+        "num-input-images": 2,
+        "enable-negative-prompt": true,
+        "warmup-requests": 1,
+        "warmup-concurrency": 1,
+        "warmup-num-inference-steps": 2,
+        "baseline": {
+          "throughput_qps": 0.114,
+          "latency_mean": 8.62,
+          "peak_memory_mb_max": 58850.0,
+          "peak_memory_mb_mean": 58850.0
+        }
+      }
+    ]
+  }
+]

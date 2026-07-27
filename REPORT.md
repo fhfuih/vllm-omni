@@ -2,7 +2,7 @@
 
 ## Measurement protocol
 
-- Hardware: 4× NVIDIA L20X (143,771 MiB each, NV18 between GPUs); runs were restricted to GPU 0 or GPUs 0–1.
+- Original-audit hardware: 4× NVIDIA L20X (143,771 MiB each, NV18 between GPUs); the original runs were restricted to GPU 0 or GPUs 0–1. The reimplementation verification below also uses all four GPUs.
 - Environment: repository `./.venv`, PyTorch 2.11.0+cu130, vLLM 0.25.0.
 - Workload: `Qwen/Qwen-Image-Edit-2511`, random dataset, two 512×512 white input images, 1536×1536 output, 20 steps, positive prompt `Random prompt N for benchmarking diffusion models`, negative prompt `Negative prompt N for benchmarking diffusion models`, concurrency 1.
 - Performance benchmark: one two-step warmup followed by three measured requests. `benchmark_2gpu.json` is authoritative.
@@ -43,7 +43,7 @@ Perfetto SQL summaries are in `perfetto_summary.json`; timeline gap reports are 
 
 `ModulateIndexPrepare` rebuilt a 17,408-element Python list, converted it to a CPU tensor, and copied it from pageable memory to GPU on every DiT branch invocation. The value depends only on image shapes and device.
 
-The change adds a bounded 16-entry on-device cache keyed by shape and device. It does not modify RMSNorm or any model arithmetic.
+The change adds a per-module, bounded 16-entry LRU on-device cache keyed by normalized image shapes and device. It does not modify RMSNorm or any model arithmetic. Unit tests cover cache reuse, shape-key separation, eviction, and the disabled `zero_cond_t` path.
 
 Perfetto confirms the optimized single-card trace removed exactly 40 calls each to `aten::lift_fresh`, `aten::_to_copy`, and `aten::copy_`. Inclusive `_to_copy` time fell from 13,930.9 ms to 7,075.4 ms; most of that inclusive time is waiting on earlier stream work rather than copy-kernel execution.
 
@@ -58,6 +58,25 @@ Perfetto confirms the optimized single-card trace removed exactly 40 calls each 
 The win is clearest for the target CFG configuration. Its server generation time improved by 102.1 ms (0.58%); the larger client-side change includes frontend/response variance. Single-card and Ulysses gains are marginal at this sample size.
 
 Peak memory was unchanged within sampling noise.
+
+## Reimplementation verification at 1024×1024
+
+The lost cache implementation was reconstructed from this report and verified on 2026-07-23. The workload used two input images, random positive and negative prompts, 1024×1024 output, 20 inference steps, concurrency 1, one two-step warmup, and three measured requests. All three configurations completed 3/3 requests without CUDA OOM.
+
+All durations below are milliseconds.
+
+| Configuration | Client mean | Server generation | Text encoder | VAE encode | Diffuse | VAE decode | Throughput QPS | Peak MiB |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| CFG 2 | 11,119.6 | 10,675.0 | 125.9 | 85.9 | 10,179.7 | 71.8 | 0.0899 | 59,998 |
+| CFG 2 + VAE PP 2 | 11,583.4 | 11,204.7 | 122.6 | 374.3 | 10,160.7 | 345.9 | 0.0863 | 56,590 |
+| CFG 2 + Ulysses 2 + VAE PP 4 | **7,832.9** | **7,357.9** | 160.7 | 404.1 | **6,058.6** | 362.6 | **0.1277** | **56,042** |
+
+At this shape, VAE PP 2 reduced peak memory by 3,408 MiB but increased client latency by 463.9 ms (4.2%); its diffuse time was effectively unchanged. The four-card configuration reduced client latency by 3,286.6 ms (29.6%) and diffuse time by 4,121.2 ms (40.5%) relative to CFG 2, while using 3,956 MiB less peak memory per reported worker.
+
+The benchmark definition is `tests/dfx/perf/tests/test_qwen_image_edit_2511_modulate_index_cache.json`. Raw results are:
+
+- `perf_qwen_image_edit_2511/results/diffusion_result_test_qwen_image_edit_2511_modulate_index_cache_L20X_20260723-175048.json` (four-card case);
+- `perf_qwen_image_edit_2511/results/diffusion_result_test_qwen_image_edit_2511_modulate_index_cache_L20X_20260723-175604.json` (two-card cases).
 
 ## Quality gate
 
@@ -99,6 +118,18 @@ CUDA_VISIBLE_DEVICES=0,1 \
 DIFFUSION_BENCHMARK_DIR=$PWD/perf_qwen_image_edit_2511/results \
 pytest -s tests/dfx/perf/scripts/run_diffusion_benchmark.py \
   --test-config-file perf_qwen_image_edit_2511/benchmark_2gpu.json -m diffusion
+
+CUDA_VISIBLE_DEVICES=0,1,2,3 \
+DIFFUSION_BENCHMARK_DIR=$PWD/perf_qwen_image_edit_2511/results \
+pytest -s tests/dfx/perf/scripts/run_diffusion_benchmark.py \
+  --test-config-file tests/dfx/perf/tests/test_qwen_image_edit_2511_modulate_index_cache.json \
+  -m diffusion -k cfg2_ulysses2_vae_patch4
+
+CUDA_VISIBLE_DEVICES=0,1 \
+DIFFUSION_BENCHMARK_DIR=$PWD/perf_qwen_image_edit_2511/results \
+pytest -s tests/dfx/perf/scripts/run_diffusion_benchmark.py \
+  --test-config-file tests/dfx/perf/tests/test_qwen_image_edit_2511_modulate_index_cache.json \
+  -m diffusion -k "cfg2 and not ulysses"
 
 perf_qwen_image_edit_2511/run_profile.sh single shapes
 perf_qwen_image_edit_2511/run_profile.sh ulysses2 shapes

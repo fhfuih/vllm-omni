@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+from collections import OrderedDict
 from collections.abc import Iterable
 from functools import lru_cache
 from math import prod
@@ -137,6 +138,33 @@ class ModulateIndexPrepare(nn.Module):
     def __init__(self, zero_cond_t: bool = False):
         super().__init__()
         self.zero_cond_t = zero_cond_t
+        self._modulate_index_cache: OrderedDict[
+            tuple[tuple[tuple[tuple[int, int, int], ...], ...], torch.device],
+            torch.Tensor,
+        ] = OrderedDict()
+
+    def _get_modulate_index(
+        self,
+        img_shapes: list[list[tuple[int, int, int]]],
+        device: torch.device,
+    ) -> torch.Tensor:
+        shape_key = tuple(tuple(tuple(shape) for shape in sample) for sample in img_shapes)
+        cache_key = (shape_key, device)
+
+        cached = self._modulate_index_cache.get(cache_key)
+        if cached is not None:
+            self._modulate_index_cache.move_to_end(cache_key)
+            return cached
+
+        modulate_index = torch.tensor(
+            [[0] * prod(sample[0]) + [1] * sum(prod(shape) for shape in sample[1:]) for sample in shape_key],
+            device=device,
+            dtype=torch.int,
+        )
+        self._modulate_index_cache[cache_key] = modulate_index
+        if len(self._modulate_index_cache) > 16:
+            self._modulate_index_cache.popitem(last=False)
+        return modulate_index
 
     def forward(
         self,
@@ -168,11 +196,7 @@ class ModulateIndexPrepare(nn.Module):
             # Create modulate_index to select conditioning per token position
             # - First image (sample[0]): source image, use index=0 (normal timestep)
             # - Remaining images (sample[1:]): target images, use index=1 (zero timestep)
-            modulate_index = torch.tensor(
-                [[0] * prod(sample[0]) + [1] * sum([prod(s) for s in sample[1:]]) for sample in img_shapes],
-                device=timestep.device,
-                dtype=torch.int,
-            )
+            modulate_index = self._get_modulate_index(img_shapes, timestep.device)
             return timestep, modulate_index
 
         return timestep, None
