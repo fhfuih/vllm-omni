@@ -24,11 +24,11 @@
     },
     "benchmark_params": [
       {
-        "name": "1024x1024_steps20_i2i_2img",
+        "name": "1536x1536_steps20_i2i_2img",
         "dataset": "random",
         "task": "i2i",
-        "width": 1024,
-        "height": 1024,
+        "width": 1536,
+        "height": 1536,
         "num-inference-steps": 20,
         "num-prompts": 3,
         "max-concurrency": 1,
@@ -70,11 +70,11 @@
     },
     "benchmark_params": [
       {
-        "name": "1024x1024_steps20_i2i_2img",
+        "name": "1536x1536_steps20_i2i_2img",
         "dataset": "random",
         "task": "i2i",
-        "width": 1024,
-        "height": 1024,
+        "width": 1536,
+        "height": 1536,
         "num-inference-steps": 20,
         "num-prompts": 3,
         "max-concurrency": 1,
@@ -117,11 +117,11 @@
     },
     "benchmark_params": [
       {
-        "name": "1024x1024_steps20_i2i_2img",
+        "name": "1536x1536_steps20_i2i_2img",
         "dataset": "random",
         "task": "i2i",
-        "width": 1024,
-        "height": 1024,
+        "width": 1536,
+        "height": 1536,
         "num-inference-steps": 20,
         "num-prompts": 3,
         "max-concurrency": 1,
