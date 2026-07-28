@@ -14,7 +14,7 @@ import copy
 import time
 from collections.abc import Callable
 from contextlib import AbstractContextManager, nullcontext
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any
 
 import torch
 from torch.profiler import record_function
@@ -31,8 +31,10 @@ from vllm_omni.diffusion.cache.selector import get_cache_backend
 from vllm_omni.diffusion.compile import regionally_compile
 from vllm_omni.diffusion.data import DiffusionOutput, OmniDiffusionConfig
 from vllm_omni.diffusion.forward_context import set_forward_context
+from vllm_omni.diffusion.interaction.coordinator import InteractionCoordinator
+from vllm_omni.diffusion.interaction.types import InteractionEventArrival
 from vllm_omni.diffusion.model_loader.diffusers_loader import DiffusersPipelineLoader
-from vllm_omni.diffusion.models.interface import SupportsPromptUpdate, supports_prompt_update, supports_step_execution
+from vllm_omni.diffusion.models.interface import supports_step_execution
 from vllm_omni.diffusion.offloader import get_offload_backend
 from vllm_omni.diffusion.registry import _NO_CACHE_ACCELERATION
 from vllm_omni.diffusion.request import OmniDiffusionRequest
@@ -127,6 +129,7 @@ class DiffusionModelRunner(OmniConnectorModelRunnerMixin):
         self.offload_backend: Any | None = None
         self.prompt_embed_cache: Any | None = None
         self.input_batch: InputBatch | None = None
+        self._interaction_coordinator: InteractionCoordinator | None = None
 
         # Cache for per-request stepwise state.
         self.state_cache: dict[str, StepRequestState] = {}
@@ -313,6 +316,10 @@ class DiffusionModelRunner(OmniConnectorModelRunnerMixin):
                 enabled=True,
                 model_tag=self.od_config.model_class_name,
             )
+
+        self._interaction_coordinator = InteractionCoordinator.build(self.pipeline, self.od_config)
+        if hasattr(self.pipeline, "_interaction_coordinator"):
+            self.pipeline._interaction_coordinator = self._interaction_coordinator
 
         logger.info("Model runner: Initialization complete.")
 
@@ -818,42 +825,58 @@ class DiffusionModelRunner(OmniConnectorModelRunnerMixin):
         request_id: str,
         interaction: OmniInteractionPrompt,
     ) -> None:
-        """Route a midway interaction to the matching active stepwise request feature."""
+        """Route a midway interaction through the pipeline interaction coordinator."""
         assert self.pipeline is not None, "Model not loaded. Call load_model() first."
         if not self.od_config.streaming_output:
             raise ValueError("submit_interaction requires streaming_output=True")
         if not self._supports_step_mode():
             raise ValueError("submit_interaction requires step execution support")
 
-        event = interaction.get("event")
-        if isinstance(event, dict) and "prompt" in event and "multi_modal_data" not in event:
-            # Is a prompt update interaction.
-            self._submit_prompt_update_interaction(request_id, interaction)
-            return
+        coordinator = self._interaction_coordinator
+        if coordinator is None:
+            coordinator = InteractionCoordinator.build(self.pipeline, self.od_config)
+            self._interaction_coordinator = coordinator
+            if hasattr(self.pipeline, "_interaction_coordinator"):
+                self.pipeline._interaction_coordinator = coordinator
 
-        raise NotImplementedError(
-            "Only text-only prompt update interactions with 'event.prompt' and optional "
-            "'transition_chunks' are supported in this release"
-        )
+        event = interaction["event"]
+        event_id = interaction["event_id"]
+        transition_chunks = interaction.get("transition_chunks")
+        has_prompt = "prompt" in event and event.get("prompt") is not None
+        multi_modal_data = event.get("multi_modal_data")
+        has_mm = isinstance(multi_modal_data, dict) and bool(multi_modal_data)
 
-    def _submit_prompt_update_interaction(
-        self,
-        request_id: str,
-        interaction: OmniInteractionPrompt,
-    ) -> None:
-        """Queue a prompt-update interaction for an active stepwise request."""
-        if not supports_prompt_update(self.pipeline):
+        if not has_prompt and not has_mm:
+            raise ValueError("interaction event requires prompt and/or multi_modal_data")
+        if has_prompt and not coordinator.has_modality("prompt"):
             raise ValueError(f"prompt_update is not supported by pipeline {self.od_config.model_class_name!r}")
 
         state = self.state_cache.get(request_id)
         if state is None:
-            raise ValueError(f"No active request state for prompt_update: {request_id!r}")
+            raise ValueError(f"No active request state for interaction: {request_id!r}")
 
-        event = cast(dict[str, Any], interaction.get("event"))
-        prompt = event["prompt"]
-        transition_chunks = interaction.get("transition_chunks")
-        event_id = interaction.get("event_id")
-        if not isinstance(event_id, str) or not event_id:
-            raise ValueError("event_id must be non-empty")
-        pipeline = cast(SupportsPromptUpdate, self.pipeline)
-        pipeline.prepare_prompt_update(state, prompt, event_id, transition_chunks)
+        event_arrival = InteractionEventArrival(event_id=event_id, received_at=time.monotonic())
+
+        if has_prompt:
+            prompt = event["prompt"]
+            if not isinstance(prompt, str) or not prompt:
+                raise ValueError("prompt must be non-empty")
+            coordinator.enqueue(
+                state,
+                modality="prompt",
+                event_arrival=event_arrival,
+                payload={"prompt": prompt},
+                transition_chunks=transition_chunks,
+            )
+
+        if has_mm:
+            for modality, payload in multi_modal_data.items():
+                if not isinstance(payload, dict):
+                    raise ValueError(f"multi_modal_data[{modality!r}] must be an object")
+                coordinator.enqueue(
+                    state,
+                    modality=str(modality),
+                    event_arrival=event_arrival,
+                    payload=payload,
+                    transition_chunks=transition_chunks,
+                )

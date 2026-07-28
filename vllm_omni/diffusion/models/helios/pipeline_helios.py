@@ -23,13 +23,13 @@ from vllm.model_executor.models.utils import AutoWeightsLoader
 from vllm_omni.diffusion.data import DiffusionOutput, OmniDiffusionConfig
 from vllm_omni.diffusion.distributed.cfg_parallel import CFGParallelMixin
 from vllm_omni.diffusion.distributed.utils import get_local_device
+from vllm_omni.diffusion.interaction.mixin import InteractionMixin
 from vllm_omni.diffusion.model_loader.diffusers_loader import DiffusersPipelineLoader
 from vllm_omni.diffusion.models.helios.helios_transformer import HeliosTransformer3DModel
 from vllm_omni.diffusion.models.helios.scheduling_helios import HeliosScheduler
 from vllm_omni.diffusion.models.interface import SupportsComponentDiscovery
 from vllm_omni.diffusion.models.progress_bar import ProgressBarMixin
 from vllm_omni.diffusion.profiler.diffusion_pipeline_profiler import DiffusionPipelineProfilerMixin
-from vllm_omni.diffusion.prompt_update import PromptUpdateMixin
 from vllm_omni.diffusion.request import OmniDiffusionRequest
 from vllm_omni.diffusion.worker.request_batch import DiffusionRequestBatch
 from vllm_omni.platforms import current_omni_platform
@@ -160,7 +160,7 @@ class HeliosPipeline(
     CFGParallelMixin,
     ProgressBarMixin,
     DiffusionPipelineProfilerMixin,
-    PromptUpdateMixin,
+    InteractionMixin,
     SupportsComponentDiscovery,
 ):
     """Helios text-to-video / image-to-video / video-to-video pipeline for vllm-omni.
@@ -900,12 +900,16 @@ class HeliosPipeline(
 
         output = current_latents if extra["output_type"] == "latent" else current_video
         completed_chunk_index = state.chunk_index
-        prompt_update_metadata = state.extra.pop("prompt_update_chunk_metadata", {})
+        interaction_metadata = state.extra.pop("interaction_chunk_metadata", {})
         state.chunk_index += 1
         finished = state.request_denoise_completed
         if not finished:
-            # Apply queued/advancing prompt updates before preparing the next chunk.
-            self._apply_prompt_update_at_chunk_boundary(state)
+            self.apply_interaction_at_chunk_boundary(
+                state,
+                chunk_index=state.chunk_index,
+                num_frames=int(extra.get("window_num_frames") or 0),
+                fps=float(state.sampling.fps or 0.0),
+            )
             self._prepare_next_chunk(state)
         else:
             self._current_timestep = None
@@ -917,9 +921,9 @@ class HeliosPipeline(
             stage_durations=self.stage_durations if hasattr(self, "stage_durations") else {},
             chunk_index=completed_chunk_index,
             total_chunks=state.total_chunks,
-            started_event_ids=prompt_update_metadata.get("started_event_ids", []),
-            active_event_ids=prompt_update_metadata.get("active_event_ids", []),
-            completed_event_ids=prompt_update_metadata.get("completed_event_ids", []),
+            started_event_ids=interaction_metadata.get("started_event_ids", []),
+            active_event_ids=interaction_metadata.get("active_event_ids", []),
+            completed_event_ids=interaction_metadata.get("completed_event_ids", []),
             finished=finished,
         )
 

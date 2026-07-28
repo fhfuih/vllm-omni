@@ -1,79 +1,93 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: Copyright contributors to the vLLM project
-"""Midway prompt updates for chunked diffusion step execution.
-
-``PromptUpdateMixin`` exposes
-- a pipeline interface for the external to queue a prompt update,
-- a pipeline internal method to apply prompt transitions at chunk boundaries.
-
-``prompt_update_versions``: a helper for ``InputBatch`` cache invalidation.
-"""
+"""Prompt-track interaction handler (midway prompt updates)."""
 
 from __future__ import annotations
 
 import logging
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from threading import Lock
-from typing import ClassVar, TypedDict, cast
+from typing import Any, ClassVar, TypedDict, cast, override
 
 import torch
 
+from vllm_omni.diffusion.interaction.modality_handlers.base import InteractionHandler
+from vllm_omni.diffusion.interaction.types import (
+    InteractionChunkMetadata,
+    InteractionEventArrival,
+    InteractionPayload,
+)
 from vllm_omni.diffusion.worker.utils import StepRequestState
 
 DEFAULT_TRANSITION_CHUNKS = 3
 
 logger = logging.getLogger(__name__)
 
+# Pipelines return (prompt_embeds, ...) with optional negative embeds / masks.
+EncodePromptFn = Callable[..., tuple[torch.Tensor, ...]]
+
 
 class PromptUpdateExtra(TypedDict, total=False):
-    """A "protocol" for ``StepRequestState.extra`` keys used by the prompt-update feature."""
+    """A protocol for ``StepRequestState.extra`` keys used by prompt updates."""
 
     pending_prompt_update: _PendingPromptUpdate
     prompt_update_state: _PromptUpdateState
-    prompt_update_chunk_metadata: _PromptUpdateChunkMetadata
-    prompt_update_version: int  # Bumped when prompt_embeds change; invalidates InputBatch cache.
-
-    # The lock for storing/updating pending prompt updates.
-    # Saved in state.extra to be naturally cleaned up with the request state.
-    # As PromptUpdateMixin (the pipeline) currently lacks an obvious request-finish hook
+    prompt_update_version: int
     prompt_update_lock: Lock
 
 
 def prompt_update_versions(states: Sequence[StepRequestState]) -> tuple[int, ...]:
-    """Return per-request prompt-update versions for batch cache comparison.
-
-    To be used by ``InputBatch`` or other external to determine if the cached batch is still valid.
-    """
+    """Return per-request prompt-update versions for batch cache comparison."""
     return tuple(int(cast(PromptUpdateExtra, state.extra).get("prompt_update_version", 0)) for state in states)
 
 
-class PromptUpdateMixin:
-    """Mixin for chunked streaming pipelines that support midway prompt updates.
+def _prompt_update_lock(extra: PromptUpdateExtra) -> Lock:
+    return extra.setdefault("prompt_update_lock", Lock())
 
-    Implements the behavior expected by :class:`~vllm_omni.diffusion.models.interface.SupportsPromptUpdate`.
-    All per-request transition state lives on ``StepRequestState.extra``; this mixin itself is stateless.
+
+class PromptInteractionHandler(InteractionHandler):
+    """Encode-and-queue prompt updates; lerp embeds at chunk boundaries.
+
+    Mirrors the former ``PromptUpdateMixin`` behavior. Encoding happens at
+    enqueue time via an injected ``encode_prompt`` callable.
     """
 
-    supports_prompt_update: ClassVar[bool] = True
+    modality: ClassVar[str] = "prompt"
 
-    @staticmethod
-    def _prompt_update_lock(extra: PromptUpdateExtra) -> Lock:
-        return extra.setdefault("prompt_update_lock", Lock())
+    def __init__(
+        self,
+        *,
+        encode_prompt: EncodePromptFn,
+        device: torch.device | str,
+        dtype: torch.dtype,
+    ) -> None:
+        self._encode_prompt = encode_prompt
+        self._device = device
+        self._dtype = dtype
 
-    def prepare_prompt_update(
+    @classmethod
+    def from_pipeline(cls, pipeline: Any) -> PromptInteractionHandler:
+        """Build a handler from a diffusion pipeline that exposes ``encode_prompt``."""
+        return cls(
+            encode_prompt=pipeline.encode_prompt,
+            device=pipeline.device,
+            dtype=pipeline.transformer.dtype,
+        )
+
+    @override
+    def enqueue(
         self,
         state: StepRequestState,
-        prompt: str,
-        event_id: str,
-        transition_chunks: int | None = None,
+        *,
+        event_arrival: InteractionEventArrival,
+        payload: InteractionPayload,
+        transition_chunks: int | None,
     ) -> None:
-        """Encode and queue a prompt update to apply at the next chunk boundary.
-        It does not actually apply the prompt transition.
-
-        This is an extended interface for the pipeline, to be called by the runner.
-        """
-        if not prompt:
+        """Prompt updates are last-write-win and unbuffered at chunk boundary."""
+        event_id = event_arrival.event_id
+        prompt = payload.get("prompt")
+        if not isinstance(prompt, str) or not prompt:
             raise ValueError("prompt must be non-empty")
         if not event_id:
             raise ValueError("event_id must be non-empty")
@@ -85,17 +99,17 @@ class PromptUpdateMixin:
         if duration < 0:
             raise ValueError("transition_chunks must be >= 0")
 
-        target_prompt_embeds, _ = self.encode_prompt(
+        target_prompt_embeds, _ = self._encode_prompt(
             prompt=prompt,
             negative_prompt=None,
             do_classifier_free_guidance=False,
             num_videos_per_prompt=state.sampling.num_outputs_per_prompt,
             max_sequence_length=state.sampling.max_sequence_length,
-            device=self.device,
-            dtype=self.transformer.dtype,
+            device=self._device,
+            dtype=self._dtype,
         )
         extra = cast(PromptUpdateExtra, state.extra)
-        with self._prompt_update_lock(extra):
+        with _prompt_update_lock(extra):
             extra["pending_prompt_update"] = {
                 "event_id": event_id,
                 "prompt": prompt,
@@ -103,11 +117,21 @@ class PromptUpdateMixin:
                 "transition_chunks": duration,
             }
 
-    def _apply_prompt_update_at_chunk_boundary(self, state: StepRequestState) -> None:
+    @override
+    def apply_at_chunk_boundary(
+        self,
+        state: StepRequestState,
+        *,
+        chunk_index: int,
+        num_frames: int,
+        fps: float,
+        boundary_at: float,
+    ) -> InteractionChunkMetadata | None:
         """Advance or start prompt interpolation before the next chunk."""
+        del chunk_index, num_frames, fps, boundary_at  # Prompt lerp is chunk-based and last-write-wins
         extra = cast(PromptUpdateExtra, state.extra)
         update_state: _PromptUpdateState | None = extra.get("prompt_update_state")
-        with self._prompt_update_lock(extra):
+        with _prompt_update_lock(extra):
             pending = extra.pop("pending_prompt_update", None)
         embeds_changed = False
         next_chunk_index = state.chunk_index
@@ -193,11 +217,12 @@ class PromptUpdateMixin:
             new_version = int(extra.get("prompt_update_version", 0)) + 1
             extra["prompt_update_version"] = new_version
 
-        extra["prompt_update_chunk_metadata"] = {
-            "started_event_ids": started_event_ids,
-            "active_event_ids": active_event_ids,
-            "completed_event_ids": completed_event_ids,
-        }
+        metadata = InteractionChunkMetadata(
+            started_event_ids=started_event_ids,
+            active_event_ids=active_event_ids,
+            completed_event_ids=completed_event_ids,
+        )
+        return metadata
 
 
 @dataclass
@@ -237,9 +262,3 @@ class _PendingPromptUpdate(TypedDict):
     prompt: str
     target_prompt_embeds: torch.Tensor
     transition_chunks: int
-
-
-class _PromptUpdateChunkMetadata(TypedDict):
-    started_event_ids: list[str]
-    active_event_ids: list[str]
-    completed_event_ids: list[str]

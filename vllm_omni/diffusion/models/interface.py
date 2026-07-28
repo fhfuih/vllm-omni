@@ -107,27 +107,22 @@ def supports_step_execution(pipeline: object) -> bool:
 
 
 @runtime_checkable
-class SupportsPromptUpdate(Protocol):
-    """Optional protocol for pipelines that support midway prompt updates.
+class SupportsInteractionApply(Protocol):
+    """Optional protocol for pipelines with a unified chunk-boundary apply hook."""
 
-    Pipelines typically implement this via
-    :class:`~vllm_omni.diffusion.prompt_update.PromptUpdateMixin`.
-    """
-
-    supports_prompt_update: ClassVar[bool] = True
-
-    def prepare_prompt_update(
+    def apply_interaction_at_chunk_boundary(
         self,
         state: StepRequestState,
-        prompt: str,
-        event_id: str,
-        transition_chunks: int | None = None,
+        *,
+        chunk_index: int | None = None,
+        num_frames: int | None = None,
+        fps: float | None = None,
     ) -> None:
-        """Encode and queue a prompt update on request-local state."""
+        """Advance queued interactions before the next generation chunk."""
         ...
 
 
-def supports_prompt_update(pipeline: object) -> bool:
-    """Return whether ``pipeline`` implements :class:`SupportsPromptUpdate`."""
+def supports_interaction_apply(pipeline: object) -> bool:
+    """Return whether ``pipeline`` implements :class:`SupportsInteractionApply`."""
 
-    return isinstance(pipeline, SupportsPromptUpdate)
+    return isinstance(pipeline, SupportsInteractionApply)
