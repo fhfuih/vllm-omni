@@ -1,0 +1,59 @@
+
+== perf_results/qwen_image_edit_2511_head/profiles/single_offline/20260729-013915_stage_0_rep_0_diffusion_1785260355/trace_rank0.json.gz
+events=1436387 gpu_events=180211 cpu_events=794459
+gpu_span_s=56.124 busy_union_s=54.882 idle_union_s=1.242 idle_pct=2.21
+gaps_ge_5.000ms count=6 sum_s=0.485
+
+GAP 316.974 ms ts=2292567184267->2292567501240
+  prev kernel 0.001 ms void at::native::vectorized_elementwise_kernel<2, at::native::FillFunctor<long>, std::array<char*, 1ul> >(int, at::native::FillFunctor<long>, std::array<char*, 
+  next gpu_memset 0.001 ms Memset (Device)
+
+GAP 114.568 ms ts=2292567547985->2292567662554
+  prev gpu_memcpy 0.002 ms Memcpy DtoH (Device -> Pinned)
+  next gpu_memcpy 0.001 ms Memcpy HtoD (Pageable -> Device)
+
+GAP 22.343 ms ts=2292567663415->2292567685757
+  prev kernel 0.002 ms void at_cuda_detail::cub::detail::select::DeviceSelectSweepKernel<at_cuda_detail::cub::detail::select::policy_hub<long, bool, int, false, (at_cuda_detail::cub::
+  next gpu_memcpy 0.001 ms Memcpy HtoD (Pageable -> Device)
+  in   user_annotation 55639.961 ms pipeline_forward
+  in   user_annotation 55641.029 ms diffusion_forward
+
+GAP 18.954 ms ts=2292567838106->2292567857060
+  prev kernel 0.002 ms void at_cuda_detail::cub::detail::select::DeviceSelectSweepKernel<at_cuda_detail::cub::detail::select::policy_hub<long, bool, int, false, (at_cuda_detail::cub::
+  next gpu_memcpy 0.001 ms Memcpy HtoD (Pageable -> Device)
+  in   user_annotation 55639.961 ms pipeline_forward
+  in   user_annotation 55641.029 ms diffusion_forward
+
+GAP 6.252 ms ts=2292567529899->2292567536151
+  prev gpu_memset 0.001 ms Memset (Device)
+  next gpu_memset 0.001 ms Memset (Device)
+
+GAP 6.172 ms ts=2292567539619->2292567545791
+  prev gpu_memcpy 0.002 ms Memcpy HtoD (Pageable -> Device)
+  next gpu_memcpy 0.001 ms Memcpy DtoD (Device -> Device)
+
+Top GPU/operator events by total duration:
+      4200 total=   24.475s max=    6.579ms void cutlass::device_kernel<flash::enable_sm90_or_later<flash::FlashAttnFwdSm90<flash::CollectiveMainloopFwdSm90<2, cute::tuple<cute::C<2>, cute::C<1>, cute::C<1> >, cute::tuple<cu
+      8400 total=   13.509s max=    2.059ms nvjet_sm90_tst_192x192_64x4_1x2_h_bz_coopB_bias_TNN
+      8400 total=    9.501s max=    2.018ms nvjet_sm90_tst_256x128_64x4_1x2_h_bz_coopA_bias_TNT
+     16800 total=    1.377s max=    0.180ms rotary_kernel
+      4200 total=    1.024s max=    0.269ms triton_poi_fused_gelu_view_18
+      4200 total=    0.798s max=    0.216ms triton_red_fused__to_copy_add_eq_mul_native_layer_norm_slice_split_unsqueeze_where_2
+      4200 total=    0.574s max=    0.152ms triton_red_fused__to_copy_add_eq_mul_native_layer_norm_slice_split_unsqueeze_view_where_14
+      4200 total=    0.534s max=    0.137ms triton_red_fused__fused_rms_norm__to_copy_select_split_with_sizes_view_7
+      4200 total=    0.534s max=    0.137ms triton_red_fused__fused_rms_norm__to_copy_select_split_with_sizes_view_4
+      8400 total=    0.431s max=    0.055ms triton_poi_fused__flash_attn_forward_cat_split_with_sizes_view_12
+      8470 total=    0.302s max=    0.058ms nvjet_sm90_tst_128x88_64x7_4x1_v_bz_bias_TNT
+      4200 total=    0.300s max=    0.074ms triton_poi_fused_add_eq_mul_slice_split_unsqueeze_view_where_19
+      8400 total=    0.289s max=    0.040ms nvjet_sm90_tst_192x8_64x8_4x1_v_bz_bias_TNT
+      4200 total=    0.241s max=    0.064ms nvjet_sm90_tst_192x112_64x5_1x2_h_bz_coopB_bias_TNT
+      4200 total=    0.224s max=    0.056ms triton_poi_fused__flash_attn_forward_cat_split_with_sizes_view_13
+      4200 total=    0.189s max=    0.050ms nvjet_sm90_tst_256x144_64x4_4x1_v_bz_coopA_bias_TNT
+        15 total=    0.040s max=    4.006ms sm80_xmma_fprop_implicit_gemm_bf16bf16_bf16f32_f32_nhwckrsc_nhwc_tilesize256x32x32_stage4_warpsize4x1x1_g1_tensor16x8x16_execute_kernel__5x_cudnn
+      4200 total=    0.033s max=    0.009ms triton_red_fused__to_copy_add_mul_native_layer_norm_split_unsqueeze_view_15
+      4200 total=    0.031s max=    0.009ms triton_poi_fused_gelu_view_16
+      4200 total=    0.028s max=    0.008ms triton_red_fused__to_copy_add_mul_native_layer_norm_split_unsqueeze_3
+
+Top NCCL-like events by category:
+         2 total=    0.000s max=    0.323ms cat=user_annotation nccl:all_gather
+         2 total=    0.000s max=    0.104ms cat=gpu_user_annotation nccl:all_gather

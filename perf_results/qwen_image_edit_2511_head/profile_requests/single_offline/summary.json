@@ -1,0 +1,16 @@
+{
+  "model": "Qwen/Qwen-Image-Edit-2511",
+  "width": 1536,
+  "height": 1536,
+  "num_inference_steps": 35,
+  "num_input_images": 2,
+  "ulysses_degree": 1,
+  "cfg_parallel_size": 1,
+  "vae_patch_parallel_size": 1,
+  "vae_use_tiling": false,
+  "warmup_ms": 3792.632792145014,
+  "profiled_request_ms": 56020.856127142906,
+  "profile_results": [
+    null
+  ]
+}

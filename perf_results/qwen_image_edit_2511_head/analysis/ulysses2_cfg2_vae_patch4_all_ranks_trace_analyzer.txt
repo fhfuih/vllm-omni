@@ -1,0 +1,552 @@
+
+== perf_results/qwen_image_edit_2511_head/profiles/ulysses2_cfg2_vae_patch4_offline/20260729-014524_stage_0_rep_0_diffusion_1785260724/trace_rank0.json.gz
+events=2219374 gpu_events=214401 cpu_events=1228590
+gpu_span_s=19.155 busy_union_s=16.138 idle_union_s=3.017 idle_pct=15.75
+gaps_ge_5.000ms count=47 sum_s=0.800
+
+GAP 148.430 ms ts=2292937035158->2292937183588
+  prev gpu_memcpy 0.002 ms Memcpy DtoH (Device -> Pinned)
+  next gpu_memcpy 0.001 ms Memcpy HtoD (Pageable -> Device)
+
+GAP 101.843 ms ts=2292936503953->2292936605796
+  prev gpu_memset 0.002 ms Memset (Device)
+  next gpu_memcpy 0.001 ms Memcpy HtoD (Pageable -> Device)
+
+GAP 89.823 ms ts=2292936375018->2292936464841
+  prev kernel 0.001 ms void at::native::vectorized_elementwise_kernel<2, at::native::FillFunctor<long>, std::array<char*, 1ul> >(int, at::native::FillFunctor<long>, std::array<char*, 
+  next gpu_memset 0.001 ms Memset (Device)
+
+GAP 49.730 ms ts=2292937184331->2292937234061
+  prev kernel 0.002 ms void at_cuda_detail::cub::detail::select::DeviceSelectSweepKernel<at_cuda_detail::cub::detail::select::policy_hub<long, bool, int, false, (at_cuda_detail::cub::
+  next gpu_memcpy 0.001 ms Memcpy HtoD (Pageable -> Device)
+  in   user_annotation 18336.779 ms pipeline_forward
+  in   user_annotation 18347.911 ms diffusion_forward
+
+GAP 25.343 ms ts=2292937008218->2292937033561
+  prev gpu_memcpy 0.001 ms Memcpy HtoD (Pageable -> Device)
+  next kernel 0.214 ms ncclDevKernel_AllGather_RING_LL(ncclDevKernelArgsStorage<4096ul>)
+  in   user_annotation 420.799 ms nccl:all_gather
+
+GAP 24.800 ms ts=2292936609723->2292936634523
+  prev gpu_memcpy 0.002 ms Memcpy HtoD (Pageable -> Device)
+  next gpu_memcpy 0.001 ms Memcpy HtoD (Pageable -> Device)
+  in   user_annotation 420.799 ms nccl:all_gather
+
+GAP 16.381 ms ts=2292936703875->2292936720257
+  prev gpu_memcpy 0.001 ms Memcpy HtoD (Pageable -> Device)
+  next gpu_memcpy 0.001 ms Memcpy HtoD (Pageable -> Device)
+  in   user_annotation 420.799 ms nccl:all_gather
+
+GAP 16.264 ms ts=2292937370562->2292937386826
+  prev kernel 0.002 ms void at_cuda_detail::cub::detail::select::DeviceSelectSweepKernel<at_cuda_detail::cub::detail::select::policy_hub<long, bool, int, false, (at_cuda_detail::cub::
+  next gpu_memcpy 0.001 ms Memcpy HtoD (Pageable -> Device)
+  in   user_annotation 18336.779 ms pipeline_forward
+  in   user_annotation 18347.911 ms diffusion_forward
+
+GAP 15.693 ms ts=2292936981406->2292936997100
+  prev gpu_memcpy 0.001 ms Memcpy HtoD (Pageable -> Device)
+  next gpu_memcpy 0.001 ms Memcpy HtoD (Pageable -> Device)
+  in   user_annotation 420.799 ms nccl:all_gather
+
+GAP 15.581 ms ts=2292936956256->2292936971837
+  prev gpu_memcpy 0.001 ms Memcpy HtoD (Pageable -> Device)
+  next gpu_memcpy 0.001 ms Memcpy HtoD (Pageable -> Device)
+  in   user_annotation 420.799 ms nccl:all_gather
+
+GAP 14.473 ms ts=2292936682253->2292936696725
+  prev gpu_memcpy 0.001 ms Memcpy HtoD (Pageable -> Device)
+  next gpu_memcpy 0.001 ms Memcpy HtoD (Pageable -> Device)
+  in   user_annotation 420.799 ms nccl:all_gather
+
+GAP 13.459 ms ts=2292936771401->2292936784860
+  prev gpu_memcpy 0.001 ms Memcpy HtoD (Pageable -> Device)
+  next gpu_memcpy 0.001 ms Memcpy HtoD (Pageable -> Device)
+  in   user_annotation 420.799 ms nccl:all_gather
+
+GAP 12.866 ms ts=2292936904318->2292936917183
+  prev gpu_memcpy 0.001 ms Memcpy HtoD (Pageable -> Device)
+  next gpu_memcpy 0.001 ms Memcpy HtoD (Pageable -> Device)
+  in   user_annotation 420.799 ms nccl:all_gather
+
+GAP 11.898 ms ts=2292936789909->2292936801807
+  prev gpu_memcpy 0.001 ms Memcpy HtoD (Pageable -> Device)
+  next gpu_memcpy 0.001 ms Memcpy HtoD (Pageable -> Device)
+  in   user_annotation 420.799 ms nccl:all_gather
+
+GAP 11.477 ms ts=2292936641189->2292936652666
+  prev gpu_memcpy 0.001 ms Memcpy HtoD (Pageable -> Device)
+  next gpu_memcpy 0.001 ms Memcpy HtoD (Pageable -> Device)
+  in   user_annotation 420.799 ms nccl:all_gather
+
+GAP 10.873 ms ts=2292936720258->2292936731131
+  prev gpu_memcpy 0.001 ms Memcpy HtoD (Pageable -> Device)
+  next gpu_memcpy 0.001 ms Memcpy HtoD (Pageable -> Device)
+  in   user_annotation 420.799 ms nccl:all_gather
+
+GAP 10.228 ms ts=2292936838328->2292936848556
+  prev gpu_memcpy 0.001 ms Memcpy HtoD (Pageable -> Device)
+  next gpu_memcpy 0.001 ms Memcpy HtoD (Pageable -> Device)
+  in   user_annotation 420.799 ms nccl:all_gather
+
+GAP 10.074 ms ts=2292936652667->2292936662740
+  prev gpu_memcpy 0.001 ms Memcpy HtoD (Pageable -> Device)
+  next gpu_memcpy 0.001 ms Memcpy HtoD (Pageable -> Device)
+  in   user_annotation 420.799 ms nccl:all_gather
+
+GAP 9.815 ms ts=2292936934230->2292936944046
+  prev gpu_memcpy 0.001 ms Memcpy HtoD (Pageable -> Device)
+  next gpu_memcpy 0.001 ms Memcpy HtoD (Pageable -> Device)
+  in   user_annotation 420.799 ms nccl:all_gather
+
+GAP 9.749 ms ts=2292936848557->2292936858305
+  prev gpu_memcpy 0.001 ms Memcpy HtoD (Pageable -> Device)
+  next gpu_memcpy 0.001 ms Memcpy HtoD (Pageable -> Device)
+  in   user_annotation 420.799 ms nccl:all_gather
+
+Top GPU/operator events by total duration:
+      2100 total=    5.966s max=    3.179ms void cutlass::device_kernel<flash::enable_sm90_or_later<flash::FlashAttnFwdSm90<flash::CollectiveMainloopFwdSm90<2, cute::tuple<cute::C<2>, cute::C<1>, cute::C<1> >, cute::tuple<cu
+      6300 total=    3.878s max=    1.014ms nvjet_sm90_tst_192x192_64x4_2x1_v_bz_coopB_bias_TNN
+      2100 total=    1.846s max=    0.986ms nvjet_sm90_tst_256x128_64x4_1x2_h_bz_coopA_bias_TNT
+      8400 total=    1.286s max=   65.918ms ncclDevKernel_SendRecv(ncclDevKernelArgsStorage<4096ul>)
+      8400 total=    0.351s max=    0.088ms rotary_kernel
+      2100 total=    0.252s max=    0.131ms triton_poi_fused_gelu_view_22
+      2172 total=    0.197s max=   52.065ms ncclDevKernel_AllGather_RING_LL(ncclDevKernelArgsStorage<4096ul>)
+      2100 total=    0.196s max=    0.105ms triton_red_fused__to_copy_add_eq_mul_native_layer_norm_slice_split_unsqueeze_where_2
+      4235 total=    0.149s max=    0.057ms nvjet_sm90_tst_128x88_64x7_4x1_v_bz_bias_TNT
+      2100 total=    0.145s max=    0.075ms triton_red_fused__to_copy_add_eq_mul_native_layer_norm_slice_split_unsqueeze_view_where_18
+      4200 total=    0.144s max=    0.040ms nvjet_sm90_tst_192x8_64x8_4x1_v_bz_bias_TNT
+      2100 total=    0.135s max=    0.066ms triton_red_fused__fused_rms_norm__to_copy_select_split_with_sizes_view_7
+      2100 total=    0.135s max=    0.066ms triton_red_fused__fused_rms_norm__to_copy_select_split_with_sizes_view_4
+      4200 total=    0.128s max=    0.046ms triton_poi_fused_all_to_all_single_clone_transpose_view_12
+      2100 total=    0.117s max=    0.063ms nvjet_sm90_tst_192x112_64x5_1x2_h_bz_coopB_bias_TNT
+      4200 total=    0.114s max=    0.029ms triton_poi_fused__flash_attn_forward_cat_slice_split_with_sizes_transpose_view_14
+      2100 total=    0.092s max=    0.049ms nvjet_sm90_tst_256x144_64x4_4x1_v_bz_coopA_bias_TNT
+      2100 total=    0.079s max=    0.133ms triton_poi_fused_all_to_all_single_clone_split_with_sizes_transpose_view_13
+       736 total=    0.074s max=    0.136ms sm80_xmma_fprop_implicit_gemm_bf16bf16_bf16f32_f32_nhwckrsc_nhwc_tilesize256x32x32_stage4_warpsize4x1x1_g1_tensor16x8x16_execute_kernel__5x_cudnn
+      2100 total=    0.074s max=    0.037ms triton_poi_fused_add_eq_mul_slice_split_unsqueeze_view_where_23
+
+Top NCCL-like events by category:
+      8400 total=    1.286s max=   65.918ms cat=gpu_user_annotation nccl:all_to_all
+      8400 total=    1.286s max=   65.918ms cat=kernel ncclDevKernel_SendRecv(ncclDevKernelArgsStorage<4096ul>)
+      8400 total=    0.446s max=    3.331ms cat=user_annotation nccl:all_to_all
+         2 total=    0.421s max=  420.799ms cat=user_annotation nccl:all_gather
+         3 total=    0.374s max=  373.695ms cat=gpu_user_annotation nccl:all_gather
+      2172 total=    0.197s max=   52.065ms cat=kernel ncclDevKernel_AllGather_RING_LL(ncclDevKernelArgsStorage<4096ul>)
+        70 total=    0.127s max=   52.065ms cat=gpu_user_annotation nccl:_all_gather_base
+      2100 total=    0.091s max=    1.844ms cat=user_annotation nccl:all_gather_into_tensor_coalesced
+      2100 total=    0.070s max=    0.044ms cat=gpu_user_annotation nccl:all_gather_into_tensor_coalesced
+        70 total=    0.005s max=    0.112ms cat=user_annotation nccl:_all_gather_base
+
+== perf_results/qwen_image_edit_2511_head/profiles/ulysses2_cfg2_vae_patch4_offline/20260729-014524_stage_0_rep_0_diffusion_1785260724/trace_rank1.json.gz
+events=2216815 gpu_events=214400 cpu_events=1227683
+gpu_span_s=19.184 busy_union_s=16.046 idle_union_s=3.138 idle_pct=16.36
+gaps_ge_5.000ms count=46 sum_s=0.789
+
+GAP 149.205 ms ts=2292937035155->2292937184360
+  prev gpu_memcpy 0.002 ms Memcpy DtoH (Device -> Pinned)
+  next gpu_memcpy 0.001 ms Memcpy HtoD (Pageable -> Device)
+
+GAP 101.050 ms ts=2292936504803->2292936605853
+  prev gpu_memset 0.002 ms Memset (Device)
+  next gpu_memcpy 0.001 ms Memcpy HtoD (Pageable -> Device)
+
+GAP 69.855 ms ts=2292937185208->2292937255063
+  prev kernel 0.002 ms void at_cuda_detail::cub::detail::select::DeviceSelectSweepKernel<at_cuda_detail::cub::detail::select::policy_hub<long, bool, int, false, (at_cuda_detail::cub::
+  next gpu_memcpy 0.001 ms Memcpy HtoD (Pageable -> Device)
+  in   user_annotation 18408.040 ms pipeline_forward
+  in   user_annotation 18421.135 ms diffusion_forward
+
+GAP 59.144 ms ts=2292936405144->2292936464288
+  prev kernel 0.001 ms void at::native::vectorized_elementwise_kernel<2, at::native::FillFunctor<long>, std::array<char*, 1ul> >(int, at::native::FillFunctor<long>, std::array<char*, 
+  next gpu_memset 0.001 ms Memset (Device)
+
+GAP 37.813 ms ts=2292936611552->2292936649365
+  prev gpu_memcpy 0.002 ms Memcpy HtoD (Pageable -> Device)
+  next gpu_memcpy 0.001 ms Memcpy HtoD (Pageable -> Device)
+  in   user_annotation 420.745 ms nccl:all_gather
+
+GAP 18.597 ms ts=2292937401019->2292937419616
+  prev kernel 0.002 ms void at_cuda_detail::cub::detail::select::DeviceSelectSweepKernel<at_cuda_detail::cub::detail::select::policy_hub<long, bool, int, false, (at_cuda_detail::cub::
+  next gpu_memcpy 0.001 ms Memcpy HtoD (Pageable -> Device)
+  in   user_annotation 18408.040 ms pipeline_forward
+  in   user_annotation 18421.135 ms diffusion_forward
+
+GAP 17.026 ms ts=2292936787936->2292936804962
+  prev gpu_memcpy 0.001 ms Memcpy HtoD (Pageable -> Device)
+  next gpu_memcpy 0.001 ms Memcpy HtoD (Pageable -> Device)
+  in   user_annotation 420.745 ms nccl:all_gather
+
+GAP 16.092 ms ts=2292936957095->2292936973186
+  prev gpu_memcpy 0.001 ms Memcpy HtoD (Pageable -> Device)
+  next gpu_memcpy 0.001 ms Memcpy HtoD (Pageable -> Device)
+  in   user_annotation 420.745 ms nccl:all_gather
+
+GAP 16.059 ms ts=2292936984581->2292937000640
+  prev gpu_memcpy 0.001 ms Memcpy HtoD (Pageable -> Device)
+  next gpu_memcpy 0.001 ms Memcpy HtoD (Pageable -> Device)
+  in   user_annotation 420.745 ms nccl:all_gather
+
+GAP 14.842 ms ts=2292936704853->2292936719695
+  prev gpu_memcpy 0.001 ms Memcpy HtoD (Pageable -> Device)
+  next gpu_memcpy 0.001 ms Memcpy HtoD (Pageable -> Device)
+  in   user_annotation 420.745 ms nccl:all_gather
+
+GAP 14.809 ms ts=2292936840699->2292936855508
+  prev gpu_memcpy 0.001 ms Memcpy HtoD (Pageable -> Device)
+  next gpu_memcpy 0.001 ms Memcpy HtoD (Pageable -> Device)
+  in   user_annotation 420.745 ms nccl:all_gather
+
+GAP 14.192 ms ts=2292936719696->2292936733887
+  prev gpu_memcpy 0.001 ms Memcpy HtoD (Pageable -> Device)
+  next gpu_memcpy 0.001 ms Memcpy HtoD (Pageable -> Device)
+  in   user_annotation 420.745 ms nccl:all_gather
+
+GAP 13.773 ms ts=2292936683084->2292936696858
+  prev gpu_memcpy 0.001 ms Memcpy HtoD (Pageable -> Device)
+  next gpu_memcpy 0.001 ms Memcpy HtoD (Pageable -> Device)
+  in   user_annotation 420.745 ms nccl:all_gather
+
+GAP 13.539 ms ts=2292937009080->2292937022620
+  prev gpu_memcpy 0.001 ms Memcpy HtoD (Pageable -> Device)
+  next gpu_memcpy 0.001 ms Memcpy HtoD (Pageable -> Device)
+  in   user_annotation 420.745 ms nccl:all_gather
+
+GAP 10.156 ms ts=2292936756099->2292936766255
+  prev gpu_memcpy 0.001 ms Memcpy HtoD (Pageable -> Device)
+  next gpu_memcpy 0.001 ms Memcpy HtoD (Pageable -> Device)
+  in   user_annotation 420.745 ms nccl:all_gather
+
+GAP 9.164 ms ts=2292936823630->2292936832793
+  prev gpu_memcpy 0.001 ms Memcpy HtoD (Pageable -> Device)
+  next gpu_memcpy 0.001 ms Memcpy HtoD (Pageable -> Device)
+  in   user_annotation 420.745 ms nccl:all_gather
+
+GAP 9.151 ms ts=2292936914752->2292936923903
+  prev gpu_memcpy 0.001 ms Memcpy HtoD (Pageable -> Device)
+  next gpu_memcpy 0.001 ms Memcpy HtoD (Pageable -> Device)
+  in   user_annotation 420.745 ms nccl:all_gather
+
+GAP 8.899 ms ts=2292936649366->2292936658265
+  prev gpu_memcpy 0.001 ms Memcpy HtoD (Pageable -> Device)
+  next gpu_memcpy 0.001 ms Memcpy HtoD (Pageable -> Device)
+  in   user_annotation 420.745 ms nccl:all_gather
+
+GAP 8.759 ms ts=2292936940819->2292936949578
+  prev gpu_memcpy 0.001 ms Memcpy HtoD (Pageable -> Device)
+  next gpu_memcpy 0.001 ms Memcpy HtoD (Pageable -> Device)
+  in   user_annotation 420.745 ms nccl:all_gather
+
+GAP 8.612 ms ts=2292936855509->2292936864121
+  prev gpu_memcpy 0.001 ms Memcpy HtoD (Pageable -> Device)
+  next gpu_memcpy 0.001 ms Memcpy HtoD (Pageable -> Device)
+  in   user_annotation 420.745 ms nccl:all_gather
+
+Top GPU/operator events by total duration:
+      2100 total=    5.919s max=    3.148ms void cutlass::device_kernel<flash::enable_sm90_or_later<flash::FlashAttnFwdSm90<flash::CollectiveMainloopFwdSm90<2, cute::tuple<cute::C<2>, cute::C<1>, cute::C<1> >, cute::tuple<cu
+      6300 total=    3.845s max=    1.006ms nvjet_sm90_tst_192x192_64x4_2x1_v_bz_coopB_bias_TNN
+      2100 total=    1.827s max=    0.969ms nvjet_sm90_tst_256x128_64x4_1x2_h_bz_coopA_bias_TNT
+      8400 total=    1.304s max=    0.679ms ncclDevKernel_SendRecv(ncclDevKernelArgsStorage<4096ul>)
+      8400 total=    0.349s max=    0.087ms rotary_kernel
+      2100 total=    0.251s max=    0.134ms triton_poi_fused_gelu_view_22
+      2100 total=    0.195s max=    0.104ms triton_red_fused__to_copy_add_eq_mul_native_layer_norm_slice_split_unsqueeze_where_2
+      2172 total=    0.192s max=   52.063ms ncclDevKernel_AllGather_RING_LL(ncclDevKernelArgsStorage<4096ul>)
+      4235 total=    0.148s max=    0.057ms nvjet_sm90_tst_128x88_64x7_4x1_v_bz_bias_TNT
+      4200 total=    0.147s max=    0.040ms nvjet_sm90_tst_192x8_64x8_4x1_v_bz_bias_TNT
+      2100 total=    0.145s max=    0.074ms triton_red_fused__to_copy_add_eq_mul_native_layer_norm_slice_split_unsqueeze_view_where_18
+      2100 total=    0.135s max=    0.066ms triton_red_fused__fused_rms_norm__to_copy_select_split_with_sizes_view_7
+      2100 total=    0.135s max=    0.066ms triton_red_fused__fused_rms_norm__to_copy_select_split_with_sizes_view_4
+      4200 total=    0.124s max=    0.046ms triton_poi_fused_all_to_all_single_clone_transpose_view_12
+      2100 total=    0.116s max=    0.062ms nvjet_sm90_tst_192x112_64x5_1x2_h_bz_coopB_bias_TNT
+      4200 total=    0.114s max=    0.029ms triton_poi_fused__flash_attn_forward_cat_slice_split_with_sizes_transpose_view_14
+      2100 total=    0.092s max=    0.049ms nvjet_sm90_tst_256x144_64x4_4x1_v_bz_coopA_bias_TNT
+      2100 total=    0.078s max=    0.047ms triton_poi_fused_all_to_all_single_clone_split_with_sizes_transpose_view_13
+      2100 total=    0.075s max=    0.037ms triton_poi_fused_add_eq_mul_slice_split_unsqueeze_view_where_23
+       736 total=    0.074s max=    0.128ms sm80_xmma_fprop_implicit_gemm_bf16bf16_bf16f32_f32_nhwckrsc_nhwc_tilesize256x32x32_stage4_warpsize4x1x1_g1_tensor16x8x16_execute_kernel__5x_cudnn
+
+Top NCCL-like events by category:
+      8400 total=    1.304s max=    0.679ms cat=gpu_user_annotation nccl:all_to_all
+      8400 total=    1.304s max=    0.679ms cat=kernel ncclDevKernel_SendRecv(ncclDevKernelArgsStorage<4096ul>)
+      8400 total=    0.476s max=    3.995ms cat=user_annotation nccl:all_to_all
+         2 total=    0.421s max=  420.745ms cat=user_annotation nccl:all_gather
+         3 total=    0.380s max=  379.718ms cat=gpu_user_annotation nccl:all_gather
+      2172 total=    0.192s max=   52.063ms cat=kernel ncclDevKernel_AllGather_RING_LL(ncclDevKernelArgsStorage<4096ul>)
+        70 total=    0.126s max=   52.063ms cat=gpu_user_annotation nccl:_all_gather_base
+      2100 total=    0.095s max=    0.454ms cat=user_annotation nccl:all_gather_into_tensor_coalesced
+      2100 total=    0.066s max=    0.043ms cat=gpu_user_annotation nccl:all_gather_into_tensor_coalesced
+        70 total=    0.005s max=    0.254ms cat=user_annotation nccl:_all_gather_base
+
+== perf_results/qwen_image_edit_2511_head/profiles/ulysses2_cfg2_vae_patch4_offline/20260729-014524_stage_0_rep_0_diffusion_1785260724/trace_rank2.json.gz
+events=2219140 gpu_events=214400 cpu_events=1228568
+gpu_span_s=19.143 busy_union_s=16.126 idle_union_s=3.016 idle_pct=15.76
+gaps_ge_5.000ms count=51 sum_s=0.795
+
+GAP 139.453 ms ts=2292937035127->2292937174580
+  prev gpu_memcpy 0.002 ms Memcpy DtoH (Device -> Pinned)
+  next gpu_memcpy 0.001 ms Memcpy HtoD (Pageable -> Device)
+
+GAP 101.111 ms ts=2292936504658->2292936605769
+  prev gpu_memset 0.002 ms Memset (Device)
+  next gpu_memcpy 0.001 ms Memcpy HtoD (Pageable -> Device)
+
+GAP 90.284 ms ts=2292936373881->2292936464165
+  prev kernel 0.001 ms void at::native::vectorized_elementwise_kernel<2, at::native::FillFunctor<long>, std::array<char*, 1ul> >(int, at::native::FillFunctor<long>, std::array<char*, 
+  next gpu_memset 0.001 ms Memset (Device)
+
+GAP 38.753 ms ts=2292936609689->2292936648443
+  prev gpu_memcpy 0.002 ms Memcpy HtoD (Pageable -> Device)
+  next gpu_memcpy 0.001 ms Memcpy HtoD (Pageable -> Device)
+  in   user_annotation 420.778 ms nccl:all_gather
+
+GAP 29.130 ms ts=2292937175463->2292937204593
+  prev kernel 0.002 ms void at_cuda_detail::cub::detail::select::DeviceSelectSweepKernel<at_cuda_detail::cub::detail::select::policy_hub<long, bool, int, false, (at_cuda_detail::cub::
+  next gpu_memcpy 0.001 ms Memcpy HtoD (Pageable -> Device)
+  in   user_annotation 18343.638 ms pipeline_forward
+  in   user_annotation 18345.826 ms diffusion_forward
+
+GAP 17.960 ms ts=2292937015594->2292937033555
+  prev gpu_memcpy 0.001 ms Memcpy HtoD (Pageable -> Device)
+  next kernel 0.227 ms ncclDevKernel_AllGather_RING_LL(ncclDevKernelArgsStorage<4096ul>)
+  in   user_annotation 420.778 ms nccl:all_gather
+
+GAP 16.156 ms ts=2292937354704->2292937370860
+  prev kernel 0.002 ms void at_cuda_detail::cub::detail::select::DeviceSelectSweepKernel<at_cuda_detail::cub::detail::select::policy_hub<long, bool, int, false, (at_cuda_detail::cub::
+  next gpu_memcpy 0.001 ms Memcpy HtoD (Pageable -> Device)
+  in   user_annotation 18343.638 ms pipeline_forward
+  in   user_annotation 18345.826 ms diffusion_forward
+
+GAP 15.815 ms ts=2292936789057->2292936804872
+  prev gpu_memcpy 0.001 ms Memcpy HtoD (Pageable -> Device)
+  next gpu_memcpy 0.001 ms Memcpy HtoD (Pageable -> Device)
+  in   user_annotation 420.778 ms nccl:all_gather
+
+GAP 15.600 ms ts=2292936685691->2292936701291
+  prev gpu_memcpy 0.001 ms Memcpy HtoD (Pageable -> Device)
+  next gpu_memcpy 0.001 ms Memcpy HtoD (Pageable -> Device)
+  in   user_annotation 420.778 ms nccl:all_gather
+
+GAP 15.302 ms ts=2292936707815->2292936723117
+  prev gpu_memcpy 0.001 ms Memcpy HtoD (Pageable -> Device)
+  next gpu_memcpy 0.001 ms Memcpy HtoD (Pageable -> Device)
+  in   user_annotation 420.778 ms nccl:all_gather
+
+GAP 14.872 ms ts=2292936957268->2292936972140
+  prev gpu_memcpy 0.001 ms Memcpy HtoD (Pageable -> Device)
+  next gpu_memcpy 0.001 ms Memcpy HtoD (Pageable -> Device)
+  in   user_annotation 420.778 ms nccl:all_gather
+
+GAP 13.541 ms ts=2292937002053->2292937015594
+  prev gpu_memcpy 0.001 ms Memcpy HtoD (Pageable -> Device)
+  next gpu_memcpy 0.001 ms Memcpy HtoD (Pageable -> Device)
+  in   user_annotation 420.778 ms nccl:all_gather
+
+GAP 11.412 ms ts=2292936840806->2292936852218
+  prev gpu_memcpy 0.001 ms Memcpy HtoD (Pageable -> Device)
+  next gpu_memcpy 0.001 ms Memcpy HtoD (Pageable -> Device)
+  in   user_annotation 420.778 ms nccl:all_gather
+
+GAP 10.875 ms ts=2292936723118->2292936733993
+  prev gpu_memcpy 0.001 ms Memcpy HtoD (Pageable -> Device)
+  next gpu_memcpy 0.001 ms Memcpy HtoD (Pageable -> Device)
+  in   user_annotation 420.778 ms nccl:all_gather
+
+GAP 10.816 ms ts=2292936648443->2292936659260
+  prev gpu_memcpy 0.001 ms Memcpy HtoD (Pageable -> Device)
+  next gpu_memcpy 0.001 ms Memcpy HtoD (Pageable -> Device)
+  in   user_annotation 420.778 ms nccl:all_gather
+
+GAP 10.394 ms ts=2292936985672->2292936996065
+  prev gpu_memcpy 0.001 ms Memcpy HtoD (Pageable -> Device)
+  next gpu_memcpy 0.001 ms Memcpy HtoD (Pageable -> Device)
+  in   user_annotation 420.778 ms nccl:all_gather
+
+GAP 9.425 ms ts=2292937211415->2292937220840
+  prev kernel 0.005 ms void pytorch_flash::flash_fwd_kernel<Flash_fwd_kernel_traits<96, 128, 64, 4, false, false, cutlass::bfloat16_t, Flash_kernel_traits<96, 128, 64, 4, cutlass::bfl
+  next kernel 0.005 ms void pytorch_flash::flash_fwd_kernel<Flash_fwd_kernel_traits<96, 128, 64, 4, false, false, cutlass::bfloat16_t, Flash_kernel_traits<96, 128, 64, 4, cutlass::bfl
+  in   user_annotation 18343.638 ms pipeline_forward
+  in   user_annotation 18345.826 ms diffusion_forward
+
+GAP 8.606 ms ts=2292936811436->2292936820041
+  prev gpu_memcpy 0.001 ms Memcpy HtoD (Pageable -> Device)
+  next gpu_memcpy 0.001 ms Memcpy HtoD (Pageable -> Device)
+  in   user_annotation 420.778 ms nccl:all_gather
+
+GAP 8.313 ms ts=2292936852219->2292936860532
+  prev gpu_memcpy 0.001 ms Memcpy HtoD (Pageable -> Device)
+  next gpu_memcpy 0.001 ms Memcpy HtoD (Pageable -> Device)
+  in   user_annotation 420.778 ms nccl:all_gather
+
+GAP 8.085 ms ts=2292936890275->2292936898360
+  prev gpu_memcpy 0.001 ms Memcpy HtoD (Pageable -> Device)
+  next gpu_memcpy 0.001 ms Memcpy HtoD (Pageable -> Device)
+  in   user_annotation 420.778 ms nccl:all_gather
+
+Top GPU/operator events by total duration:
+      2100 total=    5.929s max=    3.267ms void cutlass::device_kernel<flash::enable_sm90_or_later<flash::FlashAttnFwdSm90<flash::CollectiveMainloopFwdSm90<2, cute::tuple<cute::C<2>, cute::C<1>, cute::C<1> >, cute::tuple<cu
+      6300 total=    3.863s max=    1.041ms nvjet_sm90_tst_192x192_64x4_2x1_v_bz_coopB_bias_TNN
+      2100 total=    1.837s max=    1.008ms nvjet_sm90_tst_256x128_64x4_1x2_h_bz_coopA_bias_TNT
+      8400 total=    1.238s max=  103.578ms ncclDevKernel_SendRecv(ncclDevKernelArgsStorage<4096ul>)
+      2100 total=    0.447s max=    0.234ms triton_poi_fused_gelu_view_22
+      8400 total=    0.350s max=    0.091ms rotary_kernel
+      2100 total=    0.196s max=    0.108ms triton_red_fused__to_copy_add_eq_mul_native_layer_norm_slice_split_unsqueeze_where_2
+      4235 total=    0.149s max=    0.058ms nvjet_sm90_tst_128x88_64x7_4x1_v_bz_bias_TNT
+      4200 total=    0.147s max=    0.040ms nvjet_sm90_tst_192x8_64x8_4x1_v_bz_bias_TNT
+      2100 total=    0.144s max=    0.077ms triton_red_fused__to_copy_add_eq_mul_native_layer_norm_slice_split_unsqueeze_view_where_18
+      2100 total=    0.135s max=    0.068ms triton_red_fused__fused_rms_norm__to_copy_select_split_with_sizes_view_7
+      2100 total=    0.135s max=    0.068ms triton_red_fused__fused_rms_norm__to_copy_select_split_with_sizes_view_4
+      4200 total=    0.128s max=    0.195ms triton_poi_fused_all_to_all_single_clone_transpose_view_12
+      2100 total=    0.116s max=    0.064ms nvjet_sm90_tst_192x112_64x5_1x2_h_bz_coopB_bias_TNT
+      4200 total=    0.113s max=    0.029ms triton_poi_fused__flash_attn_forward_cat_slice_split_with_sizes_transpose_view_14
+      2172 total=    0.109s max=    9.558ms ncclDevKernel_AllGather_RING_LL(ncclDevKernelArgsStorage<4096ul>)
+      2100 total=    0.092s max=    0.051ms nvjet_sm90_tst_256x144_64x4_4x1_v_bz_coopA_bias_TNT
+      2100 total=    0.080s max=    0.048ms triton_poi_fused_all_to_all_single_clone_split_with_sizes_transpose_view_13
+      2100 total=    0.074s max=    0.037ms triton_poi_fused_add_eq_mul_slice_split_unsqueeze_view_where_23
+       736 total=    0.074s max=    0.135ms sm80_xmma_fprop_implicit_gemm_bf16bf16_bf16f32_f32_nhwckrsc_nhwc_tilesize256x32x32_stage4_warpsize4x1x1_g1_tensor16x8x16_execute_kernel__5x_cudnn
+
+Top NCCL-like events by category:
+      8400 total=    1.238s max=  103.578ms cat=gpu_user_annotation nccl:all_to_all
+      8400 total=    1.238s max=  103.578ms cat=kernel ncclDevKernel_SendRecv(ncclDevKernelArgsStorage<4096ul>)
+      8400 total=    0.465s max=    3.403ms cat=user_annotation nccl:all_to_all
+         2 total=    0.421s max=  420.778ms cat=user_annotation nccl:all_gather
+         3 total=    0.368s max=  367.152ms cat=gpu_user_annotation nccl:all_gather
+      2172 total=    0.109s max=    9.558ms cat=kernel ncclDevKernel_AllGather_RING_LL(ncclDevKernelArgsStorage<4096ul>)
+      2100 total=    0.093s max=    0.374ms cat=user_annotation nccl:all_gather_into_tensor_coalesced
+      2100 total=    0.074s max=    0.044ms cat=gpu_user_annotation nccl:all_gather_into_tensor_coalesced
+        70 total=    0.035s max=    9.558ms cat=gpu_user_annotation nccl:_all_gather_base
+        70 total=    0.005s max=    0.117ms cat=user_annotation nccl:_all_gather_base
+
+== perf_results/qwen_image_edit_2511_head/profiles/ulysses2_cfg2_vae_patch4_offline/20260729-014524_stage_0_rep_0_diffusion_1785260724/trace_rank3.json.gz
+events=2218102 gpu_events=214400 cpu_events=1228115
+gpu_span_s=19.130 busy_union_s=16.015 idle_union_s=3.115 idle_pct=16.28
+gaps_ge_5.000ms count=47 sum_s=0.810
+
+GAP 148.620 ms ts=2292937035121->2292937183741
+  prev gpu_memcpy 0.002 ms Memcpy DtoH (Device -> Pinned)
+  next gpu_memcpy 0.001 ms Memcpy HtoD (Pageable -> Device)
+
+GAP 81.477 ms ts=2292936383656->2292936465133
+  prev kernel 0.001 ms void at::native::vectorized_elementwise_kernel<2, at::native::FillFunctor<long>, std::array<char*, 1ul> >(int, at::native::FillFunctor<long>, std::array<char*, 
+  next gpu_memset 0.001 ms Memset (Device)
+
+GAP 59.878 ms ts=2292937184435->2292937244313
+  prev kernel 0.002 ms void at_cuda_detail::cub::detail::select::DeviceSelectSweepKernel<at_cuda_detail::cub::detail::select::policy_hub<long, bool, int, false, (at_cuda_detail::cub::
+  next gpu_memcpy 0.001 ms Memcpy HtoD (Pageable -> Device)
+  in   user_annotation 18331.610 ms pipeline_forward
+  in   user_annotation 18333.178 ms diffusion_forward
+
+GAP 55.597 ms ts=2292936504804->2292936560401
+  prev gpu_memcpy 0.001 ms Memcpy HtoD (Pageable -> Device)
+  next gpu_memset 0.002 ms Memset (Device)
+
+GAP 45.194 ms ts=2292936560403->2292936605597
+  prev gpu_memset 0.002 ms Memset (Device)
+  next gpu_memcpy 0.001 ms Memcpy HtoD (Pageable -> Device)
+
+GAP 35.415 ms ts=2292936609823->2292936645238
+  prev gpu_memcpy 0.002 ms Memcpy HtoD (Pageable -> Device)
+  next gpu_memcpy 0.001 ms Memcpy HtoD (Pageable -> Device)
+  in   user_annotation 420.778 ms nccl:all_gather
+
+GAP 19.018 ms ts=2292937392610->2292937411628
+  prev kernel 0.002 ms void at_cuda_detail::cub::detail::select::DeviceSelectSweepKernel<at_cuda_detail::cub::detail::select::policy_hub<long, bool, int, false, (at_cuda_detail::cub::
+  next gpu_memcpy 0.001 ms Memcpy HtoD (Pageable -> Device)
+  in   user_annotation 18331.610 ms pipeline_forward
+  in   user_annotation 18333.178 ms diffusion_forward
+
+GAP 15.795 ms ts=2292936684058->2292936699853
+  prev gpu_memcpy 0.001 ms Memcpy HtoD (Pageable -> Device)
+  next gpu_memcpy 0.001 ms Memcpy HtoD (Pageable -> Device)
+  in   user_annotation 420.778 ms nccl:all_gather
+
+GAP 15.189 ms ts=2292937004941->2292937020130
+  prev gpu_memcpy 0.001 ms Memcpy HtoD (Pageable -> Device)
+  next gpu_memcpy 0.001 ms Memcpy HtoD (Pageable -> Device)
+  in   user_annotation 420.778 ms nccl:all_gather
+
+GAP 14.999 ms ts=2292936704807->2292936719806
+  prev gpu_memcpy 0.001 ms Memcpy HtoD (Pageable -> Device)
+  next gpu_memcpy 0.001 ms Memcpy HtoD (Pageable -> Device)
+  in   user_annotation 420.778 ms nccl:all_gather
+
+GAP 14.102 ms ts=2292936719806->2292936733908
+  prev gpu_memcpy 0.001 ms Memcpy HtoD (Pageable -> Device)
+  next gpu_memcpy 0.001 ms Memcpy HtoD (Pageable -> Device)
+  in   user_annotation 420.778 ms nccl:all_gather
+
+GAP 13.641 ms ts=2292936962432->2292936976073
+  prev gpu_memcpy 0.001 ms Memcpy HtoD (Pageable -> Device)
+  next gpu_memcpy 0.001 ms Memcpy HtoD (Pageable -> Device)
+  in   user_annotation 420.778 ms nccl:all_gather
+
+GAP 13.508 ms ts=2292936983674->2292936997181
+  prev gpu_memcpy 0.001 ms Memcpy HtoD (Pageable -> Device)
+  next gpu_memcpy 0.001 ms Memcpy HtoD (Pageable -> Device)
+  in   user_annotation 420.778 ms nccl:all_gather
+
+GAP 13.349 ms ts=2292936771622->2292936784971
+  prev gpu_memcpy 0.001 ms Memcpy HtoD (Pageable -> Device)
+  next gpu_memcpy 0.001 ms Memcpy HtoD (Pageable -> Device)
+  in   user_annotation 420.778 ms nccl:all_gather
+
+GAP 12.373 ms ts=2292936797009->2292936809382
+  prev gpu_memcpy 0.001 ms Memcpy HtoD (Pageable -> Device)
+  next gpu_memcpy 0.001 ms Memcpy HtoD (Pageable -> Device)
+  in   user_annotation 420.778 ms nccl:all_gather
+
+GAP 12.037 ms ts=2292936784972->2292936797008
+  prev gpu_memcpy 0.001 ms Memcpy HtoD (Pageable -> Device)
+  next gpu_memcpy 0.001 ms Memcpy HtoD (Pageable -> Device)
+  in   user_annotation 420.778 ms nccl:all_gather
+
+GAP 11.921 ms ts=2292936846374->2292936858295
+  prev gpu_memcpy 0.001 ms Memcpy HtoD (Pageable -> Device)
+  next gpu_memcpy 0.001 ms Memcpy HtoD (Pageable -> Device)
+  in   user_annotation 420.778 ms nccl:all_gather
+
+GAP 11.046 ms ts=2292936654579->2292936665625
+  prev gpu_memcpy 0.001 ms Memcpy HtoD (Pageable -> Device)
+  next gpu_memcpy 0.001 ms Memcpy HtoD (Pageable -> Device)
+  in   user_annotation 420.778 ms nccl:all_gather
+
+GAP 10.527 ms ts=2292936835846->2292936846373
+  prev gpu_memcpy 0.001 ms Memcpy HtoD (Pageable -> Device)
+  next gpu_memcpy 0.001 ms Memcpy HtoD (Pageable -> Device)
+  in   user_annotation 420.778 ms nccl:all_gather
+
+GAP 10.042 ms ts=2292936937677->2292936947720
+  prev gpu_memcpy 0.001 ms Memcpy HtoD (Pageable -> Device)
+  next gpu_memcpy 0.001 ms Memcpy HtoD (Pageable -> Device)
+  in   user_annotation 420.778 ms nccl:all_gather
+
+Top GPU/operator events by total duration:
+      2100 total=    5.825s max=    2.968ms void cutlass::device_kernel<flash::enable_sm90_or_later<flash::FlashAttnFwdSm90<flash::CollectiveMainloopFwdSm90<2, cute::tuple<cute::C<2>, cute::C<1>, cute::C<1> >, cute::tuple<cu
+      6300 total=    3.793s max=    0.956ms nvjet_sm90_tst_192x192_64x4_2x1_v_bz_coopB_bias_TNN
+      2100 total=    1.801s max=    0.917ms nvjet_sm90_tst_256x128_64x4_1x2_h_bz_coopA_bias_TNT
+      8400 total=    1.369s max=    0.853ms ncclDevKernel_SendRecv(ncclDevKernelArgsStorage<4096ul>)
+      2100 total=    0.443s max=    0.218ms triton_poi_fused_gelu_view_22
+      8400 total=    0.345s max=    0.082ms rotary_kernel
+      2100 total=    0.193s max=    0.097ms triton_red_fused__to_copy_add_eq_mul_native_layer_norm_slice_split_unsqueeze_where_2
+      4235 total=    0.147s max=    0.055ms nvjet_sm90_tst_128x88_64x7_4x1_v_bz_bias_TNT
+      4200 total=    0.144s max=    0.040ms nvjet_sm90_tst_192x8_64x8_4x1_v_bz_bias_TNT
+      2100 total=    0.144s max=    0.071ms triton_red_fused__to_copy_add_eq_mul_native_layer_norm_slice_split_unsqueeze_view_where_18
+      2100 total=    0.135s max=    0.065ms triton_red_fused__fused_rms_norm__to_copy_select_split_with_sizes_view_7
+      2100 total=    0.135s max=    0.065ms triton_red_fused__fused_rms_norm__to_copy_select_split_with_sizes_view_4
+      4200 total=    0.125s max=    0.088ms triton_poi_fused_all_to_all_single_clone_transpose_view_12
+      2100 total=    0.115s max=    0.059ms nvjet_sm90_tst_192x112_64x5_1x2_h_bz_coopB_bias_TNT
+      4200 total=    0.114s max=    0.029ms triton_poi_fused__flash_attn_forward_cat_slice_split_with_sizes_transpose_view_14
+      2172 total=    0.099s max=    9.562ms ncclDevKernel_AllGather_RING_LL(ncclDevKernelArgsStorage<4096ul>)
+      2100 total=    0.090s max=    0.046ms nvjet_sm90_tst_256x144_64x4_4x1_v_bz_coopA_bias_TNT
+      2100 total=    0.076s max=    0.048ms triton_poi_fused_all_to_all_single_clone_split_with_sizes_transpose_view_13
+      2100 total=    0.075s max=    0.037ms triton_poi_fused_add_eq_mul_slice_split_unsqueeze_view_where_23
+       736 total=    0.074s max=    0.134ms sm80_xmma_fprop_implicit_gemm_bf16bf16_bf16f32_f32_nhwckrsc_nhwc_tilesize256x32x32_stage4_warpsize4x1x1_g1_tensor16x8x16_execute_kernel__5x_cudnn
+
+Top NCCL-like events by category:
+      8400 total=    1.369s max=    0.853ms cat=gpu_user_annotation nccl:all_to_all
+      8400 total=    1.369s max=    0.853ms cat=kernel ncclDevKernel_SendRecv(ncclDevKernelArgsStorage<4096ul>)
+      8400 total=    0.454s max=    3.106ms cat=user_annotation nccl:all_to_all
+         2 total=    0.421s max=  420.778ms cat=user_annotation nccl:all_gather
+         3 total=    0.385s max=  384.704ms cat=gpu_user_annotation nccl:all_gather
+      2172 total=    0.099s max=    9.562ms cat=kernel ncclDevKernel_AllGather_RING_LL(ncclDevKernelArgsStorage<4096ul>)
+      2100 total=    0.090s max=    0.446ms cat=user_annotation nccl:all_gather_into_tensor_coalesced
+      2100 total=    0.063s max=    0.042ms cat=gpu_user_annotation nccl:all_gather_into_tensor_coalesced
+        70 total=    0.036s max=    9.562ms cat=gpu_user_annotation nccl:_all_gather_base
+        70 total=    0.005s max=    0.121ms cat=user_annotation nccl:_all_gather_base
