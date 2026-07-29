@@ -46,6 +46,28 @@ which are only valid together with `--diffusion-load-format diffusers`.
 
 After launching the model, users send a request as usual. Refer to other documentation pages on how to request a particular input/output modality, such as `examples/online_serving/text_to_image/openai_chat_client.py`.
 
+### LoRA
+
+The Diffusers backend supports loading one static LoRA adapter at server
+startup. Configure the adapter with `--lora-path` and optionally
+`--lora-scale`:
+
+```bash
+vllm serve "Qwen/Qwen-Image" \
+    --omni \
+    --diffusion-load-format diffusers \
+    --lora-path /path/to/lora_adapter \
+    --lora-scale 0.8
+```
+
+The adapter directory is passed to the Diffusers pipeline's
+`load_lora_weights()` method using the vLLM-Omni PEFT weight filename
+`adapter_model.safetensors`.
+Adapter key or metadata conversion between vLLM-Omni and Diffusers formats is not performed.
+The model's diffusers pipeline must support `load_lora_weights()` and `set_adapters()`.
+
+Currently, diffusers backend does not support request-bound `lora_*` arguments.
+
 ## Configuration Reference
 
 ### `--diffusers-load-kwargs`

@@ -378,6 +378,12 @@ class DiffusionWorker:
 
     def init_lora_manager(self) -> None:
         """Initialize the LoRA manager for this worker."""
+        if self.od_config.diffusion_load_format == "diffusers":
+            logger.info(
+                "Skipping the native diffusion LoRA manager for the diffusers backend; "
+                "static LoRA is managed by DiffusersAdapterPipeline."
+            )
+            return
         if self.model_runner.pipeline is None:
             return
         self.lora_manager = DiffusionLoRAManager(

@@ -18,8 +18,10 @@ from vllm_omni.diffusion.data import (
 )
 from vllm_omni.diffusion.models.diffusers_adapter import DiffusersAdapterPipeline
 from vllm_omni.diffusion.request import OmniDiffusionRequest
+from vllm_omni.diffusion.worker.diffusion_worker import DiffusionWorker
 from vllm_omni.diffusion.worker.request_batch import DiffusionRequestBatch
 from vllm_omni.inputs.data import OmniDiffusionSamplingParams
+from vllm_omni.lora.request import LoRARequest
 
 pytestmark = [pytest.mark.diffusion]
 
@@ -226,6 +228,63 @@ class TestPipelineArgumentsHandling:
             pipeline_quant_config.quant_mapping["transformer_2"].quant_type,
             FakeInt8DynamicActivationInt8WeightConfig,
         )
+
+    def test_adapter_load_weights_loads_static_lora_from_config(self, mocker):
+        class MockPipeline:
+            def __init__(self):
+                self.load_lora_weights = mocker.Mock()
+                self.set_adapters = mocker.Mock()
+
+            def __call__(self, prompt=None):
+                return None
+
+            def to(self, device):
+                return self
+
+        inner_pipeline = MockPipeline()
+        mocker.patch(
+            "vllm_omni.diffusion.models.diffusers_adapter.pipeline_diffusers_adapter.DiffusionPipeline.from_pretrained",
+            return_value=inner_pipeline,
+        )
+
+        adapter = DiffusersAdapterPipeline(
+            od_config=_make_od_config(
+                lora_path="/models/my-lora",
+                lora_scale=0.75,
+            )
+        )
+        adapter.load_weights()
+
+        inner_pipeline.load_lora_weights.assert_called_once_with(
+            "/models/my-lora",
+            weight_name="adapter_model.safetensors",
+            adapter_name="static",
+        )
+        inner_pipeline.set_adapters.assert_called_once_with("static", adapter_weights=0.75)
+
+    def test_adapter_rejects_request_level_lora(self):
+        adapter = DiffusersAdapterPipeline(od_config=_make_od_config())
+        request = _make_request()
+        request.sampling_params.lora_request = LoRARequest(
+            lora_name="request-lora",
+            lora_int_id=1,
+            lora_path="/models/request-lora",
+        )
+
+        with pytest.raises(NotImplementedError, match="Request-level LoRA is unsupported"):
+            adapter.forward(DiffusionRequestBatch(requests=[request]))
+
+    def test_worker_routes_diffusers_lora_away_from_native_manager(self, mocker):
+        worker = object.__new__(DiffusionWorker)
+        worker.od_config = SimpleNamespace(diffusion_load_format="diffusers")
+        worker.model_runner = SimpleNamespace(pipeline=object())
+        worker.lora_manager = None
+        manager_cls = mocker.patch("vllm_omni.diffusion.worker.diffusion_worker.DiffusionLoRAManager")
+
+        worker.init_lora_manager()
+
+        manager_cls.assert_not_called()
+        assert worker.lora_manager is None
 
     @pytest.mark.parametrize(
         ("pipeline_config", "diffusers_load_kwargs", "diffusers_pipeline_cls"),

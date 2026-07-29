@@ -116,6 +116,7 @@ class DiffusersAdapterPipeline(nn.Module, DiffusionPipelineProfilerMixin):
         self._pipeline = DiffusionPipeline.from_pretrained(model_id, **load_kwargs)
         self._pipeline_utils.apply_post_load_updates(self._pipeline, self.od_config)
 
+        self._load_static_lora()
         self._pipeline.to(self.device)
 
         # Cache __call__kwargs signature introspection for later input validation
@@ -145,6 +146,34 @@ class DiffusersAdapterPipeline(nn.Module, DiffusionPipelineProfilerMixin):
 
         # Attention backend
         self._set_attention_backend()
+
+    def _load_static_lora(self) -> None:
+        """Load the configured LoRA once through the Diffusers pipeline."""
+        lora_path = self.od_config.lora_path
+        if lora_path is None:
+            return
+
+        load_lora_weights = getattr(self._pipeline, "load_lora_weights", None)
+        set_adapters = getattr(self._pipeline, "set_adapters", None)
+        if not callable(load_lora_weights) or not callable(set_adapters):
+            raise NotImplementedError(
+                f"Static LoRA is unsupported by diffusers pipeline "
+                f"{self._pipeline.__class__.__name__}: the pipeline must expose "
+                "load_lora_weights() and set_adapters()."
+            )
+
+        adapter_name = "static"
+        logger.info(
+            "Loading static LoRA for diffusers pipeline from %s with scale %.3f",
+            lora_path,
+            self.od_config.lora_scale,
+        )
+        load_lora_weights(
+            lora_path,
+            weight_name="adapter_model.safetensors",
+            adapter_name=adapter_name,
+        )
+        set_adapters(adapter_name, adapter_weights=self.od_config.lora_scale)
 
     # ------------------------------------------------------------------
     # Step-wise execution — explicitly rejected
@@ -337,6 +366,11 @@ class DiffusersAdapterPipeline(nn.Module, DiffusionPipelineProfilerMixin):
     def _build_call_kwargs(self, req: DiffusionRequestBatch) -> dict[str, Any]:
         """Translate a ``DiffusionRequestBatch`` into diffusers ``__call__`` kwargs."""
         sampling = req.sampling_params
+        if sampling.lora_request is not None:
+            raise NotImplementedError(
+                "Request-level LoRA is unsupported with the diffusers backend. "
+                "Configure one static adapter at server startup with lora_path and lora_scale."
+            )
         input_kwargs = self._extract_input(req.prompts)
 
         self._pipeline_utils.validate_runtime_sampling_params(sampling)
