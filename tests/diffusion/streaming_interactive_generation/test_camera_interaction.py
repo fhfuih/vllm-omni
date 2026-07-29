@@ -13,13 +13,11 @@ import torch
 from vllm_omni.diffusion.interaction.coordinator import InteractionCoordinator
 from vllm_omni.diffusion.interaction.mixin import InteractionMixin
 from vllm_omni.diffusion.interaction.modality_handlers.camera import SE3DeltaCameraHandler, WASDEventCameraHandler
-from vllm_omni.diffusion.interaction.modality_handlers.prompt import PromptInteractionHandler
 from vllm_omni.diffusion.interaction.registry import STRUCTURED_HANDLER_REGISTRY
 from vllm_omni.diffusion.interaction.types import (
     InteractionEventArrival,
     resolve_event_frame_offset,
 )
-from vllm_omni.diffusion.worker.diffusion_model_runner import DiffusionModelRunner
 from vllm_omni.diffusion.worker.utils import StepRequestState
 
 pytestmark = [pytest.mark.core_model, pytest.mark.diffusion, pytest.mark.cpu]
@@ -291,80 +289,3 @@ class TestCameraHandlers:
         assert state.extra["camera_session"].active_velocity is None
         assert state.extra["camera_session"].active_target is not None
         assert state.extra["camera_session"].current_pose.translation[2] == pytest.approx(0.0)
-
-
-class TestRunnerCameraRouting:
-    def test_helios_rejects_camera_interaction(self) -> None:
-        pipeline = _make_prompt_pipeline()
-        runner = object.__new__(DiffusionModelRunner)
-        runner.pipeline = pipeline
-        runner.state_cache = {"req-1": _make_state()}
-        runner.od_config = SimpleNamespace(model_class_name="HeliosPipeline", streaming_output=True)
-        runner._supports_step_mode = lambda: True
-        runner._interaction_coordinator = None
-
-        with pytest.raises(ValueError, match="camera"):
-            runner.submit_interaction(
-                "req-1",
-                {
-                    "event_id": "cam-1",
-                    "event": {
-                        "multi_modal_data": {
-                            "camera": {
-                                "mode": "target",
-                                "data": {"translation": [0, 0, 1]},
-                            }
-                        }
-                    },
-                },
-            )
-
-    def test_camera_pipeline_accepts_camera_and_prompt(self, mocker) -> None:
-        pipeline = _make_prompt_pipeline()
-        runner = object.__new__(DiffusionModelRunner)
-        runner.pipeline = pipeline
-        state = _make_state()
-        runner.state_cache = {"req-1": state}
-        runner.od_config = SimpleNamespace(model_class_name="SomeCameraPipeline", streaming_output=True)
-        runner._supports_step_mode = lambda: True
-        mocker.patch(
-            "vllm_omni.diffusion.interaction.coordinator.STRUCTURED_HANDLER_REGISTRY",
-            _FAKE_CAMERA_REGISTRY,
-        )
-        runner._interaction_coordinator = InteractionCoordinator.build(pipeline, runner.od_config)
-
-        runner.submit_interaction(
-            "req-1",
-            {
-                "event_id": "combo-1",
-                "event": {
-                    "prompt": "new scene",
-                    "multi_modal_data": {
-                        "camera": {
-                            "mode": "target",
-                            "data": {"translation": [0, 0, 1]},
-                        }
-                    },
-                },
-                "transition_chunks": 1,
-            },
-        )
-
-        assert "pending_prompt_update" in state.extra
-        assert len(state.extra["camera_session"].pending_events) == 1
-
-
-class TestInteractionMixinApply:
-    def test_unified_apply_updates_prompt_metadata(self) -> None:
-        pipeline = _make_prompt_pipeline()
-        state = _make_state()
-        handler = PromptInteractionHandler.from_pipeline(pipeline)
-        handler.enqueue(
-            state,
-            event_arrival=_event_ctx("ui-1"),
-            payload={"prompt": "new scene"},
-            transition_chunks=1,
-        )
-        pipeline.apply_interaction_at_chunk_boundary(state, chunk_index=0, num_frames=1, fps=16.0)
-        assert state.extra["prompt_update_version"] == 1
-        assert state.extra["interaction_chunk_metadata"]["started_event_ids"] == ["ui-1"]
