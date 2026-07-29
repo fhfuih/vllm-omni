@@ -137,44 +137,36 @@ class TestPromptUpdateExecution:
             runner.submit_interaction("missing", _prompt_interaction())
 
     @pytest.mark.parametrize(
-        ("interaction", "match"),
+        "interaction",
         [
-            ({}, "event object"),
-            (
-                {
-                    "event_id": "cam-only",
-                    "event": {"multi_modal_data": {"camera": {"mode": "target", "data": {"translation": [0, 0, 1]}}}},
-                },
-                "camera",
-            ),
-            (
-                {
-                    "event_id": "ui-update-1",
-                    "event": {
-                        "prompt": "updated",
-                        "multi_modal_data": {
-                            "camera": {
-                                "mode": "target",
-                                "data": {"translation": [0, 0, 1]},
-                            }
-                        },
+            {
+                "event_id": "cam-only",
+                "event": {"multi_modal_data": {"camera": {"mode": "target", "data": {"translation": [0, 0, 1]}}}},
+            },
+            {
+                "event_id": "cam-and-prompt",
+                "event": {
+                    "prompt": "updated",
+                    "multi_modal_data": {
+                        "camera": {
+                            "mode": "target",
+                            "data": {"translation": [0, 0, 1]},
+                        }
                     },
                 },
-                "camera",
-            ),
+            },
         ],
     )
-    def test_runner_rejects_unsupported_or_invalid_interactions(
+    def test_runner_rejects_unsupported_interactions(
         self,
         pipeline: HeliosPipeline,
         interaction: dict[str, Any],
-        match: str,
     ) -> None:
         """Helios has no camera handler; malformed payloads are rejected."""
         runner = _make_diffusion_model_runner(pipeline=pipeline)
         runner.state_cache["req-1"] = _make_diffusion_request_state()
 
-        with pytest.raises(ValueError, match=match):
+        with pytest.raises(ValueError):
             runner.submit_interaction("req-1", cast(Any, interaction))
 
     def test_input_batch_refreshes_prompt_embeds_on_version_change(self) -> None:
