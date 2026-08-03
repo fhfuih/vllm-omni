@@ -246,6 +246,12 @@ class TestPipelineArgumentsHandling:
             "vllm_omni.diffusion.models.diffusers_adapter.pipeline_diffusers_adapter.DiffusionPipeline.from_pretrained",
             return_value=inner_pipeline,
         )
+        fake_state = {"transformer.blocks.0.attn.to_q.lora.down.weight": object()}
+        convert = mocker.patch(
+            "vllm_omni.diffusion.models.diffusers_adapter.pipeline_diffusers_adapter."
+            "DiffusersAdapterPipeline._peft_adapter_to_diffusers_state_dict",
+            return_value=fake_state,
+        )
 
         adapter = DiffusersAdapterPipeline(
             od_config=_make_od_config(
@@ -255,9 +261,9 @@ class TestPipelineArgumentsHandling:
         )
         adapter.load_weights()
 
+        convert.assert_called_once_with("/models/my-lora")
         inner_pipeline.load_lora_weights.assert_called_once_with(
-            "/models/my-lora",
-            weight_name="adapter_model.safetensors",
+            fake_state,
             adapter_name="static",
         )
         inner_pipeline.set_adapters.assert_called_once_with("static", adapter_weights=0.75)
@@ -687,6 +693,30 @@ class TestPipelineArgumentsHandling:
         )
         with pytest.raises(ValueError):
             pipeline.forward(DiffusionRequestBatch(requests=[problematic_request]))
+
+    def test_peft_adapter_to_diffusers_state_dict(self, tmp_path):
+        import json
+
+        from safetensors.torch import save_file
+
+        adapter_dir = tmp_path / "peft"
+        adapter_dir.mkdir()
+        save_file(
+            {
+                "base_model.model.transformer.blocks.0.attn.to_q.lora_A.weight": torch.ones(2, 4),
+                "base_model.model.transformer.blocks.0.attn.to_q.lora_B.weight": torch.ones(4, 2),
+            },
+            str(adapter_dir / "adapter_model.safetensors"),
+        )
+        (adapter_dir / "adapter_config.json").write_text(
+            json.dumps({"r": 2, "lora_alpha": 2, "target_modules": ["to_q"]}),
+            encoding="utf-8",
+        )
+
+        converted = DiffusersAdapterPipeline._peft_adapter_to_diffusers_state_dict(str(adapter_dir))
+        assert "transformer.blocks.0.attn.to_q.lora.down.weight" in converted
+        assert "transformer.blocks.0.attn.to_q.lora.up.weight" in converted
+        assert "base_model.model.transformer.blocks.0.attn.to_q.lora_A.weight" not in converted
 
 
 @pytest.mark.advanced_model

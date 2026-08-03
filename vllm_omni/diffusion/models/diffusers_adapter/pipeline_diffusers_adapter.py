@@ -168,12 +168,60 @@ class DiffusersAdapterPipeline(nn.Module, DiffusionPipelineProfilerMixin):
             lora_path,
             self.od_config.lora_scale,
         )
-        load_lora_weights(
-            lora_path,
-            weight_name="adapter_model.safetensors",
-            adapter_name=adapter_name,
-        )
+        # Diffusers' PEFT path filters keys by the transformer component prefix and
+        # does not accept vLLM-Omni PEFT keys (`base_model.model.transformer...lora_A`)
+        # as-is. Convert the PEFT adapter into Diffusers LoRA naming, then load from
+        # an in-memory state dict.
+        state_dict = self._peft_adapter_to_diffusers_state_dict(lora_path)
+        load_lora_weights(state_dict, adapter_name=adapter_name)
         set_adapters(adapter_name, adapter_weights=self.od_config.lora_scale)
+
+    @staticmethod
+    def _peft_adapter_to_diffusers_state_dict(lora_path: str) -> dict[str, torch.Tensor]:
+        """Convert a vLLM-Omni PEFT adapter directory into Diffusers LoRA keys.
+
+        Expected PEFT layout::
+
+            lora_adapter/
+            ├── adapter_config.json
+            └── adapter_model.safetensors
+
+        Key mapping examples:
+
+        - ``base_model.model.transformer.blocks.0.attn.to_q.lora_A.weight``
+          → ``transformer.blocks.0.attn.to_q.lora.down.weight``
+        - ``base_model.model.transformer.blocks.0.attn.to_q.lora_B.weight``
+          → ``transformer.blocks.0.attn.to_q.lora.up.weight``
+        """
+        import os
+
+        from safetensors.torch import load_file
+
+        weight_path = os.path.join(lora_path, "adapter_model.safetensors")
+        if not os.path.isfile(weight_path):
+            raise FileNotFoundError(
+                "Diffusers backend static LoRA expects a PEFT adapter directory "
+                f"containing adapter_model.safetensors, got missing file: {weight_path}"
+            )
+
+        raw = load_file(weight_path)
+        converted: dict[str, torch.Tensor] = {}
+        for key, tensor in raw.items():
+            name = key.removeprefix("base_model.model.")
+            if name.endswith(".lora_A.weight"):
+                name = f"{name[: -len('.lora_A.weight')]}.lora.down.weight"
+            elif name.endswith(".lora_B.weight"):
+                name = f"{name[: -len('.lora_B.weight')]}.lora.up.weight"
+            converted[name] = tensor
+
+        if not converted:
+            raise ValueError(f"No LoRA tensors found in PEFT adapter at {weight_path}")
+        if not any("lora" in key for key in converted):
+            raise ValueError(
+                f"Converted LoRA state dict from {weight_path} has no keys containing 'lora'; "
+                "check that adapter_model.safetensors uses PEFT lora_A/lora_B naming."
+            )
+        return converted
 
     # ------------------------------------------------------------------
     # Step-wise execution — explicitly rejected

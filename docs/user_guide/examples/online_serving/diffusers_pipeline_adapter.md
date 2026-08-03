@@ -60,11 +60,11 @@ vllm serve "Qwen/Qwen-Image" \
     --lora-scale 0.8
 ```
 
-The adapter directory is passed to the Diffusers pipeline's
-`load_lora_weights()` method using the vLLM-Omni PEFT weight filename
-`adapter_model.safetensors`.
-Adapter key or metadata conversion between vLLM-Omni and Diffusers formats is not performed.
-The model's diffusers pipeline must support `load_lora_weights()` and `set_adapters()`.
+The adapter directory must contain the vLLM-Omni PEFT files
+`adapter_model.safetensors` and `adapter_config.json`. The Diffusers backend
+converts PEFT keys (`lora_A` / `lora_B`) into Diffusers LoRA naming before
+calling `load_lora_weights()`.
+The model's Diffusers pipeline must support `load_lora_weights()` and `set_adapters()`.
 
 Currently, diffusers backend does not support request-bound `lora_*` arguments.
 

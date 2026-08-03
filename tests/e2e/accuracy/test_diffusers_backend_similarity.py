@@ -55,6 +55,14 @@ TRUE_CFG_SCALE = 4.0
 SEED = 42
 SSIM_THRESHOLD = 0.97
 PSNR_THRESHOLD = 30.0
+# Native vs Diffusers-backend with the same static LoRA.
+# Intentionally looser than the no-LoRA gate (SSIM 0.97 / PSNR 30): Diffusers applies
+# LoRA on separate to_q/to_k/to_v Linears via PEFT, while native uses fused to_qkv +
+# packed LoRA slices. Scaling already matches (alpha/r=1); remaining gap is structural
+# and is amplified over denoising steps (local flymy_realism: SSIM≈0.86, delta corr≈0.98).
+# See local_lora_validation_outputs/REPORT.md "Root cause".
+LORA_SSIM_THRESHOLD = 0.80
+LORA_PSNR_THRESHOLD = 22.0
 
 # A single-shot latency measurement on this benchmark is dominated by CI variance
 # (see issue #5108). Warm up once, then report the median of several timed runs.
@@ -172,7 +180,14 @@ def _run_diffusers_wan22_i2v(*, model: str, output_path: Path, conditioning_imag
         run_post_test_cleanup()
 
 
-def _run_vllm_omni_qwen_image(*, model: str, output_path: Path) -> tuple[Image.Image, float]:
+def _run_vllm_omni_qwen_image(
+    *,
+    model: str,
+    output_path: Path,
+    diffusion_load_format: str | None = "diffusers",
+    lora_path: Path | None = None,
+    lora_scale: float = 1.0,
+) -> tuple[Image.Image, float]:
     server_args = [
         "--num-gpus",
         "1",
@@ -180,13 +195,15 @@ def _run_vllm_omni_qwen_image(*, model: str, output_path: Path) -> tuple[Image.I
         "400",
         "--init-timeout",
         "900",
-        "--diffusion-load-format",
-        "diffusers",
-        # "--enable-diffusion-pipeline-profiler",
     ]
+    if diffusion_load_format is not None:
+        server_args.extend(["--diffusion-load-format", diffusion_load_format])
+    if lora_path is not None:
+        server_args.extend(["--lora-path", str(lora_path), "--lora-scale", str(lora_scale)])
+
     with OmniServer(model, server_args, use_omni=True) as omni_server:
         url = f"http://{omni_server.host}:{omni_server.port}/v1/images/generations"
-        request_json = {
+        request_json: dict[str, Any] = {
             "model": omni_server.model,
             "prompt": PROMPT,
             "size": f"{WIDTH}x{HEIGHT}",
@@ -197,6 +214,14 @@ def _run_vllm_omni_qwen_image(*, model: str, output_path: Path) -> tuple[Image.I
             "true_cfg_scale": TRUE_CFG_SCALE,
             "seed": SEED,
         }
+        # Native backend needs request-level LoRA to keep a preloaded adapter active.
+        # Diffusers backend applies static LoRA at load time and rejects request LoRA.
+        if lora_path is not None and diffusion_load_format != "diffusers":
+            request_json["lora"] = {
+                "name": lora_path.name,
+                "local_path": str(lora_path.resolve()),
+                "scale": lora_scale,
+            }
 
         def _timed_request() -> tuple[requests.Response, float]:
             start_time = time.perf_counter()
@@ -306,6 +331,47 @@ def test_diffusers_backend_t2i_matches_diffusers(model_id: str, accuracy_artifac
         f"VLLM latency ({vllm_latency:.2f}ms) is greater than "
         f"{latency_threshold_factor * 100}% more than Diffusers latency "
         f"({diffusers_latency:.2f}ms)."
+    )
+
+
+@pytest.mark.benchmark
+@hardware_test(res={"cuda": "H100"}, num_cards=1)
+@pytest.mark.parametrize("model_id", ["Qwen/Qwen-Image"])
+def test_diffusers_backend_t2i_lora_matches_native(model_id: str, accuracy_artifact_root: Path) -> None:
+    """Native backend + static LoRA should match Diffusers backend + static LoRA."""
+    from tests.e2e.accuracy.lora_utils import resolve_qwen_image_lora_path
+
+    try:
+        lora_path = resolve_qwen_image_lora_path()
+    except FileNotFoundError as exc:
+        pytest.skip(f"Qwen-Image LoRA adapter unavailable: {exc}")
+
+    output_dir = model_output_dir(accuracy_artifact_root, model_id + "-diffusers-backend-lora")
+    lora_scale = 1.0
+
+    native_output, _ = _run_vllm_omni_qwen_image(
+        model=model_id,
+        output_path=output_dir / "native_lora.png",
+        diffusion_load_format=None,
+        lora_path=lora_path,
+        lora_scale=lora_scale,
+    )
+    diffusers_backend_output, _ = _run_vllm_omni_qwen_image(
+        model=model_id,
+        output_path=output_dir / "diffusers_backend_lora.png",
+        diffusion_load_format="diffusers",
+        lora_path=lora_path,
+        lora_scale=lora_scale,
+    )
+
+    assert_similarity(
+        model_name=f"{model_id}+lora",
+        vllm_image=diffusers_backend_output,
+        diffusers_image=native_output,
+        width=WIDTH,
+        height=HEIGHT,
+        ssim_threshold=LORA_SSIM_THRESHOLD,
+        psnr_threshold=LORA_PSNR_THRESHOLD,
     )
 
 

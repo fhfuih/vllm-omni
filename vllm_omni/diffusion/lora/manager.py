@@ -272,6 +272,67 @@ class DiffusionLoRAManager:
         """
         return round(lora_scale, 3)
 
+    @staticmethod
+    def _materialize_native_compatible_adapter(lora_path: str) -> str:
+        """Rewrite Diffusers ModuleList LoRA names to native attribute names.
+
+        Community Qwen-Image PEFT adapters commonly use Diffusers naming such as
+        ``attn.to_out.0``, while the native vLLM-Omni transformer exposes a single
+        ``attn.to_out`` linear. Remap those keys (and matching target_modules)
+        into a temporary adapter directory so ``LoRAModel.from_local_checkpoint``
+        accepts the weights.
+        """
+        import json
+        import os
+        import tempfile
+
+        from safetensors import safe_open
+        from safetensors.torch import save_file
+
+        weight_path = os.path.join(lora_path, "adapter_model.safetensors")
+        if not os.path.isfile(weight_path):
+            return lora_path
+
+        remapped: dict[str, torch.Tensor] = {}
+        needs_remap = False
+        with safe_open(weight_path, framework="pt") as handle:
+            for key in handle.keys():
+                new_key = key.replace(".to_out.0.", ".to_out.")
+                if new_key != key:
+                    needs_remap = True
+                remapped[new_key] = handle.get_tensor(key)
+
+        if not needs_remap:
+            return lora_path
+
+        tmp_dir = tempfile.mkdtemp(prefix="vllm_omni_lora_native_")
+        save_file(remapped, os.path.join(tmp_dir, "adapter_model.safetensors"))
+
+        config_path = os.path.join(lora_path, "adapter_config.json")
+        if os.path.isfile(config_path):
+            with open(config_path, encoding="utf-8") as f:
+                config = json.load(f)
+            target_modules = config.get("target_modules")
+            if isinstance(target_modules, list):
+                config["target_modules"] = [
+                    "to_out" if module == "to_out.0" else module for module in target_modules
+                ]
+            elif isinstance(target_modules, str):
+                config["target_modules"] = target_modules.replace("to_out\\.0", "to_out").replace(
+                    "to_out.0", "to_out"
+                )
+            with open(os.path.join(tmp_dir, "adapter_config.json"), "w", encoding="utf-8") as f:
+                json.dump(config, f, indent=2)
+                f.write("\n")
+        else:
+            raise FileNotFoundError(f"Missing adapter_config.json next to remapped weights at {lora_path}")
+
+        logger.info(
+            "Remapped Diffusers ModuleList LoRA names (to_out.0 -> to_out) into temporary adapter at %s",
+            tmp_dir,
+        )
+        return tmp_dir
+
     def _load_adapter(
         self,
         lora_request: LoRARequest,
@@ -282,6 +343,8 @@ class DiffusionLoRAManager:
         logger.debug("Supported LoRA modules: %s", self._expected_lora_modules)
 
         lora_path = get_adapter_absolute_path(lora_request.lora_path)
+        if lora_request.tensorizer_config_dict is None:
+            lora_path = self._materialize_native_compatible_adapter(lora_path)
         logger.debug("Resolved LoRA path: %s", lora_path)
 
         peft_helper = PEFTHelper.from_local_dir(

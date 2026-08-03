@@ -3,6 +3,8 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 import torch
 from vllm.lora.lora_weights import LoRALayerWeights
@@ -617,3 +619,34 @@ def test_lora_manager_discovers_unet_component(monkeypatch):
     assert "unet.down_block.proj" in manager._lora_modules
     # Verify the module was actually replaced in the tree (not just recorded)
     assert isinstance(pipeline.unet.down_block.proj, _DummyBaseLayerWithLoRA)
+
+
+def test_materialize_native_compatible_adapter_remaps_to_out_modulelist(tmp_path):
+    """Diffusers PEFT uses attn.to_out.0; native Qwen-Image exposes attn.to_out."""
+    import json
+
+    from safetensors.torch import load_file, save_file
+
+    adapter_dir = tmp_path / "peft"
+    adapter_dir.mkdir()
+    save_file(
+        {
+            "base_model.model.transformer.blocks.0.attn.to_out.0.lora_A.weight": torch.ones(2, 4),
+            "base_model.model.transformer.blocks.0.attn.to_out.0.lora_B.weight": torch.ones(4, 2),
+            "base_model.model.transformer.blocks.0.attn.to_q.lora_A.weight": torch.ones(2, 4),
+            "base_model.model.transformer.blocks.0.attn.to_q.lora_B.weight": torch.ones(4, 2),
+        },
+        str(adapter_dir / "adapter_model.safetensors"),
+    )
+    (adapter_dir / "adapter_config.json").write_text(
+        json.dumps({"r": 2, "lora_alpha": 2, "target_modules": ["to_q", "to_out.0"]}),
+        encoding="utf-8",
+    )
+
+    remapped = DiffusionLoRAManager._materialize_native_compatible_adapter(str(adapter_dir))
+    assert remapped != str(adapter_dir)
+    keys = set(load_file(str(Path(remapped) / "adapter_model.safetensors")).keys())
+    assert "base_model.model.transformer.blocks.0.attn.to_out.lora_A.weight" in keys
+    assert "base_model.model.transformer.blocks.0.attn.to_out.0.lora_A.weight" not in keys
+    config = json.loads((Path(remapped) / "adapter_config.json").read_text(encoding="utf-8"))
+    assert config["target_modules"] == ["to_q", "to_out"]
