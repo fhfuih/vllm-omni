@@ -201,9 +201,9 @@ class CameraModalityHandler(InteractionHandler):
         Returns:
             tuple:
                 - poses (list[CameraPose]): Sampled absolute camera poses for each frame in the chunk.
-                - started_event_ids (list[str])
-                - active_event_ids (list[str])
-                - completed_event_ids (list[str])
+                - started_event_ids (list[str]): newly activated this chunk
+                - active_event_ids (list[str]): still in-flight at end of chunk
+                - completed_event_ids (list[str]): newly finished or cancelled this chunk
         """
 
         num_frames = max(int(num_frames), 1)
@@ -227,32 +227,42 @@ class CameraModalityHandler(InteractionHandler):
 
         started: list[str] = []
         completed: list[str] = []
+        seen_completed: set[str] = set()
         poses: list[CameraPose] = []
+
+        def _mark_completed(event_id: str) -> None:
+            if event_id not in seen_completed:
+                seen_completed.add(event_id)
+                completed.append(event_id)
 
         for frame_idx in range(num_frames):
             for event in by_frame.get(frame_idx, []):
                 started.append(event.event_id)
-                self._activate_event(session, event)
+                cancelled_id = self._activate_event(session, event)
+                if cancelled_id is not None:
+                    _mark_completed(cancelled_id)
             just_completed = self._step_one_frame(session, num_frames)
             poses.append(session.current_pose.clone())
             if just_completed is not None:
-                completed.append(just_completed)
+                _mark_completed(just_completed)
 
         active: list[str] = []
         if session.active_target is not None:
             active.append(session.active_target.event_id)
-            duration = session.active_target.transition_chunks
-            if duration <= 0 or session.elapsed_transition_chunks >= duration:
-                if session.active_target.event_id not in completed:
-                    completed.append(session.active_target.event_id)
         elif session.active_velocity is not None:
             active.append(session.active_velocity.event_id)
 
         session.last_boundary_at = boundary_at
         return poses, started, active, completed
 
-    def _activate_event(self, session: CameraSession, event: QueuedCameraEvent) -> None:
+    def _activate_event(self, session: CameraSession, event: QueuedCameraEvent) -> str | None:
+        """Activate ``event``, returning the event_id cancelled by this replacement if any."""
+        cancelled_id: str | None = None
         if event.mode == "velocity":
+            if session.active_target is not None:
+                cancelled_id = session.active_target.event_id
+            elif session.active_velocity is not None and session.active_velocity.event_id != event.event_id:
+                cancelled_id = session.active_velocity.event_id
             session.active_velocity = CameraVelocity(
                 translation=event.pose.translation,
                 rotation=event.pose.rotation,
@@ -261,9 +271,13 @@ class CameraModalityHandler(InteractionHandler):
             session.active_target = None
             session.target_source = None
             session.elapsed_transition_chunks = 0.0
-            return
+            return cancelled_id
 
         # else, mode == "target"
+        if session.active_velocity is not None:
+            cancelled_id = session.active_velocity.event_id
+        elif session.active_target is not None and session.active_target.event_id != event.event_id:
+            cancelled_id = session.active_target.event_id
         session.active_velocity = None
         session.active_target = CameraTarget(
             pose=event.pose,
@@ -272,23 +286,36 @@ class CameraModalityHandler(InteractionHandler):
         )
         session.target_source = session.current_pose.clone()
         session.elapsed_transition_chunks = 0.0
+        return cancelled_id
+
+    def _clear_active_target(self, session: CameraSession) -> str:
+        """Snap to the target pose, clear the active target track, and return its event_id."""
+        assert session.active_target is not None
+        event_id = session.active_target.event_id
+        session.current_pose = session.active_target.pose.clone()
+        session.active_target = None
+        session.target_source = None
+        session.elapsed_transition_chunks = 0.0
+        return event_id
 
     def _step_one_frame(self, session: CameraSession, total_num_frames_this_chunk: int) -> str | None:
-        """Advance the active camera command by one output frame."""
+        """Advance the active camera command by one output frame.
+
+        Returns the event_id that finished on this frame, if any. Finished targets
+        are cleared so later frames/chunks do not re-emit them as active/completed.
+        """
         if session.active_target is not None:
             duration = session.active_target.transition_chunks
             source = session.target_source or session.current_pose
             target = session.active_target.pose
             if duration <= 0:
-                session.current_pose = target.clone()
-                return session.active_target.event_id
+                return self._clear_active_target(session)
 
             session.elapsed_transition_chunks += 1.0 / float(total_num_frames_this_chunk)
             alpha = min(1.0, session.elapsed_transition_chunks / float(duration))
             session.current_pose = _lerp_pose(source, target, alpha)
             if session.elapsed_transition_chunks >= duration:
-                session.current_pose = target.clone()
-                return session.active_target.event_id
+                return self._clear_active_target(session)
             return None
 
         if session.active_velocity is not None:

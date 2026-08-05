@@ -127,6 +127,8 @@ class TestCameraHandlers:
         tensor = state.extra["conditioning"]["camera"]
         assert meta is not None
         assert meta.started_event_ids == ["cam-1"]
+        assert meta.active_event_ids == ["cam-1"]
+        assert meta.completed_event_ids == []
         assert tensor.shape == (4, 4, 4)
 
         meta2 = handler.apply_at_chunk_boundary(
@@ -137,8 +139,64 @@ class TestCameraHandlers:
             boundary_at=0.5,
         )
         assert meta2 is not None
-        assert "cam-1" in meta2.completed_event_ids
+        assert meta2.started_event_ids == []
+        assert meta2.active_event_ids == []
+        assert meta2.completed_event_ids == ["cam-1"]
+        assert state.extra["camera_session"].active_target is None
         assert state.extra["camera_session"].current_pose.translation[2] == pytest.approx(3.0)
+
+        # Finished targets must not reappear on later chunks.
+        meta3 = handler.apply_at_chunk_boundary(
+            state,
+            chunk_index=2,
+            num_frames=4,
+            fps=16.0,
+            boundary_at=0.75,
+        )
+        assert meta3 is not None
+        assert meta3.started_event_ids == []
+        assert meta3.active_event_ids == []
+        assert meta3.completed_event_ids == []
+        assert state.extra["camera_session"].current_pose.translation[2] == pytest.approx(3.0)
+
+    def test_single_chunk_target_completes_once(self) -> None:
+        """transition_chunks=1 may start+complete in one chunk, then stay idle."""
+        handler = SE3DeltaCameraHandler()
+        state = _make_state()
+        handler.enqueue(
+            state,
+            event_arrival=_event_ctx("cam-fast"),
+            payload={
+                "mode": "target",
+                "data": {"translation": [1.0, 0.0, 0.0], "rotation": [0.0, 0.0, 0.0, 1.0]},
+            },
+            transition_chunks=1,
+        )
+
+        meta = handler.apply_at_chunk_boundary(
+            state,
+            chunk_index=0,
+            num_frames=8,
+            fps=16.0,
+            boundary_at=0.5,
+        )
+        assert meta is not None
+        assert meta.started_event_ids == ["cam-fast"]
+        assert meta.active_event_ids == []
+        assert meta.completed_event_ids == ["cam-fast"]
+        assert state.extra["camera_session"].active_target is None
+
+        meta2 = handler.apply_at_chunk_boundary(
+            state,
+            chunk_index=1,
+            num_frames=8,
+            fps=16.0,
+            boundary_at=1.0,
+        )
+        assert meta2 is not None
+        assert meta2.started_event_ids == []
+        assert meta2.active_event_ids == []
+        assert meta2.completed_event_ids == []
 
     def test_velocity_integrates_across_chunks(self) -> None:
         handler = SE3DeltaCameraHandler()
@@ -153,10 +211,63 @@ class TestCameraHandlers:
             transition_chunks=None,
         )
 
-        handler.apply_at_chunk_boundary(state, chunk_index=0, num_frames=3, fps=16.0, boundary_at=0.0)
+        meta0 = handler.apply_at_chunk_boundary(state, chunk_index=0, num_frames=3, fps=16.0, boundary_at=0.0)
+        assert meta0 is not None
+        assert meta0.started_event_ids == ["vel-1"]
+        assert meta0.active_event_ids == ["vel-1"]
+        assert meta0.completed_event_ids == []
         assert state.extra["camera_session"].current_pose.translation[2] == pytest.approx(3.0)
-        handler.apply_at_chunk_boundary(state, chunk_index=1, num_frames=2, fps=16.0, boundary_at=0.125)
+
+        meta1 = handler.apply_at_chunk_boundary(state, chunk_index=1, num_frames=2, fps=16.0, boundary_at=0.125)
+        assert meta1 is not None
+        assert meta1.started_event_ids == []
+        assert meta1.active_event_ids == ["vel-1"]
+        assert meta1.completed_event_ids == []
         assert state.extra["camera_session"].current_pose.translation[2] == pytest.approx(5.0)
+
+    def test_velocity_completed_when_replaced_by_target(self) -> None:
+        """A later target cancels the active velocity and emits it in completed_event_ids."""
+        handler = SE3DeltaCameraHandler()
+        state = _make_state()
+        handler.enqueue(
+            state,
+            event_arrival=_event_ctx("vel-1"),
+            payload={"mode": "velocity", "data": {"translation": [0.0, 0.0, 0.1]}},
+            transition_chunks=None,
+        )
+        meta0 = handler.apply_at_chunk_boundary(
+            state,
+            chunk_index=0,
+            num_frames=4,
+            fps=16.0,
+            boundary_at=0.25,
+        )
+        assert meta0 is not None
+        assert meta0.active_event_ids == ["vel-1"]
+
+        handler.enqueue(
+            state,
+            event_arrival=_event_ctx("tgt-1", received_at=0.25),
+            payload={
+                "mode": "target",
+                "data": {"translation": [1.0, 0.0, 0.0], "rotation": [0.0, 0.0, 0.0, 1.0]},
+            },
+            transition_chunks=1,
+        )
+        meta1 = handler.apply_at_chunk_boundary(
+            state,
+            chunk_index=1,
+            num_frames=4,
+            fps=16.0,
+            boundary_at=0.5,
+        )
+        assert meta1 is not None
+        assert meta1.started_event_ids == ["tgt-1"]
+        assert "vel-1" in meta1.completed_event_ids
+        assert "tgt-1" in meta1.completed_event_ids
+        assert meta1.active_event_ids == []
+        assert state.extra["camera_session"].active_velocity is None
+        assert state.extra["camera_session"].active_target is None
 
     def test_wasd_projects_to_event_matrix(self) -> None:
         handler = WASDEventCameraHandler()
@@ -245,6 +356,8 @@ class TestCameraHandlers:
         )
         assert meta is not None
         assert meta.started_event_ids == ["first", "second"]
+        assert meta.completed_event_ids == ["first"]
+        assert meta.active_event_ids == ["second"]
         # Last equal-timestamp command wins for the remaining frames.
         assert state.extra["camera_session"].active_velocity.event_id == "second"
 
@@ -286,6 +399,9 @@ class TestCameraHandlers:
         )
         assert meta is not None
         assert meta.started_event_ids == ["vel", "tgt"]
+        assert meta.completed_event_ids == ["vel", "tgt"]
+        assert meta.active_event_ids == []
         assert state.extra["camera_session"].active_velocity is None
-        assert state.extra["camera_session"].active_target is not None
+        # Instant target (transition_chunks=0) finishes on the activation frame.
+        assert state.extra["camera_session"].active_target is None
         assert state.extra["camera_session"].current_pose.translation[2] == pytest.approx(0.0)
