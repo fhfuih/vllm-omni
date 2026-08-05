@@ -221,6 +221,11 @@ _DIFFUSION_MODELS = {
         "pipeline_omnigen2",
         "OmniGen2Pipeline",
     ),
+    "DummyRealtimeVideoPipeline": (
+        "dummy_realtime_video",
+        "pipeline_dummy_realtime_video",
+        "DummyRealtimeVideoPipeline",
+    ),
     "HeliosPipeline": (
         "helios",
         "pipeline_helios",
