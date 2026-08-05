@@ -295,6 +295,10 @@ the source-video soundtracks and does not accept a separate
 | `seed` | Task-specific | Use a fixed value for reproducibility |
 | `width`, `height` | Multiples of 32 | Aspect ratio must be between 1:4 and 4:1 |
 
+## ComfyUI Frontend
+
+Users can also use a ComfyUI frontend to interact with a hosted MiniMax-H3 service. The ComfyUI frontend can run in a separate environment or machine. Refer to [vLLM-Omni ComfyUI Integration](../../docs/features/comfyui.md) for details.
+
 ## Validated four-GPU evidence
 
 The four-GPU recommendation was measured on four NVIDIA B300 GPUs with one
