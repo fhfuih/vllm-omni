@@ -7,11 +7,6 @@ from __future__ import annotations
 import time
 from typing import TYPE_CHECKING
 
-from vllm_omni.diffusion.interaction.modality_handlers.prompt import PromptInteractionHandler
-from vllm_omni.diffusion.interaction.types import (
-    InteractionChunkMetadata,
-    merge_interaction_metadata,
-)
 from vllm_omni.diffusion.worker.utils import StepRequestState
 
 if TYPE_CHECKING:
@@ -46,35 +41,21 @@ class InteractionMixin:
         if chunk_index is None or num_frames is None or fps is None:
             chunk_index, num_frames, fps = self._default_chunk_parameters(state)
 
-        boundary_at = time.monotonic()
-
-        metas: list[InteractionChunkMetadata] = []
-        coordinator = self._interaction_coordinator
-        if coordinator is not None:
-            handlers = coordinator.handlers_in_apply_order()
-        else:
-            handlers = [self._get_prompt_handler()]
-
-        for handler in handlers:
-            meta = handler.apply_at_chunk_boundary(
-                state,
-                chunk_index=chunk_index,
-                num_frames=num_frames,
-                fps=fps,
-                boundary_at=boundary_at,
+        if self._interaction_coordinator is None:
+            raise RuntimeError(
+                "interaction coordinator is not initialized; "
+                "DiffusionModelRunner.load_model must wire InteractionCoordinator "
+                "onto the pipeline before chunked generation"
             )
-            if meta is not None:
-                metas.append(meta)
 
-        state.extra["interaction_chunk_metadata"] = merge_interaction_metadata(metas).as_dict()
-
-    def _get_prompt_handler(self) -> PromptInteractionHandler:
-        coordinator = self._interaction_coordinator
-        if coordinator is not None and coordinator.has_modality("prompt"):
-            handler = coordinator.get_handler("prompt")
-            assert isinstance(handler, PromptInteractionHandler)
-            return handler
-        return PromptInteractionHandler.from_pipeline(self)
+        merged = self._interaction_coordinator.apply_at_chunk_boundary(
+            state,
+            chunk_index=chunk_index,
+            num_frames=num_frames,
+            fps=fps,
+            boundary_at=time.monotonic(),
+        )
+        state.extra["interaction_chunk_metadata"] = merged.as_dict()
 
     def _default_chunk_parameters(self, state: StepRequestState) -> tuple[int, int, float]:
         num_frames_raw = state.extra.get("window_num_frames")

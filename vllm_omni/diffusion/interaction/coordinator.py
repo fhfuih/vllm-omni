@@ -9,8 +9,10 @@ from typing import TYPE_CHECKING
 from vllm_omni.diffusion.interaction.modality_handlers.prompt import PromptInteractionHandler
 from vllm_omni.diffusion.interaction.registry import STRUCTURED_HANDLER_REGISTRY
 from vllm_omni.diffusion.interaction.types import (
+    InteractionChunkMetadata,
     InteractionEventArrival,
     InteractionPayload,
+    merge_interaction_metadata,
 )
 from vllm_omni.diffusion.models.interface import supports_interaction_apply
 from vllm_omni.diffusion.worker.utils import StepRequestState
@@ -60,17 +62,6 @@ class InteractionCoordinator:
             )
         return handler
 
-    def handlers_in_apply_order(self) -> list[InteractionHandler]:
-        """Return handlers in a stable apply order (prompt first when present)."""
-        ordered: list[InteractionHandler] = []
-        if "prompt" in self._handlers:
-            ordered.append(self._handlers["prompt"])
-        for modality, handler in self._handlers.items():
-            if modality == "prompt":
-                continue
-            ordered.append(handler)
-        return ordered
-
     def enqueue(
         self,
         state: StepRequestState,
@@ -87,3 +78,36 @@ class InteractionCoordinator:
             payload=payload,
             transition_chunks=transition_chunks,
         )
+
+    def apply_at_chunk_boundary(
+        self,
+        state: StepRequestState,
+        *,
+        chunk_index: int,
+        num_frames: int,
+        fps: float,
+        boundary_at: float,
+    ) -> InteractionChunkMetadata:
+        """Fan out chunk-boundary apply to handlers in stable order (prompt first)."""
+        metas: list[InteractionChunkMetadata] = []
+        for handler in self._handlers_in_apply_order():
+            meta = handler.apply_at_chunk_boundary(
+                state,
+                chunk_index=chunk_index,
+                num_frames=num_frames,
+                fps=fps,
+                boundary_at=boundary_at,
+            )
+            if meta is not None:
+                metas.append(meta)
+        return merge_interaction_metadata(metas)
+
+    def _handlers_in_apply_order(self) -> list[InteractionHandler]:
+        ordered: list[InteractionHandler] = []
+        if "prompt" in self._handlers:
+            ordered.append(self._handlers["prompt"])
+        for modality, handler in self._handlers.items():
+            if modality == "prompt":
+                continue
+            ordered.append(handler)
+        return ordered

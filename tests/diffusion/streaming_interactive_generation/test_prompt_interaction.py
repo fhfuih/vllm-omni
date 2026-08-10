@@ -21,6 +21,7 @@ from tests.engine.test_orchestrator import (
 )
 from vllm_omni.diffusion.data import DiffusionOutput, OmniDiffusionConfig
 from vllm_omni.diffusion.inline_stage_diffusion_client import InlineStageDiffusionClient
+from vllm_omni.diffusion.interaction.coordinator import InteractionCoordinator
 from vllm_omni.diffusion.interaction.modality_handlers.prompt import PromptInteractionHandler
 from vllm_omni.diffusion.interaction.types import InteractionEventArrival
 from vllm_omni.diffusion.models.helios.pipeline_helios import HeliosPipeline
@@ -57,6 +58,8 @@ def pipeline() -> HeliosPipeline:
         )
     )
     pipeline._prepare_next_chunk = MagicMock()
+    od_config = SimpleNamespace(model_class_name="HeliosPipeline")
+    pipeline._interaction_coordinator = InteractionCoordinator.build(pipeline, od_config)
     return pipeline
 
 
