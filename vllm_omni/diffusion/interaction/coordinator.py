@@ -71,6 +71,7 @@ class InteractionCoordinator:
         payload: InteractionPayload,
         transition_chunks: int | None,
     ) -> None:
+        """Fan out enqueue to handlers in stable order (prompt first)."""
         handler = self.get_handler(modality)
         handler.enqueue(
             state,
