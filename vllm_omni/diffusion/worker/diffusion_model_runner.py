@@ -32,7 +32,6 @@ from vllm_omni.diffusion.compile import regionally_compile
 from vllm_omni.diffusion.data import DiffusionOutput, OmniDiffusionConfig
 from vllm_omni.diffusion.forward_context import set_forward_context
 from vllm_omni.diffusion.interaction.coordinator import InteractionCoordinator
-from vllm_omni.diffusion.interaction.types import InteractionEventArrival
 from vllm_omni.diffusion.model_loader.diffusers_loader import DiffusersPipelineLoader
 from vllm_omni.diffusion.models.interface import supports_step_execution
 from vllm_omni.diffusion.offloader import get_offload_backend
@@ -855,7 +854,7 @@ class DiffusionModelRunner(OmniConnectorModelRunnerMixin):
         if state is None:
             raise ValueError(f"No active request state for interaction: {request_id!r}")
 
-        event_arrival = InteractionEventArrival(event_id=event_id, received_at=time.monotonic())
+        received_at = time.monotonic()
 
         if has_prompt:
             prompt = event["prompt"]
@@ -864,7 +863,8 @@ class DiffusionModelRunner(OmniConnectorModelRunnerMixin):
             coordinator.enqueue(
                 state,
                 modality="prompt",
-                event_arrival=event_arrival,
+                event_id=event_id,
+                received_at=received_at,
                 payload={"prompt": prompt},
                 transition_chunks=transition_chunks,
             )
@@ -876,7 +876,8 @@ class DiffusionModelRunner(OmniConnectorModelRunnerMixin):
                 coordinator.enqueue(
                     state,
                     modality=str(modality),
-                    event_arrival=event_arrival,
+                    event_id=event_id,
+                    received_at=received_at,
                     payload=payload,
                     transition_chunks=transition_chunks,
                 )

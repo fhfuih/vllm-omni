@@ -19,7 +19,6 @@ from vllm_omni.diffusion.interaction.modality_handlers.prompt import (
 from vllm_omni.diffusion.interaction.registry import STRUCTURED_HANDLER_REGISTRY
 from vllm_omni.diffusion.interaction.types import (
     InteractionChunkMetadata,
-    InteractionEventArrival,
     InteractionPayload,
     merge_interaction_metadata,
     resolve_event_frame_offset,
@@ -33,7 +32,6 @@ __all__ = [
     "DEFAULT_TRANSITION_CHUNKS",
     "InteractionChunkMetadata",
     "InteractionCoordinator",
-    "InteractionEventArrival",
     "InteractionHandler",
     "InteractionMixin",
     "InteractionPayload",

@@ -16,7 +16,6 @@ import torch
 from vllm_omni.diffusion.interaction.modality_handlers.base import InteractionHandler
 from vllm_omni.diffusion.interaction.types import (
     InteractionChunkMetadata,
-    InteractionEventArrival,
     InteractionPayload,
     resolve_event_frame_offset,
 )
@@ -118,11 +117,12 @@ class CameraModalityHandler(InteractionHandler):
         self,
         state: StepRequestState,
         *,
-        event_arrival: InteractionEventArrival,
+        event_id: str,
+        received_at: float,
         payload: InteractionPayload,
         transition_chunks: int | None,
     ) -> None:
-        if not event_arrival.event_id:
+        if not event_id:
             raise ValueError("event_id must be non-empty")
 
         mode = payload.get("mode", "target")
@@ -145,8 +145,8 @@ class CameraModalityHandler(InteractionHandler):
         with session.lock:
             session.pending_events.append(
                 QueuedCameraEvent(
-                    event_id=event_arrival.event_id,
-                    received_at=event_arrival.received_at,
+                    event_id=event_id,
+                    received_at=received_at,
                     mode=camera_mode,
                     pose=pose,
                     transition_chunks=duration,

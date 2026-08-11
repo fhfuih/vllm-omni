@@ -11,17 +11,6 @@ from dataclasses import dataclass, field
 InteractionPayload = Mapping[str, object]
 
 
-@dataclass(frozen=True)
-class InteractionEventArrival:
-    """Worker-local arrival context for one interaction input.
-    Worker only knows the event arrival time, and is agnostic of the chunk generation progress.
-    Handlers is responsible for calculating the latter based on ``received_at``.
-    """
-
-    event_id: str
-    received_at: float
-
-
 def resolve_event_frame_offset(
     *,
     received_at: float,

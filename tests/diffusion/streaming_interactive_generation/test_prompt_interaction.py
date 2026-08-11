@@ -23,7 +23,6 @@ from vllm_omni.diffusion.data import DiffusionOutput, OmniDiffusionConfig
 from vllm_omni.diffusion.inline_stage_diffusion_client import InlineStageDiffusionClient
 from vllm_omni.diffusion.interaction.coordinator import InteractionCoordinator
 from vllm_omni.diffusion.interaction.modality_handlers.prompt import PromptInteractionHandler
-from vllm_omni.diffusion.interaction.types import InteractionEventArrival
 from vllm_omni.diffusion.models.helios.pipeline_helios import HeliosPipeline
 from vllm_omni.diffusion.worker.diffusion_model_runner import DiffusionModelRunner
 from vllm_omni.diffusion.worker.input_batch import InputBatch
@@ -100,10 +99,6 @@ def _prompt_interaction(
     if transition_chunks is not None:
         interaction["transition_chunks"] = transition_chunks
     return cast(OmniInteractionPrompt, interaction)
-
-
-def _prompt_event_arrival(event_id: str = "ui-update-1") -> InteractionEventArrival:
-    return InteractionEventArrival(event_id=event_id, received_at=0.0)
 
 
 class TestPromptUpdateExecution:
@@ -198,7 +193,8 @@ class TestPromptUpdateExecution:
 
         PromptInteractionHandler.from_pipeline(pipeline).enqueue(
             state,
-            event_arrival=_prompt_event_arrival("ui-update-1"),
+            event_id="ui-update-1",
+            received_at=0.0,
             payload={"prompt": "new scene"},
             transition_chunks=2,
         )
@@ -219,7 +215,8 @@ class TestPromptUpdateExecution:
         ):
             PromptInteractionHandler.from_pipeline(pipeline).enqueue(
                 state,
-                event_arrival=_prompt_event_arrival("ui-update-1"),
+                event_id="ui-update-1",
+                received_at=0.0,
                 payload={"prompt": "new scene"},
                 transition_chunks=2,
             )
@@ -231,7 +228,8 @@ class TestPromptUpdateExecution:
         state = _make_diffusion_request_state()
         PromptInteractionHandler.from_pipeline(pipeline).enqueue(
             state,
-            event_arrival=_prompt_event_arrival("ui-update-1"),
+            event_id="ui-update-1",
+            received_at=0.0,
             payload={"prompt": "new scene"},
             transition_chunks=2,
         )
@@ -252,7 +250,8 @@ class TestPromptUpdateExecution:
         state = _make_diffusion_request_state()
         PromptInteractionHandler.from_pipeline(pipeline).enqueue(
             state,
-            event_arrival=_prompt_event_arrival("ui-update-1"),
+            event_id="ui-update-1",
+            received_at=0.0,
             payload={"prompt": "new scene"},
             transition_chunks=3,
         )

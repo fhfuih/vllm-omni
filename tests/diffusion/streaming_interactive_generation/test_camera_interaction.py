@@ -14,10 +14,7 @@ from vllm_omni.diffusion.interaction.coordinator import InteractionCoordinator
 from vllm_omni.diffusion.interaction.mixin import InteractionMixin
 from vllm_omni.diffusion.interaction.modality_handlers.camera import SE3DeltaCameraHandler, WASDEventCameraHandler
 from vllm_omni.diffusion.interaction.registry import STRUCTURED_HANDLER_REGISTRY
-from vllm_omni.diffusion.interaction.types import (
-    InteractionEventArrival,
-    resolve_event_frame_offset,
-)
+from vllm_omni.diffusion.interaction.types import resolve_event_frame_offset
 from vllm_omni.diffusion.worker.utils import StepRequestState
 
 pytestmark = [pytest.mark.core_model, pytest.mark.diffusion, pytest.mark.cpu]
@@ -52,10 +49,6 @@ def _make_state(*, request_id: str = "req-1") -> StepRequestState:
 
 def _make_prompt_pipeline() -> _FakePromptPipeline:
     return _FakePromptPipeline()
-
-
-def _event_ctx(event_id: str, *, received_at: float = 0.0) -> InteractionEventArrival:
-    return InteractionEventArrival(event_id=event_id, received_at=received_at)
 
 
 def _boundary_at(previous_boundary_at: float | None, num_frames: int, fps: float) -> float:
@@ -97,7 +90,8 @@ class TestCoordinatorResolution:
             coordinator.enqueue(
                 _make_state(),
                 modality="camera",
-                event_arrival=_event_ctx("cam-1"),
+                event_id="cam-1",
+                received_at=0.0,
                 payload={"mode": "target", "data": {"translation": [0.0, 0.0, 1.0]}},
                 transition_chunks=None,
             )
@@ -109,7 +103,8 @@ class TestCameraHandlers:
         state = _make_state()
         handler.enqueue(
             state,
-            event_arrival=_event_ctx("cam-1"),
+            event_id="cam-1",
+            received_at=0.0,
             payload={
                 "mode": "target",
                 "data": {"translation": [0.0, 0.0, 3.0], "rotation": [0.0, 0.0, 0.0, 1.0]},
@@ -165,7 +160,8 @@ class TestCameraHandlers:
         state = _make_state()
         handler.enqueue(
             state,
-            event_arrival=_event_ctx("cam-fast"),
+            event_id="cam-fast",
+            received_at=0.0,
             payload={
                 "mode": "target",
                 "data": {"translation": [1.0, 0.0, 0.0], "rotation": [0.0, 0.0, 0.0, 1.0]},
@@ -203,7 +199,8 @@ class TestCameraHandlers:
         state = _make_state()
         handler.enqueue(
             state,
-            event_arrival=_event_ctx("vel-1"),
+            event_id="vel-1",
+            received_at=0.0,
             payload={
                 "mode": "velocity",
                 "data": {"translation": [0.0, 0.0, 1.0]},
@@ -231,7 +228,8 @@ class TestCameraHandlers:
         state = _make_state()
         handler.enqueue(
             state,
-            event_arrival=_event_ctx("vel-1"),
+            event_id="vel-1",
+            received_at=0.0,
             payload={"mode": "velocity", "data": {"translation": [0.0, 0.0, 0.1]}},
             transition_chunks=None,
         )
@@ -247,7 +245,8 @@ class TestCameraHandlers:
 
         handler.enqueue(
             state,
-            event_arrival=_event_ctx("tgt-1", received_at=0.25),
+            event_id="tgt-1",
+            received_at=0.25,
             payload={
                 "mode": "target",
                 "data": {"translation": [1.0, 0.0, 0.0], "rotation": [0.0, 0.0, 0.0, 1.0]},
@@ -274,7 +273,8 @@ class TestCameraHandlers:
         state = _make_state()
         handler.enqueue(
             state,
-            event_arrival=_event_ctx("wasd-1"),
+            event_id="wasd-1",
+            received_at=0.0,
             payload={
                 "mode": "velocity",
                 "data": {"translation": [1.0, 0.0, 0.5], "rotation": [0.0, 0.09983341664, 0.0, 0.99500416527]},
@@ -299,7 +299,8 @@ class TestCameraHandlers:
             for event_id, frame, translation in offsets:
                 handler.enqueue(
                     state,
-                    event_arrival=_event_ctx(event_id, received_at=boundary + frame / fps),
+                    event_id=event_id,
+                    received_at=boundary + frame / fps,
                     payload={"mode": "velocity", "data": {"translation": translation}},
                     transition_chunks=None,
                 )
@@ -336,13 +337,15 @@ class TestCameraHandlers:
         t = 10.5
         handler.enqueue(
             state,
-            event_arrival=_event_ctx("first", received_at=t),
+            event_id="first",
+            received_at=t,
             payload={"mode": "velocity", "data": {"translation": [0.0, 0.0, 1.0]}},
             transition_chunks=None,
         )
         handler.enqueue(
             state,
-            event_arrival=_event_ctx("second", received_at=t),
+            event_id="second",
+            received_at=t,
             payload={"mode": "velocity", "data": {"translation": [-1.0, 0.0, 0.0]}},
             transition_chunks=None,
         )
@@ -376,13 +379,15 @@ class TestCameraHandlers:
         fps = 10.0
         handler.enqueue(
             state,
-            event_arrival=_event_ctx("vel", received_at=0.0),
+            event_id="vel",
+            received_at=0.0,
             payload={"mode": "velocity", "data": {"translation": [0.0, 0.0, 1.0]}},
             transition_chunks=None,
         )
         handler.enqueue(
             state,
-            event_arrival=_event_ctx("tgt", received_at=0.5),
+            event_id="tgt",
+            received_at=0.5,
             payload={
                 "mode": "target",
                 "data": {"translation": [0.0, 0.0, 0.0], "rotation": [0.0, 0.0, 0.0, 1.0]},

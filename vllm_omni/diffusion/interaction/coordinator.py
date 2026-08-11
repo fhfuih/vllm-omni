@@ -10,7 +10,6 @@ from vllm_omni.diffusion.interaction.modality_handlers.prompt import PromptInter
 from vllm_omni.diffusion.interaction.registry import STRUCTURED_HANDLER_REGISTRY
 from vllm_omni.diffusion.interaction.types import (
     InteractionChunkMetadata,
-    InteractionEventArrival,
     InteractionPayload,
     merge_interaction_metadata,
 )
@@ -67,7 +66,8 @@ class InteractionCoordinator:
         state: StepRequestState,
         *,
         modality: str,
-        event_arrival: InteractionEventArrival,
+        event_id: str,
+        received_at: float,
         payload: InteractionPayload,
         transition_chunks: int | None,
     ) -> None:
@@ -75,7 +75,8 @@ class InteractionCoordinator:
         handler = self.get_handler(modality)
         handler.enqueue(
             state,
-            event_arrival=event_arrival,
+            event_id=event_id,
+            received_at=received_at,
             payload=payload,
             transition_chunks=transition_chunks,
         )

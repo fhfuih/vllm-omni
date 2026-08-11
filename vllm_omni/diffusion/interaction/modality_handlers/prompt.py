@@ -15,7 +15,6 @@ import torch
 from vllm_omni.diffusion.interaction.modality_handlers.base import InteractionHandler
 from vllm_omni.diffusion.interaction.types import (
     InteractionChunkMetadata,
-    InteractionEventArrival,
     InteractionPayload,
 )
 from vllm_omni.diffusion.worker.utils import StepRequestState
@@ -80,12 +79,13 @@ class PromptInteractionHandler(InteractionHandler):
         self,
         state: StepRequestState,
         *,
-        event_arrival: InteractionEventArrival,
+        event_id: str,
+        received_at: float,
         payload: InteractionPayload,
         transition_chunks: int | None,
     ) -> None:
         """Prompt updates are last-write-win and unbuffered at chunk boundary."""
-        event_id = event_arrival.event_id
+        del received_at  # Prompt updates are chunk-based and ignore arrival time.
         prompt = payload.get("prompt")
         if not isinstance(prompt, str) or not prompt:
             raise ValueError("prompt must be non-empty")

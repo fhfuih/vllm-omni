@@ -9,7 +9,6 @@ from typing import ClassVar
 
 from vllm_omni.diffusion.interaction.types import (
     InteractionChunkMetadata,
-    InteractionEventArrival,
     InteractionPayload,
 )
 from vllm_omni.diffusion.worker.utils import StepRequestState
@@ -20,7 +19,7 @@ class InteractionHandler(ABC):
 
     Handler instances are pipeline/runner-owned and request-agnostic. Per-request
     session state lives on ``StepRequestState.extra``.
-    Each concrete modality handler decides how to handle timing specified in InteractionEventContext.
+    Each concrete modality handler decides how to handle timing from ``received_at``.
     """
 
     modality: ClassVar[str]
@@ -30,7 +29,8 @@ class InteractionHandler(ABC):
         self,
         state: StepRequestState,
         *,
-        event_arrival: InteractionEventArrival,
+        event_id: str,
+        received_at: float,
         payload: InteractionPayload,
         transition_chunks: int | None,
     ) -> None:
