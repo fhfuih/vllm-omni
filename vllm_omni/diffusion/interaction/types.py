@@ -17,6 +17,24 @@ InteractionPayload = Mapping[str, object]
 InteractionMode = Literal["target", "velocity"]
 
 
+@dataclass(frozen=True)
+class ChunkMediaSpec:
+    """Media extent of one generation chunk, for interaction timeline mapping."""
+
+    num_frames: int
+    fps: float
+
+    def __post_init__(self) -> None:
+        if self.num_frames <= 0:
+            raise ValueError(f"ChunkMediaSpec.num_frames must be > 0, got {self.num_frames}")
+        if self.fps <= 0:
+            raise ValueError(f"ChunkMediaSpec.fps must be > 0, got {self.fps}")
+
+    @property
+    def duration_s(self) -> float:
+        return float(self.num_frames) / float(self.fps)
+
+
 @dataclass(kw_only=True)
 class InteractionEvent:
     """Shared envelope for one queued or in-flight interaction command. **Intended to be subclassed**.

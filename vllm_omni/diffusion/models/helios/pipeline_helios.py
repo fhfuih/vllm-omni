@@ -24,6 +24,7 @@ from vllm_omni.diffusion.data import DiffusionOutput, OmniDiffusionConfig
 from vllm_omni.diffusion.distributed.cfg_parallel import CFGParallelMixin
 from vllm_omni.diffusion.distributed.utils import get_local_device
 from vllm_omni.diffusion.interaction.mixin import InteractionMixin
+from vllm_omni.diffusion.interaction.types import ChunkMediaSpec
 from vllm_omni.diffusion.model_loader.diffusers_loader import DiffusersPipelineLoader
 from vllm_omni.diffusion.models.helios.helios_transformer import HeliosTransformer3DModel
 from vllm_omni.diffusion.models.helios.scheduling_helios import HeliosScheduler
@@ -535,6 +536,21 @@ class HeliosPipeline(
         )
         self.prepare_next_chunk(state)
         return state
+
+    @override
+    def peek_chunk_media(self, state: StepRequestState) -> ChunkMediaSpec:
+        """Expose this chunk's decoded media extent for interaction timelines.
+
+        Prefer pixel/media ``window_num_frames`` over latent frame counts so
+        camera/event frame offsets align with output FPS.
+        """
+        extra = state.extra
+        num_frames_raw = extra.get("window_num_frames")
+        if num_frames_raw is None:
+            num_frames_raw = extra.get("num_latent_frames_per_chunk")
+        num_frames = int(num_frames_raw)  # pyright: ignore[reportArgumentType]
+        fps = float(state.sampling.fps or 0.0)
+        return ChunkMediaSpec(num_frames=num_frames, fps=fps)
 
     @override
     def prepare_next_chunk(self, state: StepRequestState) -> None:

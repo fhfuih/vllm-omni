@@ -21,6 +21,7 @@ from vllm_omni.diffusion.interaction.modality_handlers.prompt import (
 )
 from vllm_omni.diffusion.interaction.registry import STRUCTURED_HANDLER_REGISTRY
 from vllm_omni.diffusion.interaction.types import (
+    ChunkMediaSpec,
     InteractionChunkMetadata,
     InteractionEvent,
     InteractionMode,
@@ -36,6 +37,7 @@ PromptUpdateMixin = InteractionMixin
 __all__ = [
     "CameraModalityHandler",
     "CameraSession",
+    "ChunkMediaSpec",
     "DEFAULT_TRANSITION_CHUNKS",
     "InteractionChunkMetadata",
     "InteractionCoordinator",

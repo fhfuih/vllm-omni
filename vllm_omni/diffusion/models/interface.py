@@ -18,6 +18,7 @@ if TYPE_CHECKING:
     import torch
 
     from vllm_omni.diffusion.data import DiffusionOutput
+    from vllm_omni.diffusion.interaction.types import ChunkMediaSpec
     from vllm_omni.diffusion.worker.input_batch import InputBatch
     from vllm_omni.diffusion.worker.utils import StepRequestState
 
@@ -109,6 +110,10 @@ def supports_step_execution(pipeline: object) -> bool:
 @runtime_checkable
 class SupportsInteractionApply(Protocol):
     """Optional protocol for pipelines with unified mid-generation, chunk-boundary hooks."""
+
+    def peek_chunk_media(self, state: StepRequestState) -> ChunkMediaSpec:
+        """Return the media timeline represented by the upcoming/current chunk."""
+        ...
 
     def apply_interaction_at_chunk_boundary(
         self,

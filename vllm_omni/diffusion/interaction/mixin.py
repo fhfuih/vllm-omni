@@ -7,6 +7,7 @@ from __future__ import annotations
 import time
 from typing import TYPE_CHECKING
 
+from vllm_omni.diffusion.interaction.types import ChunkMediaSpec
 from vllm_omni.diffusion.worker.utils import StepRequestState
 
 if TYPE_CHECKING:
@@ -24,6 +25,14 @@ class InteractionMixin:
 
     _interaction_coordinator: InteractionCoordinator | None = None
 
+    def peek_chunk_media(self, state: StepRequestState) -> ChunkMediaSpec:
+        """Return the media timeline for the current/next chunk.
+
+        Concrete pipelines must override this. Interaction apply uses it when
+        ``num_frames`` / ``fps`` are not passed explicitly.
+        """
+        raise NotImplementedError(f"{type(self).__name__} must implement peek_chunk_media() for interaction apply")
+
     def apply_interaction_at_chunk_boundary(
         self,
         state: StepRequestState,
@@ -34,7 +43,13 @@ class InteractionMixin:
     ) -> None:
         """Advance all active interaction tracks before the next chunk."""
         if chunk_index is None or num_frames is None or fps is None:
-            chunk_index, num_frames, fps = self._default_chunk_parameters(state)
+            media = self.peek_chunk_media(state)
+            if chunk_index is None:
+                chunk_index = state.chunk_index
+            if num_frames is None:
+                num_frames = media.num_frames
+            if fps is None:
+                fps = media.fps
 
         if self._interaction_coordinator is None:
             raise RuntimeError(
@@ -58,13 +73,3 @@ class InteractionMixin:
         Default no-op. Pipelines may override this if needed.
         """
         pass
-
-    def _default_chunk_parameters(self, state: StepRequestState) -> tuple[int, int, float]:
-        num_frames_raw = state.extra.get("window_num_frames")
-        if num_frames_raw is None:
-            num_frames_raw = state.extra.get("num_latent_frames_per_chunk")
-        num_frames = int(num_frames_raw)  # pyright: ignore[reportArgumentType] # intentionally raise on format mismatch
-        fps = 0.0
-        if state.sampling.fps:  # not None and not zero
-            fps = float(state.sampling.fps)
-        return state.chunk_index, num_frames, fps
