@@ -108,7 +108,7 @@ def supports_step_execution(pipeline: object) -> bool:
 
 @runtime_checkable
 class SupportsInteractionApply(Protocol):
-    """Optional protocol for pipelines with a unified chunk-boundary apply hook."""
+    """Optional protocol for pipelines with unified mid-generation, chunk-boundary hooks."""
 
     def apply_interaction_at_chunk_boundary(
         self,
@@ -119,6 +119,14 @@ class SupportsInteractionApply(Protocol):
         fps: float | None = None,
     ) -> None:
         """Advance queued interactions before the next generation chunk."""
+        ...
+
+    def prepare_next_chunk(self, state: StepRequestState) -> None:
+        """Set up pipeline state for the next chunk after interaction apply.
+
+        Default implementations is a no-op; model-specific pipelines override
+        when chunk transitions require latent/history bookkeeping.
+        """
         ...
 
 

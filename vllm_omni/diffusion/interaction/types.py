@@ -6,9 +6,48 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass, field
+from threading import Lock
+from typing import Literal
 
 # Wire payload for one modality track. Handlers validate keys they need.
 InteractionPayload = Mapping[str, object]
+
+# Shared command semantics across modalities that support them.
+# Prompt specialization narrows this to ``"target"`` only.
+InteractionMode = Literal["target", "velocity"]
+
+
+@dataclass(kw_only=True)
+class InteractionEvent:
+    """Shared envelope for one queued or in-flight interaction command. **Intended to be subclassed**.
+
+    Example:
+    - ``QueuedPromptEvent`` in ``vllm_omni.diffusion.interaction.modality_handlers.prompt``
+    - ``QueuedCameraEvent`` in ``vllm_omni.diffusion.interaction.modality_handlers.camera``
+    """
+
+    event_id: str
+    received_at: float
+    mode: InteractionMode
+    transition_chunks: int
+    elapsed_transition_chunks: float = 0.0
+
+
+@dataclass
+class InteractionSession:
+    """Request-local session base for one interaction modality. **Intended to be subclassed**.
+
+    Concrete modalities subclass this and store their own pending/active state.
+    ``last_boundary_at`` is available for frame-scheduled modalities; chunk-LWW
+    modalities may ignore it.
+
+    Example:
+    - ``PromptSession`` in ``vllm_omni.diffusion.interaction.modality_handlers.prompt``
+    - ``CameraSession`` in ``vllm_omni.diffusion.interaction.modality_handlers.camera``
+    """
+
+    lock: Lock = field(default_factory=Lock, repr=False)
+    last_boundary_at: float | None = None
 
 
 def resolve_event_frame_offset(

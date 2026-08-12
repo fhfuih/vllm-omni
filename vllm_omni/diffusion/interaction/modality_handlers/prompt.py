@@ -7,15 +7,17 @@ from __future__ import annotations
 import logging
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
-from threading import Lock
-from typing import Any, ClassVar, TypedDict, cast, override
+from typing import Any, ClassVar, override
 
 import torch
 
 from vllm_omni.diffusion.interaction.modality_handlers.base import InteractionHandler
 from vllm_omni.diffusion.interaction.types import (
     InteractionChunkMetadata,
+    InteractionEvent,
+    InteractionMode,
     InteractionPayload,
+    InteractionSession,
 )
 from vllm_omni.diffusion.worker.utils import StepRequestState
 
@@ -23,26 +25,69 @@ DEFAULT_TRANSITION_CHUNKS = 3
 
 logger = logging.getLogger(__name__)
 
-# Pipelines return (prompt_embeds, ...) with optional negative embeds / masks.
-EncodePromptFn = Callable[..., tuple[torch.Tensor, ...]]
+
+@dataclass(kw_only=True)
+class QueuedPromptEvent(InteractionEvent):
+    """Last-write-wins prompt update waiting for / active at a chunk boundary.
+
+    ``source_prompt_embeds`` is the lerp start endpoint, staged when this event
+    is activated (not at enqueue). Live blended embeds live on
+    ``StepRequestState.prompt_embeds``.
+    """
+
+    mode: InteractionMode = "target"
+    prompt: str
+    target_prompt_embeds: torch.Tensor
+    source_prompt_embeds: torch.Tensor | None = None
+
+    def blended_prompt_embeds(self) -> torch.Tensor:
+        assert self.source_prompt_embeds is not None
+        alpha = self._current_alpha()
+        if alpha >= 1.0:
+            return self.target_prompt_embeds
+        return (1.0 - alpha) * self.source_prompt_embeds + alpha * self.target_prompt_embeds
+
+    def advance_transition(self) -> None:
+        assert self.source_prompt_embeds is not None
+        if self.transition_chunks <= 0:
+            self.source_prompt_embeds = self.target_prompt_embeds
+            return
+        self.elapsed_transition_chunks += 1
+        if self.elapsed_transition_chunks >= self.transition_chunks:
+            self.source_prompt_embeds = self.target_prompt_embeds
+            self.elapsed_transition_chunks = float(self.transition_chunks)
+
+    def _current_alpha(self) -> float:
+        if self.transition_chunks <= 0:
+            return 1.0
+        return min(1.0, self.elapsed_transition_chunks / self.transition_chunks)
 
 
-class PromptUpdateExtra(TypedDict, total=False):
-    """A protocol for ``StepRequestState.extra`` keys used by prompt updates."""
+@dataclass
+class PromptSession(InteractionSession):
+    """Request-local prompt-update session under ``state.interaction_sessions['prompt']``."""
 
-    pending_prompt_update: _PendingPromptUpdate
-    prompt_update_state: _PromptUpdateState
-    prompt_update_version: int
-    prompt_update_lock: Lock
+    pending_event: QueuedPromptEvent | None = None
+    active_event: QueuedPromptEvent | None = None
+    version: int = 0
 
 
 def prompt_update_versions(states: Sequence[StepRequestState]) -> tuple[int, ...]:
     """Return per-request prompt-update versions for batch cache comparison."""
-    return tuple(int(cast(PromptUpdateExtra, state.extra).get("prompt_update_version", 0)) for state in states)
+    versions: list[int] = []
+    for state in states:
+        session = state.interaction_sessions.get("prompt")
+        versions.append(session.version if isinstance(session, PromptSession) else 0)
+    return tuple(versions)
 
 
-def _prompt_update_lock(extra: PromptUpdateExtra) -> Lock:
-    return extra.setdefault("prompt_update_lock", Lock())
+def _get_prompt_session(state: StepRequestState) -> PromptSession:
+    session = state.interaction_sessions.get("prompt")
+    if isinstance(session, PromptSession):
+        return session
+    session = PromptSession()
+    state.interaction_sessions["prompt"] = session
+    return session
 
 
 class PromptInteractionHandler(InteractionHandler):
@@ -57,7 +102,7 @@ class PromptInteractionHandler(InteractionHandler):
     def __init__(
         self,
         *,
-        encode_prompt: EncodePromptFn,
+        encode_prompt: Callable[..., tuple[torch.Tensor, ...]],
         device: torch.device | str,
         dtype: torch.dtype,
     ) -> None:
@@ -85,7 +130,6 @@ class PromptInteractionHandler(InteractionHandler):
         transition_chunks: int | None,
     ) -> None:
         """Prompt updates are last-write-win and unbuffered at chunk boundary."""
-        del received_at  # Prompt updates are chunk-based and ignore arrival time.
         prompt = payload.get("prompt")
         if not isinstance(prompt, str) or not prompt:
             raise ValueError("prompt must be non-empty")
@@ -108,14 +152,16 @@ class PromptInteractionHandler(InteractionHandler):
             device=self._device,
             dtype=self._dtype,
         )
-        extra = cast(PromptUpdateExtra, state.extra)
-        with _prompt_update_lock(extra):
-            extra["pending_prompt_update"] = {
-                "event_id": event_id,
-                "prompt": prompt,
-                "target_prompt_embeds": target_prompt_embeds,
-                "transition_chunks": duration,
-            }
+        session = _get_prompt_session(state)
+        with session.lock:
+            # Chunk-level LWW: replace any prior pending event.
+            session.pending_event = QueuedPromptEvent(
+                event_id=event_id,
+                received_at=received_at,
+                transition_chunks=duration,
+                prompt=prompt,
+                target_prompt_embeds=target_prompt_embeds,
+            )
 
     @override
     def apply_at_chunk_boundary(
@@ -128,11 +174,16 @@ class PromptInteractionHandler(InteractionHandler):
         boundary_at: float,
     ) -> InteractionChunkMetadata | None:
         """Advance or start prompt interpolation before the next chunk."""
-        del chunk_index, num_frames, fps, boundary_at  # Prompt lerp is chunk-based and last-write-wins
-        extra = cast(PromptUpdateExtra, state.extra)
-        update_state: _PromptUpdateState | None = extra.get("prompt_update_state")
-        with _prompt_update_lock(extra):
-            pending = extra.pop("pending_prompt_update", None)
+        del chunk_index, num_frames, fps  # Prompt lerp is chunk-based and last-write-wins
+        session = _get_prompt_session(state)
+        # Prompt ignores frame scheduling but still records the boundary clock.
+        session.last_boundary_at = boundary_at
+
+        with session.lock:
+            pending_event = session.pending_event
+            session.pending_event = None
+        active_event = session.active_event
+
         embeds_changed = False
         next_chunk_index = state.chunk_index
         started_event_ids: list[str] = []
@@ -140,55 +191,51 @@ class PromptInteractionHandler(InteractionHandler):
         completed_event_ids: list[str] = []
 
         # If current transition is not complete, advance it.
-        # After completion, leave prompt_update_state in place (so a later pending
+        # After completion, leave active_event in place (so a later pending
         # update can abort/overwrite), but do not keep bumping the version.
-        if update_state is not None:
+        if active_event is not None:
             in_transition = (
-                update_state.transition_chunks > 0
-                and update_state.elapsed_transition_chunks < update_state.transition_chunks
+                active_event.transition_chunks > 0
+                and active_event.elapsed_transition_chunks < active_event.transition_chunks
             )
             if in_transition:
-                update_state.advance_transition()
-                state.prompt_embeds = update_state.blended_prompt_embeds()
+                active_event.advance_transition()
+                state.prompt_embeds = active_event.blended_prompt_embeds()
                 embeds_changed = True
-                active_event_ids.append(update_state.event_id)
-                if update_state.elapsed_transition_chunks >= update_state.transition_chunks:
-                    state.prompt_embeds = update_state.target_prompt_embeds
-                    update_state.source_prompt_embeds = update_state.target_prompt_embeds
-                    completed_event_ids.append(update_state.event_id)
-                    if update_state.target_prompt is not None:
-                        logger.debug(
-                            "prompt_update transition complete request_id=%s next_chunk_index=%d prompt=%.20s...",
-                            state.request_id,
-                            next_chunk_index,
-                            update_state.target_prompt,
-                        )
+                active_event_ids.append(active_event.event_id)
+                if active_event.elapsed_transition_chunks >= active_event.transition_chunks:
+                    state.prompt_embeds = active_event.target_prompt_embeds
+                    active_event.source_prompt_embeds = active_event.target_prompt_embeds
+                    completed_event_ids.append(active_event.event_id)
+                    logger.debug(
+                        "prompt_update transition complete request_id=%s next_chunk_index=%d prompt=%.20s...",
+                        state.request_id,
+                        next_chunk_index,
+                        active_event.prompt,
+                    )
 
         # If a new prompt update is pending, start a new transition.
-        if pending is not None:
+        if pending_event is not None:
             if state.prompt_embeds is None:
                 raise RuntimeError(
                     "internal error: trying to apply a pending prompt update but "
                     f"current prompt_embeds is None (request_id={state.request_id!r})"
                 )
-            source = state.prompt_embeds.detach().clone()
-            target = pending["target_prompt_embeds"]
-            duration = int(pending["transition_chunks"])
-            prompt = str(pending.get("prompt", ""))
-            event_id = pending.get("event_id")
-            update_state = _PromptUpdateState(
-                source_prompt_embeds=source,
-                target_prompt_embeds=target,
-                transition_chunks=duration,
-                event_id=event_id,
-                target_prompt=prompt,
-            )
-            extra["prompt_update_state"] = update_state
+            # Stage lerp-start embeds at activation (after any same-boundary advance).
+            pending_event.source_prompt_embeds = state.prompt_embeds.detach().clone()
+            pending_event.elapsed_transition_chunks = 0.0
+            session.active_event = pending_event
+            active_event = pending_event
+            event_id = pending_event.event_id
+            duration = pending_event.transition_chunks
+            prompt = pending_event.prompt
+            target = pending_event.target_prompt_embeds
             started_event_ids.append(event_id)
             active_event_ids.append(event_id)
             if duration <= 0:
                 # A hard/immediate transition
                 state.prompt_embeds = target
+                pending_event.source_prompt_embeds = target
                 completed_event_ids.append(event_id)
                 logger.debug(
                     "prompt_update sharp transition request_id=%s next_chunk_index=%d prompt=%.20s...",
@@ -198,11 +245,11 @@ class PromptInteractionHandler(InteractionHandler):
                 )
             else:
                 # A transition that really takes some time
-                update_state.advance_transition()
-                state.prompt_embeds = update_state.blended_prompt_embeds()
-                if update_state.elapsed_transition_chunks >= update_state.transition_chunks:
-                    state.prompt_embeds = update_state.target_prompt_embeds
-                    update_state.source_prompt_embeds = update_state.target_prompt_embeds
+                active_event.advance_transition()
+                state.prompt_embeds = active_event.blended_prompt_embeds()
+                if active_event.elapsed_transition_chunks >= active_event.transition_chunks:
+                    state.prompt_embeds = active_event.target_prompt_embeds
+                    active_event.source_prompt_embeds = active_event.target_prompt_embeds
                     completed_event_ids.append(event_id)
                 logger.debug(
                     "prompt_update transition start request_id=%s next_chunk_index=%d prompt=%.20s...",
@@ -214,51 +261,10 @@ class PromptInteractionHandler(InteractionHandler):
 
         # Indicate that prompt embeddings have changed---clear input batch cache.
         if embeds_changed:
-            new_version = int(extra.get("prompt_update_version", 0)) + 1
-            extra["prompt_update_version"] = new_version
+            session.version += 1
 
-        metadata = InteractionChunkMetadata(
+        return InteractionChunkMetadata(
             started_event_ids=started_event_ids,
             active_event_ids=active_event_ids,
             completed_event_ids=completed_event_ids,
         )
-        return metadata
-
-
-@dataclass
-class _PromptUpdateState:
-    """Per-request prompt interpolation stored in ``state.extra["prompt_update_state"]``."""
-
-    source_prompt_embeds: torch.Tensor
-    target_prompt_embeds: torch.Tensor
-    transition_chunks: int
-    event_id: str
-    elapsed_transition_chunks: int = 0
-    target_prompt: str | None = None
-
-    def blended_prompt_embeds(self) -> torch.Tensor:
-        alpha = self._current_alpha()
-        if alpha >= 1.0:
-            return self.target_prompt_embeds
-        return (1.0 - alpha) * self.source_prompt_embeds + alpha * self.target_prompt_embeds
-
-    def advance_transition(self) -> None:
-        if self.transition_chunks <= 0:
-            self.source_prompt_embeds = self.target_prompt_embeds
-            return
-        self.elapsed_transition_chunks += 1
-        if self.elapsed_transition_chunks >= self.transition_chunks:
-            self.source_prompt_embeds = self.target_prompt_embeds
-            self.elapsed_transition_chunks = self.transition_chunks
-
-    def _current_alpha(self) -> float:
-        if self.transition_chunks <= 0:
-            return 1.0
-        return min(1.0, self.elapsed_transition_chunks / self.transition_chunks)
-
-
-class _PendingPromptUpdate(TypedDict):
-    event_id: str
-    prompt: str
-    target_prompt_embeds: torch.Tensor
-    transition_chunks: int

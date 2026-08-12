@@ -16,15 +16,10 @@ if TYPE_CHECKING:
 class InteractionMixin:
     """Unified chunk-boundary interaction hook.
 
-    Pipelines call only ``apply_interaction_at_chunk_boundary``; they do not
-    branch on prompt, camera, or any other modality.
+    Pipelines call only ``apply_interaction_at_chunk_boundary`` without knowing which modality is being interacted with.
 
-    Camera interaction handlers own mode/data validation, timeline
-    integration/interpolation, and projection into model-specific tensors, for
-    example dense SE(3) deltas shaped ``[num_frames_per_chunk, 4, 4]`` or sparse
-    control events shaped ``[num_events_captured_in_this_chunk, 8]`` (WASDIJKL).
-    Camera session state stays on ``StepRequestState.extra``; handler strategy
-    objects live on the pipeline/runner ``InteractionCoordinator``.
+    Per-modality session state lives on ``StepRequestState.interaction_sessions``;
+    handler strategy objects live on the pipeline/runner ``InteractionCoordinator``.
     """
 
     _interaction_coordinator: InteractionCoordinator | None = None
@@ -55,7 +50,14 @@ class InteractionMixin:
             fps=fps,
             boundary_at=time.monotonic(),
         )
-        state.extra["interaction_chunk_metadata"] = merged.as_dict()
+        state.interaction_chunk_metadata = merged
+
+    def prepare_next_chunk(self, state: StepRequestState) -> None:
+        """Set up pipeline state for the next chunk after interaction apply.
+
+        Default no-op. Pipelines may override this if needed.
+        """
+        pass
 
     def _default_chunk_parameters(self, state: StepRequestState) -> tuple[int, int, float]:
         num_frames_raw = state.extra.get("window_num_frames")

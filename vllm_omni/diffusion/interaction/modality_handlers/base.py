@@ -18,7 +18,7 @@ class InteractionHandler(ABC):
     """Strategy object for one interaction modality.
 
     Handler instances are pipeline/runner-owned and request-agnostic. Per-request
-    session state lives on ``StepRequestState.extra``.
+    session state lives on ``StepRequestState.interaction_sessions``.
     Each concrete modality handler decides how to handle timing from ``received_at``.
     """
 

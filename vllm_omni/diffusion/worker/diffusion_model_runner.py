@@ -33,7 +33,7 @@ from vllm_omni.diffusion.data import DiffusionOutput, OmniDiffusionConfig
 from vllm_omni.diffusion.forward_context import set_forward_context
 from vllm_omni.diffusion.interaction.coordinator import InteractionCoordinator
 from vllm_omni.diffusion.model_loader.diffusers_loader import DiffusersPipelineLoader
-from vllm_omni.diffusion.models.interface import supports_step_execution
+from vllm_omni.diffusion.models.interface import supports_interaction_apply, supports_step_execution
 from vllm_omni.diffusion.offloader import get_offload_backend
 from vllm_omni.diffusion.registry import _NO_CACHE_ACCELERATION
 from vllm_omni.diffusion.request import OmniDiffusionRequest
@@ -531,7 +531,7 @@ class DiffusionModelRunner(OmniConnectorModelRunnerMixin):
 
         return self._runner_output_from_outputs(reqs, outputs)
 
-    def _attach_stepwise_metrics(
+    def _attach_stepwise_metadata(
         self,
         state: StepRequestState,
         output: DiffusionOutput,
@@ -541,6 +541,14 @@ class DiffusionModelRunner(OmniConnectorModelRunnerMixin):
             consume_pipeline_stage_durations(self.pipeline),
         )
         attach_stage_durations(state, output)
+
+        # In streaming output mode with interaction, acknowledge which events are handled in this chunk.
+        meta = state.interaction_chunk_metadata
+        state.interaction_chunk_metadata = None
+        if meta is not None:
+            output.started_event_ids = list(meta.started_event_ids)
+            output.active_event_ids = list(meta.active_event_ids)
+            output.completed_event_ids = list(meta.completed_event_ids)
 
     def execute_model(
         self,
@@ -755,10 +763,16 @@ class DiffusionModelRunner(OmniConnectorModelRunnerMixin):
                                 clear_pipeline_stage_durations(self.pipeline)
                                 result = self.pipeline.post_decode(req)
                                 if result is not None:
-                                    self._attach_stepwise_metrics(
+                                    self._attach_stepwise_metadata(
                                         req,
                                         result,
                                     )
+                                    # Consume this chunk's interaction metadata first,
+                                    # then apply pending interactions and prepare the
+                                    # next chunk (prepare_next_chunk may be a no-op).
+                                    if supports_interaction_apply(self.pipeline) and not req.request_denoise_completed:
+                                        self.pipeline.apply_interaction_at_chunk_boundary(req)
+                                        self.pipeline.prepare_next_chunk(req)
                             else:
                                 result = None
                             # finished should be computed after post_decode() advanced chunk_index

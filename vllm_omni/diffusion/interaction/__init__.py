@@ -7,19 +7,25 @@ from vllm_omni.diffusion.interaction.mixin import InteractionMixin
 from vllm_omni.diffusion.interaction.modality_handlers.base import InteractionHandler
 from vllm_omni.diffusion.interaction.modality_handlers.camera import (
     CameraModalityHandler,
+    CameraSession,
+    QueuedCameraEvent,
     SE3DeltaCameraHandler,
     WASDEventCameraHandler,
 )
 from vllm_omni.diffusion.interaction.modality_handlers.prompt import (
     DEFAULT_TRANSITION_CHUNKS,
     PromptInteractionHandler,
-    PromptUpdateExtra,
+    PromptSession,
+    QueuedPromptEvent,
     prompt_update_versions,
 )
 from vllm_omni.diffusion.interaction.registry import STRUCTURED_HANDLER_REGISTRY
 from vllm_omni.diffusion.interaction.types import (
     InteractionChunkMetadata,
+    InteractionEvent,
+    InteractionMode,
     InteractionPayload,
+    InteractionSession,
     merge_interaction_metadata,
     resolve_event_frame_offset,
 )
@@ -29,15 +35,21 @@ PromptUpdateMixin = InteractionMixin
 
 __all__ = [
     "CameraModalityHandler",
+    "CameraSession",
     "DEFAULT_TRANSITION_CHUNKS",
     "InteractionChunkMetadata",
     "InteractionCoordinator",
+    "InteractionEvent",
     "InteractionHandler",
     "InteractionMixin",
+    "InteractionMode",
     "InteractionPayload",
+    "InteractionSession",
     "PromptInteractionHandler",
-    "PromptUpdateExtra",
+    "PromptSession",
     "PromptUpdateMixin",
+    "QueuedCameraEvent",
+    "QueuedPromptEvent",
     "SE3DeltaCameraHandler",
     "STRUCTURED_HANDLER_REGISTRY",
     "WASDEventCameraHandler",

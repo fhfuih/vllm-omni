@@ -9,7 +9,7 @@ import logging
 import math
 import os
 from collections.abc import Iterable, Sequence
-from typing import TYPE_CHECKING, Any, ClassVar
+from typing import TYPE_CHECKING, Any, ClassVar, override
 
 import numpy as np
 import torch
@@ -533,10 +533,11 @@ class HeliosPipeline(
                 "zero_steps": int(extra.get("zero_steps", 1)),
             }
         )
-        self._prepare_next_chunk(state)
+        self.prepare_next_chunk(state)
         return state
 
-    def _prepare_next_chunk(self, state: StepRequestState) -> None:
+    @override
+    def prepare_next_chunk(self, state: StepRequestState) -> None:
         extra = state.extra
         k = state.chunk_index
         is_first_chunk = k == 0
@@ -900,18 +901,9 @@ class HeliosPipeline(
 
         output = current_latents if extra["output_type"] == "latent" else current_video
         completed_chunk_index = state.chunk_index
-        interaction_metadata = state.extra.pop("interaction_chunk_metadata", {})
         state.chunk_index += 1
         finished = state.request_denoise_completed
-        if not finished:
-            self.apply_interaction_at_chunk_boundary(
-                state,
-                chunk_index=state.chunk_index,
-                num_frames=int(extra.get("window_num_frames") or 0),
-                fps=float(state.sampling.fps or 0.0),
-            )
-            self._prepare_next_chunk(state)
-        else:
+        if finished:
             self._current_timestep = None
             if current_omni_platform.is_available():
                 current_omni_platform.empty_cache()
@@ -921,9 +913,6 @@ class HeliosPipeline(
             stage_durations=self.stage_durations if hasattr(self, "stage_durations") else {},
             chunk_index=completed_chunk_index,
             total_chunks=state.total_chunks,
-            started_event_ids=interaction_metadata.get("started_event_ids", []),
-            active_event_ids=interaction_metadata.get("active_event_ids", []),
-            completed_event_ids=interaction_metadata.get("completed_event_ids", []),
             finished=finished,
         )
 

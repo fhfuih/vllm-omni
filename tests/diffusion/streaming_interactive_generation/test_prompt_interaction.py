@@ -22,7 +22,10 @@ from tests.engine.test_orchestrator import (
 from vllm_omni.diffusion.data import DiffusionOutput, OmniDiffusionConfig
 from vllm_omni.diffusion.inline_stage_diffusion_client import InlineStageDiffusionClient
 from vllm_omni.diffusion.interaction.coordinator import InteractionCoordinator
-from vllm_omni.diffusion.interaction.modality_handlers.prompt import PromptInteractionHandler
+from vllm_omni.diffusion.interaction.modality_handlers.prompt import (
+    PromptInteractionHandler,
+    PromptSession,
+)
 from vllm_omni.diffusion.models.helios.pipeline_helios import HeliosPipeline
 from vllm_omni.diffusion.worker.diffusion_model_runner import DiffusionModelRunner
 from vllm_omni.diffusion.worker.input_batch import InputBatch
@@ -56,7 +59,7 @@ def pipeline() -> HeliosPipeline:
             None,
         )
     )
-    pipeline._prepare_next_chunk = MagicMock()
+    pipeline.prepare_next_chunk = MagicMock()
     od_config = SimpleNamespace(model_class_name="HeliosPipeline")
     pipeline._interaction_coordinator = InteractionCoordinator.build(pipeline, od_config)
     return pipeline
@@ -113,10 +116,13 @@ class TestPromptUpdateExecution:
         runner.submit_interaction("req-1", _prompt_interaction(transition_chunks=2))
 
         pipeline.encode_prompt.assert_called_once()  # pyright: ignore[reportAttributeAccessIssue]
-        pending = state.extra["pending_prompt_update"]
-        assert pending["event_id"] == "ui-update-1"
-        assert pending["transition_chunks"] == 2
-        assert torch.equal(pending["target_prompt_embeds"], torch.full((1, 4, 2), 2.0))
+        session = state.interaction_sessions["prompt"]
+        assert isinstance(session, PromptSession)
+        pending = session.pending_event
+        assert pending is not None
+        assert pending.event_id == "ui-update-1"
+        assert pending.transition_chunks == 2
+        assert torch.equal(pending.target_prompt_embeds, torch.full((1, 4, 2), 2.0))
 
     def test_runner_prompt_update_rejects_unsupported_pipeline(self) -> None:
         """Runner rejects prompt updates when the pipeline lacks prompt-update support."""
@@ -177,13 +183,13 @@ class TestPromptUpdateExecution:
         state.prompt_embeds = torch.zeros(1, 2, 3)
         state.latents = torch.zeros(1, 2)
         state.timesteps = torch.tensor([1.0])
-        state.extra["prompt_update_version"] = 0
+        state.interaction_sessions["prompt"] = PromptSession(version=0)
 
         batch = InputBatch.make_batch([state])
         assert torch.equal(batch.prompt_embeds, torch.zeros(1, 2, 3))  # pyright: ignore[reportArgumentType]
 
         state.prompt_embeds = torch.ones(1, 2, 3)
-        state.extra["prompt_update_version"] = 1
+        state.interaction_sessions["prompt"] = PromptSession(version=1)
         refreshed = InputBatch.make_batch([state], cached_batch=batch)
         assert torch.equal(refreshed.prompt_embeds, torch.ones(1, 2, 3))  # pyright: ignore[reportArgumentType]
 
@@ -199,9 +205,12 @@ class TestPromptUpdateExecution:
             transition_chunks=2,
         )
 
-        pending = state.extra["pending_prompt_update"]
-        assert torch.equal(pending["target_prompt_embeds"], torch.full((1, 4, 2), 2.0))
-        assert pending["transition_chunks"] == 2
+        session = state.interaction_sessions["prompt"]
+        assert isinstance(session, PromptSession)
+        pending = session.pending_event
+        assert pending is not None
+        assert torch.equal(pending.target_prompt_embeds, torch.full((1, 4, 2), 2.0))
+        assert pending.transition_chunks == 2
         assert torch.equal(state.prompt_embeds, torch.zeros(1, 4, 2))  # pyright: ignore[reportArgumentType]
 
     def test_helios_prompt_handler_enqueue_rejects_before_initial_generation(self, pipeline: HeliosPipeline) -> None:
@@ -221,7 +230,8 @@ class TestPromptUpdateExecution:
                 transition_chunks=2,
             )
 
-        assert "pending_prompt_update" not in state.extra
+        session = state.interaction_sessions.get("prompt")
+        assert session is None or (isinstance(session, PromptSession) and session.pending_event is None)
 
     def test_helios_apply_interaction_at_chunk_boundary_starts_transition(self, pipeline: HeliosPipeline) -> None:
         """At chunk boundary, starts transition state and bumps prompt_update_version."""
@@ -236,10 +246,13 @@ class TestPromptUpdateExecution:
 
         pipeline.apply_interaction_at_chunk_boundary(state, chunk_index=state.chunk_index, num_frames=1, fps=0)
 
-        assert state.extra.get("prompt_update_state") is not None
+        session = state.interaction_sessions["prompt"]
+        assert isinstance(session, PromptSession)
+        assert session.active_event is not None
         assert torch.equal(state.prompt_embeds, torch.ones(1, 4, 2))  # pyright: ignore[reportArgumentType]
-        assert state.extra["prompt_update_version"] == 1
-        assert state.extra["interaction_chunk_metadata"] == {
+        assert session.version == 1
+        assert state.interaction_chunk_metadata is not None
+        assert state.interaction_chunk_metadata.as_dict() == {
             "started_event_ids": ["ui-update-1"],
             "active_event_ids": ["ui-update-1"],
             "completed_event_ids": [],
@@ -263,11 +276,13 @@ class TestPromptUpdateExecution:
             pipeline.apply_interaction_at_chunk_boundary(state, chunk_index=state.chunk_index, num_frames=1, fps=0)
 
         assert torch.allclose(state.prompt_embeds, torch.full((1, 4, 2), 2.0))  # pyright: ignore[reportArgumentType]
-        assert state.extra["prompt_update_version"] == 3
+        session = state.interaction_sessions["prompt"]
+        assert isinstance(session, PromptSession)
+        assert session.version == 3
 
         # Further chunk boundaries after completion must not bump the version.
         pipeline.apply_interaction_at_chunk_boundary(state, chunk_index=state.chunk_index, num_frames=1, fps=0)
-        assert state.extra["prompt_update_version"] == 3
+        assert session.version == 3
 
 
 class TestPromptUpdateIntegration:
@@ -374,9 +389,10 @@ class TestPromptUpdateIntegration:
 
             outputs = await generate_task
 
-            pending = runner.state_cache[internal_request_id].extra["pending_prompt_update"]
-            assert pending["transition_chunks"] == 2
-            assert torch.equal(pending["target_prompt_embeds"], torch.full((1, 4, 2), 2.0))
+            pending = runner.state_cache[internal_request_id].interaction_sessions["prompt"].pending_event
+            assert pending is not None
+            assert pending.transition_chunks == 2
+            assert torch.equal(pending.target_prompt_embeds, torch.full((1, 4, 2), 2.0))
             pipeline.encode_prompt.assert_called_once()  # pyright: ignore[reportAttributeAccessIssue]
             assert [output.custom_output["chunk"] for output in outputs] == [0, 1]
         finally:
@@ -582,7 +598,10 @@ class TestPromptUpdateIntegration:
             ]
 
             deadline = time.monotonic() + 5.0
-            while "pending_prompt_update" not in state.extra:
+            while (
+                not isinstance(state.interaction_sessions.get("prompt"), PromptSession)
+                or state.interaction_sessions["prompt"].pending_event is None
+            ):
                 if time.monotonic() >= deadline:
                     raise TimeoutError("timed out waiting for prompt update during streaming")
                 await asyncio.sleep(0.01)

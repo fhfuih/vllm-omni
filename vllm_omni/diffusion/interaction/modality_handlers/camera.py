@@ -8,20 +8,21 @@ import math
 from abc import abstractmethod
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
-from threading import Lock
-from typing import ClassVar, Literal, cast, override
+from typing import ClassVar, cast, override
 
 import torch
 
 from vllm_omni.diffusion.interaction.modality_handlers.base import InteractionHandler
 from vllm_omni.diffusion.interaction.types import (
     InteractionChunkMetadata,
+    InteractionEvent,
+    InteractionMode,
     InteractionPayload,
+    InteractionSession,
     resolve_event_frame_offset,
 )
 from vllm_omni.diffusion.worker.utils import StepRequestState
 
-CameraMode = Literal["target", "velocity"]
 Vec3 = tuple[float, float, float]
 # Unit quaternion in ``(x, y, z, w)`` order. Identity is ``(0, 0, 0, 1)``.
 Quat = tuple[float, float, float, float]
@@ -53,49 +54,22 @@ class CameraPose:
         return mat
 
 
-@dataclass
-class CameraVelocity:
-    """Per-frame velocity applied once every ``1/fps`` second.
-
-    ``rotation`` is a per-frame delta quaternion composed onto the current pose.
-    """
-
-    translation: Vec3 = (0.0, 0.0, 0.0)
-    rotation: Quat = _IDENTITY_QUAT
-    event_id: str = ""
-
-
-@dataclass
-class CameraTarget:
-    pose: CameraPose
-    event_id: str
-    transition_chunks: int
-
-
-@dataclass
-class QueuedCameraEvent:
+@dataclass(kw_only=True)
+class QueuedCameraEvent(InteractionEvent):
     """Timestamped camera command waiting for the next chunk boundary."""
 
-    event_id: str
-    received_at: float
-    mode: CameraMode
     pose: CameraPose
-    transition_chunks: int
 
 
 @dataclass
-class CameraSession:
-    """Request-local camera timeline stored under ``state.extra['camera_session']``."""
+class CameraSession(InteractionSession):
+    """Request-local camera timeline under ``state.interaction_sessions['camera']``."""
 
-    lock: Lock = field(default_factory=Lock)
     current_pose: CameraPose = field(default_factory=CameraPose.identity)
     pending_events: list[QueuedCameraEvent] = field(default_factory=list)
-    last_boundary_at: float | None = None
-    active_velocity: CameraVelocity | None = None
-    active_target: CameraTarget | None = None
+    # In-flight command; ``elapsed_transition_chunks`` lives on the event.
+    active_event: QueuedCameraEvent | None = None
     target_source: CameraPose | None = None
-    # Fractional chunk progress while a target transition is active.
-    elapsed_transition_chunks: float = 0.0
 
 
 class CameraModalityHandler(InteractionHandler):
@@ -128,7 +102,7 @@ class CameraModalityHandler(InteractionHandler):
         mode = payload.get("mode", "target")
         if mode not in ("target", "velocity"):
             raise ValueError("camera mode must be 'target' or 'velocity'")
-        camera_mode = cast(CameraMode, mode)
+        camera_mode = cast(InteractionMode, mode)
         data = payload.get("data")
         if not isinstance(data, Mapping):
             raise ValueError("camera data must be an object")
@@ -148,8 +122,8 @@ class CameraModalityHandler(InteractionHandler):
                     event_id=event_id,
                     received_at=received_at,
                     mode=camera_mode,
-                    pose=pose,
                     transition_chunks=duration,
+                    pose=pose,
                 )
             )
 
@@ -172,14 +146,7 @@ class CameraModalityHandler(InteractionHandler):
                 fps=fps,
                 boundary_at=boundary_at,
             )
-            tensor = self._project(samples)
-            conditioning_raw = state.extra.setdefault("conditioning", {})
-            if not isinstance(conditioning_raw, dict):
-                conditioning: dict[str, torch.Tensor] = {}
-                state.extra["conditioning"] = conditioning
-            else:
-                conditioning = cast(dict[str, torch.Tensor], conditioning_raw)
-            conditioning[self.modality] = tensor
+            state.conditioning[self.modality] = self._project(samples)
 
         return InteractionChunkMetadata(
             started_event_ids=started,
@@ -247,10 +214,8 @@ class CameraModalityHandler(InteractionHandler):
                 _mark_completed(just_completed)
 
         active: list[str] = []
-        if session.active_target is not None:
-            active.append(session.active_target.event_id)
-        elif session.active_velocity is not None:
-            active.append(session.active_velocity.event_id)
+        if session.active_event is not None:
+            active.append(session.active_event.event_id)
 
         session.last_boundary_at = boundary_at
         return poses, started, active, completed
@@ -258,44 +223,25 @@ class CameraModalityHandler(InteractionHandler):
     def _activate_event(self, session: CameraSession, event: QueuedCameraEvent) -> str | None:
         """Activate ``event``, returning the event_id cancelled by this replacement if any."""
         cancelled_id: str | None = None
-        if event.mode == "velocity":
-            if session.active_target is not None:
-                cancelled_id = session.active_target.event_id
-            elif session.active_velocity is not None and session.active_velocity.event_id != event.event_id:
-                cancelled_id = session.active_velocity.event_id
-            session.active_velocity = CameraVelocity(
-                translation=event.pose.translation,
-                rotation=event.pose.rotation,
-                event_id=event.event_id,
-            )
-            session.active_target = None
-            session.target_source = None
-            session.elapsed_transition_chunks = 0.0
-            return cancelled_id
+        if session.active_event is not None and session.active_event.event_id != event.event_id:
+            cancelled_id = session.active_event.event_id
 
-        # else, mode == "target"
-        if session.active_velocity is not None:
-            cancelled_id = session.active_velocity.event_id
-        elif session.active_target is not None and session.active_target.event_id != event.event_id:
-            cancelled_id = session.active_target.event_id
-        session.active_velocity = None
-        session.active_target = CameraTarget(
-            pose=event.pose,
-            event_id=event.event_id,
-            transition_chunks=event.transition_chunks,
-        )
-        session.target_source = session.current_pose.clone()
-        session.elapsed_transition_chunks = 0.0
+        event.elapsed_transition_chunks = 0.0
+        session.active_event = event
+        if event.mode == "target":
+            session.target_source = session.current_pose.clone()
+        else:
+            session.target_source = None
         return cancelled_id
 
     def _clear_active_target(self, session: CameraSession) -> str:
         """Snap to the target pose, clear the active target track, and return its event_id."""
-        assert session.active_target is not None
-        event_id = session.active_target.event_id
-        session.current_pose = session.active_target.pose.clone()
-        session.active_target = None
+        assert session.active_event is not None and session.active_event.mode == "target"
+        event = session.active_event
+        event_id = event.event_id
+        session.current_pose = event.pose.clone()
+        session.active_event = None
         session.target_source = None
-        session.elapsed_transition_chunks = 0.0
         return event_id
 
     def _step_one_frame(self, session: CameraSession, total_num_frames_this_chunk: int) -> str | None:
@@ -304,22 +250,26 @@ class CameraModalityHandler(InteractionHandler):
         Returns the event_id that finished on this frame, if any. Finished targets
         are cleared so later frames/chunks do not re-emit them as active/completed.
         """
-        if session.active_target is not None:
-            duration = session.active_target.transition_chunks
+        event = session.active_event
+        if event is None:
+            return None
+
+        if event.mode == "target":
+            duration = event.transition_chunks
             source = session.target_source or session.current_pose
-            target = session.active_target.pose
+            target = event.pose
             if duration <= 0:
                 return self._clear_active_target(session)
 
-            session.elapsed_transition_chunks += 1.0 / float(total_num_frames_this_chunk)
-            alpha = min(1.0, session.elapsed_transition_chunks / float(duration))
+            event.elapsed_transition_chunks += 1.0 / float(total_num_frames_this_chunk)
+            alpha = min(1.0, event.elapsed_transition_chunks / float(duration))
             session.current_pose = _lerp_pose(source, target, alpha)
-            if session.elapsed_transition_chunks >= duration:
+            if event.elapsed_transition_chunks >= duration:
                 return self._clear_active_target(session)
             return None
 
-        if session.active_velocity is not None:
-            session.current_pose = _add_velocity(session.current_pose, session.active_velocity)
+        # else: velocity
+        session.current_pose = _add_velocity(session.current_pose, event.pose)
         return None
 
     @abstractmethod
@@ -394,11 +344,11 @@ class WASDEventCameraHandler(CameraModalityHandler):
 
 
 def _get_camera_session(state: StepRequestState) -> CameraSession:
-    session = state.extra.get("camera_session")
+    session = state.interaction_sessions.get("camera")
     if isinstance(session, CameraSession):
         return session
     session = CameraSession()
-    state.extra["camera_session"] = session
+    state.interaction_sessions["camera"] = session
     return session
 
 
@@ -435,13 +385,13 @@ def _lerp_pose(source: CameraPose, target: CameraPose, alpha: float) -> CameraPo
     )
 
 
-def _add_velocity(pose: CameraPose, velocity: CameraVelocity) -> CameraPose:
+def _add_velocity(pose: CameraPose, velocity_pose: CameraPose) -> CameraPose:
     return CameraPose(
         translation=cast(
             Vec3,
-            tuple(p + v for p, v in zip(pose.translation, velocity.translation)),
+            tuple(p + v for p, v in zip(pose.translation, velocity_pose.translation)),
         ),
-        rotation=_quat_normalize(_quat_mul(pose.rotation, velocity.rotation)),
+        rotation=_quat_normalize(_quat_mul(pose.rotation, velocity_pose.rotation)),
     )
 
 

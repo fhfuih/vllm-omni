@@ -24,8 +24,8 @@ if TYPE_CHECKING:
 class InteractionCoordinator:
     """Handles mid-way interaction inputs for one loaded pipeline.
 
-    Request-local session state lives on ``StepRequestState.extra``; this object
-    is request-agnostic.
+    Request-local session state lives on ``StepRequestState.interaction_sessions``;
+    this object is request-agnostic.
     """
 
     def __init__(
