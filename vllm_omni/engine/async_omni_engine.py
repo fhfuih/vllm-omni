@@ -72,12 +72,13 @@ from vllm_omni.entrypoints.utils import (
     load_and_resolve_stage_configs,
     parse_stage_overrides,
 )
-from vllm_omni.inputs.data import OmniInteractionPrompt, OmniSamplingParams
+from vllm_omni.inputs.data import OmniSamplingParams
 from vllm_omni.metrics.prometheus import OmniRequestCounter
 
 logger = init_logger(__name__)
 
 if TYPE_CHECKING:
+    from vllm_omni.diffusion.interaction.types import OmniTimestampedInteractionPrompt
     from vllm_omni.experimental.fullduplex.engine.duplex_control_client import DuplexControlClient
     from vllm_omni.experimental.fullduplex.engine.lease import DuplexLeaseActivity
     from vllm_omni.experimental.fullduplex.engine.messages import DuplexFence
@@ -1031,6 +1032,7 @@ class AsyncOmniEngine:
             "force_cutlass_fp8": bool(kwargs.get("force_cutlass_fp8", False)),
             "enable_diffusion_pipeline_profiler": kwargs.get("enable_diffusion_pipeline_profiler", False),
             "streaming_output": kwargs.get("diffusion_streaming_output", False),
+            "streaming_pacing": kwargs.get("diffusion_streaming_pacing", False),
             "enable_ar_profiler": kwargs.get("enable_ar_profiler", False),
             "extras": {
                 "auxiliary_text_encoder": kwargs.get("auxiliary_text_encoder", None),
@@ -1707,7 +1709,7 @@ class AsyncOmniEngine:
     def submit_interaction(
         self,
         request_id: str,
-        interaction: OmniInteractionPrompt,
+        interaction: OmniTimestampedInteractionPrompt,
     ) -> None:
         """Send an interaction control message to the Orchestrator."""
         if self.request_queue is None:
@@ -1723,7 +1725,7 @@ class AsyncOmniEngine:
     async def submit_interaction_async(
         self,
         request_id: str,
-        interaction: OmniInteractionPrompt,
+        interaction: OmniTimestampedInteractionPrompt,
     ) -> None:
         """Async interaction API."""
         self.submit_interaction(request_id, interaction)

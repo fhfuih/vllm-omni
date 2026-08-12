@@ -7,7 +7,9 @@ from __future__ import annotations
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from threading import Lock
-from typing import Literal
+from typing import Literal, NotRequired, TypedDict
+
+from vllm_omni.inputs.data import OmniInteractionEvent
 
 # Wire payload for one modality track. Handlers validate keys they need.
 InteractionPayload = Mapping[str, object]
@@ -15,6 +17,16 @@ InteractionPayload = Mapping[str, object]
 # Shared command semantics across modalities that support them.
 # Prompt specialization narrows this to ``"target"`` only.
 InteractionMode = Literal["target", "velocity"]
+INTERACTION_MODES: frozenset[InteractionMode] = frozenset({"target", "velocity"})
+
+
+class OmniTimestampedInteractionPrompt(TypedDict):
+    """Internal interaction envelope, timestamped OmniInteractionPrompt."""
+
+    event_id: str
+    event: OmniInteractionEvent
+    received_at: float
+    transition_chunks: NotRequired[int]
 
 
 @dataclass(frozen=True)
@@ -66,6 +78,23 @@ class InteractionSession:
 
     lock: Lock = field(default_factory=Lock, repr=False)
     last_boundary_at: float | None = None
+
+
+@dataclass(frozen=True)
+class InteractionBoundaryContext:
+    """Immutable window / apply context passed to handlers at a chunk boundary.
+
+    ``boundary_at`` is always required. Optional pacing fields are populated when
+    ``streaming_pacing`` is enabled; otherwise construct with
+    ``InteractionBoundaryContext(boundary_at=...)`` only.
+    """
+
+    boundary_at: float
+    window_opened_at: float | None = None
+    window_end_at: float | None = None
+    # Worker-local time when the watched media chunk became available.
+    # None means no media has been produced yet (reject all interactions).
+    visible_from: float | None = None
 
 
 def resolve_event_frame_offset(

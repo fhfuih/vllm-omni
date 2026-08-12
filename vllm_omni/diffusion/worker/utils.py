@@ -12,6 +12,7 @@ import torch
 
 if TYPE_CHECKING:
     from vllm_omni.diffusion.data import DiffusionOutput
+    from vllm_omni.diffusion.interaction.pacing import StreamingPacingState
     from vllm_omni.diffusion.interaction.types import (
         InteractionChunkMetadata,
         InteractionSession,
@@ -100,6 +101,13 @@ class StepRequestState:
     step_in_chunk: int = 0
     total_chunks: int = 1
     chunk_num_steps: int | None = None
+    # True when ``chunk_index`` refers to the just-completed chunk during the engine's pacing wait.
+    # When True, the upcoming chunk is ``chunk_index + 1``.
+    # Cleared when engine stops pacing and the runner begins the next cycle.
+    pending_chunk_boundary: bool = False
+    # Request-local observation-window / visibility timeline when
+    # ``OmniDiffusionConfig.streaming_pacing`` is enabled.
+    streaming_pacing_state: StreamingPacingState | None = None
 
     # ── Optional interaction information in streaming output mode ──
     interaction_sessions: dict[str, InteractionSession] = field(default_factory=dict)  # Modality -> transition progress
@@ -192,6 +200,8 @@ class RunnerOutput(BaseRunnerOutput):
     step_index: int | None = None
     finished: bool = False
     result: DiffusionOutput | None = None
+    # Absolute monotonic deadline to wait before the next chunk may start (pacing).
+    pacing_next_ready_at: float | None = None
 
     def get_request_output(self, request_id: str) -> RunnerOutput | None:
         return self if self.request_id == request_id else None

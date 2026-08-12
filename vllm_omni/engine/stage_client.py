@@ -8,9 +8,9 @@ from typing import TYPE_CHECKING, Any, Protocol
 if TYPE_CHECKING:
     from vllm.v1.engine import EngineCoreOutput, EngineCoreOutputs, EngineCoreRequest
 
+    from vllm_omni.diffusion.interaction.types import OmniTimestampedInteractionPrompt
     from vllm_omni.inputs.data import (
         OmniDiffusionSamplingParams,
-        OmniInteractionPrompt,
         OmniPromptType,
         OmniTokensPrompt,
     )
@@ -110,6 +110,6 @@ class StagePoolDiffusionClient(StagePoolClient, Protocol):
     async def submit_interaction_async(
         self,
         request_id: str,
-        interaction: OmniInteractionPrompt,
+        interaction: OmniTimestampedInteractionPrompt,
         timeout: float | None = None,
     ) -> Any: ...

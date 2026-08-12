@@ -12,6 +12,7 @@ from vllm.logger import init_logger
 from vllm.v1.engine import EngineCoreOutputs
 from vllm.v1.metrics.stats import IterationStats
 
+from vllm_omni.diffusion.interaction.types import OmniTimestampedInteractionPrompt
 from vllm_omni.distributed.omni_coordinator import (
     LoadBalancer,
     OmniCoordClientForHub,
@@ -24,7 +25,7 @@ from vllm_omni.engine.stage_client import (
     StagePoolDiffusionClient,
     StagePoolLLMClient,
 )
-from vllm_omni.inputs.data import OmniDiffusionSamplingParams, OmniInteractionPrompt
+from vllm_omni.inputs.data import OmniDiffusionSamplingParams
 from vllm_omni.metrics import (
     count_audio_frames,
     count_image_pixels,
@@ -1051,7 +1052,7 @@ class StagePool:
     async def submit_interaction(
         self,
         request_id: str,
-        interaction: OmniInteractionPrompt,
+        interaction: OmniTimestampedInteractionPrompt,
     ) -> int:
         """Submit a midway interaction to an active diffusion (typically video generation) request."""
         replica_id = self.get_bound_replica_id(request_id)

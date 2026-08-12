@@ -55,28 +55,41 @@ def _prompt_interaction(prompt: str = "new prompt", transition_chunks: int | Non
 async def test_submit_interaction_async_maps_external_to_internal_id() -> None:
     omni = _make_async_omni()
     with pytest.raises(ValueError, match="exactly one active request"):
-        await omni.submit_interaction_async("external-abc", interaction=_prompt_interaction(transition_chunks=2))
+        await omni.submit_interaction_async(
+            "external-abc",
+            interaction=_prompt_interaction(transition_chunks=2),
+        )
 
     omni.request_states.pop("external-abc-uuid-2")
     await omni.submit_interaction_async(
         "external-abc",
         interaction=_prompt_interaction(transition_chunks=2),
     )
-    omni.engine.submit_interaction_async.assert_awaited_once_with(  # pyright: ignore[reportAttributeAccessIssue]
-        "external-abc-uuid-1",
-        interaction=_prompt_interaction(transition_chunks=2),
-    )
+    call = omni.engine.submit_interaction_async.await_args  # pyright: ignore[reportAttributeAccessIssue]
+    assert call.args[0] == "external-abc-uuid-1"
+    forwarded = call.kwargs["interaction"]
+    assert forwarded["event_id"] == "ui-update-1"
+    assert forwarded["event"]["prompt"] == "new prompt"
+    assert forwarded["transition_chunks"] == 2
+    assert "media_visible" not in forwarded
+    assert "received_at" in forwarded
 
 
 @pytest.mark.asyncio
 async def test_submit_interaction_async_passes_missing_transition_chunks() -> None:
     omni = _make_async_omni()
     omni.request_states.pop("external-abc-uuid-2")
-    await omni.submit_interaction_async("external-abc", interaction=_prompt_interaction())
-    omni.engine.submit_interaction_async.assert_awaited_once_with(  # pyright: ignore[reportAttributeAccessIssue]
-        "external-abc-uuid-1",
+    await omni.submit_interaction_async(
+        "external-abc",
         interaction=_prompt_interaction(),
     )
+    call = omni.engine.submit_interaction_async.await_args  # pyright: ignore[reportAttributeAccessIssue]
+    assert call.args[0] == "external-abc-uuid-1"
+    forwarded = call.kwargs["interaction"]
+    assert forwarded["event"]["prompt"] == "new prompt"
+    assert "media_visible" not in forwarded
+    assert "received_at" in forwarded
+    assert "transition_chunks" not in forwarded
 
 
 @pytest.mark.asyncio
@@ -84,7 +97,10 @@ async def test_submit_interaction_async_rejects_empty_prompt() -> None:
     omni = _make_async_omni()
     omni.request_states.pop("external-abc-uuid-2")
     with pytest.raises(ValueError, match="prompt must be non-empty"):
-        await omni.submit_interaction_async("external-abc", interaction=_prompt_interaction(""))
+        await omni.submit_interaction_async(
+            "external-abc",
+            interaction=_prompt_interaction(""),
+        )
 
 
 @pytest.mark.asyncio
@@ -103,7 +119,10 @@ async def test_submit_interaction_async_rejects_inactive_request() -> None:
     omni = _make_async_omni()
     omni.request_states.clear()
     with pytest.raises(ValueError, match="No active request"):
-        await omni.submit_interaction_async("missing", interaction=_prompt_interaction(transition_chunks=2))
+        await omni.submit_interaction_async(
+            "missing",
+            interaction=_prompt_interaction(transition_chunks=2),
+        )
 
 
 @pytest.mark.asyncio
@@ -117,7 +136,10 @@ async def test_submit_interaction_async_rejects_non_diffusion() -> None:
         ),
     }
     with pytest.raises(ValueError, match="requires a diffusion stage"):
-        await omni.submit_interaction_async("req", interaction=_prompt_interaction(transition_chunks=2))
+        await omni.submit_interaction_async(
+            "req",
+            interaction=_prompt_interaction(transition_chunks=2),
+        )
 
 
 @pytest.mark.asyncio
@@ -134,7 +156,11 @@ async def test_submit_interaction_async_forwards_unsupported_dict_shape_to_engin
         interaction=payload,
     )
 
-    omni.engine.submit_interaction_async.assert_awaited_once_with(  # pyright: ignore[reportAttributeAccessIssue]
-        "external-abc-uuid-1",
-        interaction=payload,
-    )
+    call = omni.engine.submit_interaction_async.await_args  # pyright: ignore[reportAttributeAccessIssue]
+    assert call.args[0] == "external-abc-uuid-1"
+    forwarded = call.kwargs["interaction"]
+    assert "media_visible" not in forwarded
+    assert "received_at" in forwarded
+    assert isinstance(forwarded.get("event_id"), str) and forwarded["event_id"]
+    assert forwarded["event"]["multi_modal_data"]["unsupported_modality"]["type"] == "pose"
+    assert forwarded["transition_chunks"] == 2

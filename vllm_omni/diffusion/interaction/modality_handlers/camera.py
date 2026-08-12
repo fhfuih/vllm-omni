@@ -13,7 +13,11 @@ from typing import ClassVar, cast, override
 import torch
 
 from vllm_omni.diffusion.interaction.modality_handlers.base import InteractionHandler
+from vllm_omni.diffusion.interaction.pacing import ObservationWindow, is_event_eligible
 from vllm_omni.diffusion.interaction.types import (
+    INTERACTION_MODES,
+    ChunkMediaSpec,
+    InteractionBoundaryContext,
     InteractionChunkMetadata,
     InteractionEvent,
     InteractionMode,
@@ -100,7 +104,7 @@ class CameraModalityHandler(InteractionHandler):
             raise ValueError("event_id must be non-empty")
 
         mode = payload.get("mode", "target")
-        if mode not in ("target", "velocity"):
+        if mode not in INTERACTION_MODES:
             raise ValueError("camera mode must be 'target' or 'velocity'")
         camera_mode = cast(InteractionMode, mode)
         data = payload.get("data")
@@ -135,7 +139,8 @@ class CameraModalityHandler(InteractionHandler):
         chunk_index: int,
         num_frames: int,
         fps: float,
-        boundary_at: float,
+        boundary_ctx: InteractionBoundaryContext,
+        pacing_enabled: bool = False,
     ) -> InteractionChunkMetadata | None:
         del chunk_index
         session = _get_camera_session(state)
@@ -144,7 +149,8 @@ class CameraModalityHandler(InteractionHandler):
                 session,
                 num_frames=num_frames,
                 fps=fps,
-                boundary_at=boundary_at,
+                boundary_ctx=boundary_ctx,
+                pacing_enabled=pacing_enabled,
             )
             state.conditioning[self.modality] = self._project(samples)
 
@@ -160,7 +166,8 @@ class CameraModalityHandler(InteractionHandler):
         *,
         num_frames: int,
         fps: float,
-        boundary_at: float,
+        boundary_ctx: InteractionBoundaryContext,
+        pacing_enabled: bool = False,
     ) -> tuple[list[CameraPose], list[str], list[str], list[str]]:
         """
         Sample absolute poses for this chunk under target/velocity semantics.
@@ -177,11 +184,40 @@ class CameraModalityHandler(InteractionHandler):
         pending = list(session.pending_events)
         session.pending_events.clear()
 
+        window = None
+        if pacing_enabled and boundary_ctx.window_opened_at is not None:
+            window = ObservationWindow(
+                index=0,
+                collecting_for_chunk=0,
+                opened_at=boundary_ctx.window_opened_at,
+                window_end_at=(
+                    boundary_ctx.window_end_at if boundary_ctx.window_end_at is not None else boundary_ctx.boundary_at
+                ),
+                media=ChunkMediaSpec(num_frames=num_frames, fps=fps),
+            )
+
+        # When pacing is disabled, keep the historical behavior: apply all pending
+        # events relative to the previous boundary timestamp.
+        window_anchor = (
+            boundary_ctx.window_opened_at
+            if pacing_enabled and boundary_ctx.window_opened_at is not None
+            else session.last_boundary_at
+        )
+
         resolved: list[tuple[int, QueuedCameraEvent]] = []  # (frame number in chunk, event)
         for event in pending:
+            if pacing_enabled:
+                if not is_event_eligible(
+                    received_at=event.received_at,
+                    window=window,
+                    mode=event.mode,
+                    visible_from=boundary_ctx.visible_from,
+                ):
+                    # Timed events past the window are consumed/dropped.
+                    continue
             frame = resolve_event_frame_offset(
                 received_at=event.received_at,
-                previous_boundary_at=session.last_boundary_at,
+                previous_boundary_at=window_anchor,
                 num_frames=num_frames,
                 fps=fps,
             )
@@ -217,7 +253,7 @@ class CameraModalityHandler(InteractionHandler):
         if session.active_event is not None:
             active.append(session.active_event.event_id)
 
-        session.last_boundary_at = boundary_at
+        session.last_boundary_at = boundary_ctx.boundary_at
         return poses, started, active, completed
 
     def _activate_event(self, session: CameraSession, event: QueuedCameraEvent) -> str | None:

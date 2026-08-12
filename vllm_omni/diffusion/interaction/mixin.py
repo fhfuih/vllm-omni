@@ -7,7 +7,7 @@ from __future__ import annotations
 import time
 from typing import TYPE_CHECKING
 
-from vllm_omni.diffusion.interaction.types import ChunkMediaSpec
+from vllm_omni.diffusion.interaction.types import ChunkMediaSpec, InteractionBoundaryContext
 from vllm_omni.diffusion.worker.utils import StepRequestState
 
 if TYPE_CHECKING:
@@ -40,6 +40,7 @@ class InteractionMixin:
         chunk_index: int | None = None,
         num_frames: int | None = None,
         fps: float | None = None,
+        boundary_ctx: InteractionBoundaryContext | None = None,
     ) -> None:
         """Advance all active interaction tracks before the next chunk."""
         if chunk_index is None or num_frames is None or fps is None:
@@ -58,12 +59,19 @@ class InteractionMixin:
                 "onto the pipeline before chunked generation"
             )
 
+        if boundary_ctx is None:
+            boundary_ctx = InteractionBoundaryContext(boundary_at=time.monotonic())
+
+        od_config = getattr(self, "od_config", None)
+        pacing_enabled = bool(getattr(od_config, "streaming_pacing", False))
+
         merged = self._interaction_coordinator.apply_at_chunk_boundary(
             state,
             chunk_index=chunk_index,
             num_frames=num_frames,
             fps=fps,
-            boundary_at=time.monotonic(),
+            boundary_ctx=boundary_ctx,
+            pacing_enabled=pacing_enabled,
         )
         state.interaction_chunk_metadata = merged
 

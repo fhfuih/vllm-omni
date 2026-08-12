@@ -88,6 +88,12 @@ def normalize_omni_diffusion_kwargs(kwargs: Mapping[str, Any]) -> dict[str, Any]
         if key in normalized and normalized[key] is None:
             normalized[key] = {}
 
+    # CLI aliases for streaming flags.
+    if "diffusion_streaming_output" in normalized:
+        normalized.setdefault("streaming_output", normalized.pop("diffusion_streaming_output"))
+    if "diffusion_streaming_pacing" in normalized:
+        normalized.setdefault("streaming_pacing", normalized.pop("diffusion_streaming_pacing"))
+
     return normalized
 
 
@@ -811,6 +817,9 @@ class OmniDiffusionConfig:
 
     # Streaming mode settings
     streaming_output: bool = False  # Start (video) generation with initial prompt, but streaming output in chunks
+    # Pace chunk generation to media playback time for interactive streaming.
+    # Requires streaming_output=True and max_num_seqs=1.
+    streaming_pacing: bool = False
 
     # Maximum number of sequences to generate in a batch
     max_num_seqs: int = 1
@@ -903,6 +912,18 @@ class OmniDiffusionConfig:
         self.request_batch_max_wait_ms = float(self.request_batch_max_wait_ms or 0.0)
         if self.request_batch_max_wait_ms < 0:
             raise ValueError(f"request_batch_max_wait_ms must be non-negative, got {self.request_batch_max_wait_ms}.")
+
+        if self.streaming_pacing:
+            if not self.streaming_output:
+                raise ValueError(
+                    "streaming_pacing=True requires streaming_output=True; "
+                    "enable --diffusion-streaming-output or set streaming_output in engine_args."
+                )
+            if int(self.max_num_seqs) != 1:
+                raise ValueError(
+                    f"streaming_pacing=True requires max_num_seqs=1 for a single active "
+                    f"stream; got max_num_seqs={self.max_num_seqs}."
+                )
 
         if isinstance(self.profiler_config, dict):
             from vllm.config import ProfilerConfig

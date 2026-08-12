@@ -489,6 +489,9 @@ class _DiffusionConfigProjection:
     force_cutlass_fp8: bool = False
     enable_diffusion_pipeline_profiler: bool = False
     step_execution: bool = False
+    streaming_output: bool = False
+    streaming_pacing: bool = False
+    max_num_seqs: int = 1
     supports_multimodal_inputs: bool = False
     max_multimodal_image_inputs: int | None = None
     model_paths: dict[str, str] = field(default_factory=dict)

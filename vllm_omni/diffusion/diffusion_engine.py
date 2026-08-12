@@ -12,7 +12,7 @@ import time
 from collections.abc import AsyncGenerator, Iterable
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 import numpy as np
 import PIL.Image
@@ -238,6 +238,9 @@ class DiffusionEngine:
         self._shutdown_complete = False
         self.abort_queue: queue.Queue[str] = queue.Queue()
         self._rpc_queue: queue.Queue[_RpcTask] = queue.Queue()
+        # Absolute monotonic deadline before the next stepwise execute may start.
+        # Set from RunnerOutput.pacing_next_ready_at when streaming_pacing is enabled.
+        self._pacing_next_ready_at: float | None = None
 
     def _init_execute_fn(self) -> None:
         if self.execution_mode == DiffusionExecutionMode.STEP_BATCH:
@@ -379,6 +382,7 @@ class DiffusionEngine:
         while not self.stop_event.is_set():
             self._process_aborts_queue()
             self._process_rpc_queue()
+            self._wait_for_pacing_deadline()
 
             with self._cv:
                 while (
@@ -427,9 +431,61 @@ class DiffusionEngine:
             self._process_rpc_queue()
             finished_req_ids = self.scheduler.update_from_output(sched_output, runner_output)
             self._emit_outputs(finished_req_ids, sched_output.scheduled_request_ids, runner_output)
+            self._remember_pacing_deadline(runner_output)
 
         # Engine is stopping: fail any RPCs still queued so callers don't hang.
         self._fail_pending_rpcs(RuntimeError("DiffusionEngine is shutting down."))
+
+    def _remember_pacing_deadline(self, runner_output: BaseRunnerOutput) -> None:
+        """Capture the next chunk's ready-at deadline from runner output.
+
+        "Pacing" is only possible in step-execution + streaming output mode. It is
+        to delay the generation speed to roughly align with the mediaplayback speed.
+        """
+        if not self.od_config.streaming_pacing:
+            self._pacing_next_ready_at = None
+            return
+        deadline: float | None = None
+        if isinstance(runner_output, BatchRunnerOutput):
+            for out in runner_output.runner_outputs:
+                if out.pacing_next_ready_at is not None:
+                    deadline = out.pacing_next_ready_at
+                    break
+        else:
+            # Single-request RunnerOutput path.
+            runner_output = cast(RunnerOutput, runner_output)
+            for request_id in getattr(runner_output, "request_ids", []):
+                out = runner_output.get_request_output(request_id)
+                if out is not None and out.pacing_next_ready_at is not None:
+                    deadline = out.pacing_next_ready_at
+                    break
+            if deadline is None:
+                deadline = runner_output.pacing_next_ready_at
+        self._pacing_next_ready_at = deadline
+
+    def _wait_for_pacing_deadline(self) -> None:
+        """Block until the runner-provided pacing deadline while draining RPCs.
+
+        "Pacing" is only possible in step-execution + streaming output mode. It is
+        to delay the generation speed to roughly align with the mediaplayback speed.
+        """
+        deadline = self._pacing_next_ready_at
+        if deadline is None:
+            return
+        # Consume the deadline once waiting starts so a finished/aborted stream
+        # cannot leave a stale wait behind.
+        self._pacing_next_ready_at = None
+        while not self.stop_event.is_set():
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                break
+            self._process_aborts_queue()
+            self._process_rpc_queue()
+            with self._cv:
+                # Wake early on RPC/abort activity so interactions stay live.
+                self._cv.wait(timeout=min(remaining, 0.05))
+            self._process_aborts_queue()
+            self._process_rpc_queue()
 
     def _wait_for_request_batch_admission_locked(self) -> None:
         """Wait for compatible requests to accumulate before scheduling a wave.

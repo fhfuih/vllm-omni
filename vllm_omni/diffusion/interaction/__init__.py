@@ -21,12 +21,15 @@ from vllm_omni.diffusion.interaction.modality_handlers.prompt import (
 )
 from vllm_omni.diffusion.interaction.registry import STRUCTURED_HANDLER_REGISTRY
 from vllm_omni.diffusion.interaction.types import (
+    INTERACTION_MODES,
     ChunkMediaSpec,
+    InteractionBoundaryContext,
     InteractionChunkMetadata,
     InteractionEvent,
     InteractionMode,
     InteractionPayload,
     InteractionSession,
+    OmniTimestampedInteractionPrompt,
     merge_interaction_metadata,
     resolve_event_frame_offset,
 )
@@ -39,6 +42,8 @@ __all__ = [
     "CameraSession",
     "ChunkMediaSpec",
     "DEFAULT_TRANSITION_CHUNKS",
+    "INTERACTION_MODES",
+    "InteractionBoundaryContext",
     "InteractionChunkMetadata",
     "InteractionCoordinator",
     "InteractionEvent",
@@ -47,6 +52,7 @@ __all__ = [
     "InteractionMode",
     "InteractionPayload",
     "InteractionSession",
+    "OmniTimestampedInteractionPrompt",
     "PromptInteractionHandler",
     "PromptSession",
     "PromptUpdateMixin",

@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING
 from vllm_omni.diffusion.interaction.modality_handlers.prompt import PromptInteractionHandler
 from vllm_omni.diffusion.interaction.registry import STRUCTURED_HANDLER_REGISTRY
 from vllm_omni.diffusion.interaction.types import (
+    InteractionBoundaryContext,
     InteractionChunkMetadata,
     InteractionPayload,
     merge_interaction_metadata,
@@ -88,7 +89,8 @@ class InteractionCoordinator:
         chunk_index: int,
         num_frames: int,
         fps: float,
-        boundary_at: float,
+        boundary_ctx: InteractionBoundaryContext,
+        pacing_enabled: bool = False,
     ) -> InteractionChunkMetadata:
         """Fan out chunk-boundary apply to handlers in stable order (prompt first)."""
         metas: list[InteractionChunkMetadata] = []
@@ -98,7 +100,8 @@ class InteractionCoordinator:
                 chunk_index=chunk_index,
                 num_frames=num_frames,
                 fps=fps,
-                boundary_at=boundary_at,
+                boundary_ctx=boundary_ctx,
+                pacing_enabled=pacing_enabled,
             )
             if meta is not None:
                 metas.append(meta)
