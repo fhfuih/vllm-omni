@@ -727,6 +727,16 @@ class OmniServeCommand(CLISubcommand):
             default=False,
             help="Enable chunked streaming output for diffusion (mainly video generation) models that support it.",
         )
+        omni_config_group.add_argument(
+            "--diffusion-streaming-pacing",
+            dest="diffusion_streaming_pacing",
+            action="store_true",
+            default=False,
+            help=(
+                "Pace streamed diffusion chunks to real-time media duration for interactive "
+                "generation. Requires --diffusion-streaming-output and max_num_seqs=1 (disabling batching)."
+            ),
+        )
 
         # TTS-specific parameters
         omni_config_group.add_argument(

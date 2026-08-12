@@ -26,6 +26,7 @@ from vllm_omni.diffusion.interaction.modality_handlers.prompt import (
     PromptInteractionHandler,
     PromptSession,
 )
+from vllm_omni.diffusion.interaction.types import OmniTimestampedInteractionPrompt
 from vllm_omni.diffusion.models.helios.pipeline_helios import HeliosPipeline
 from vllm_omni.diffusion.worker.diffusion_model_runner import DiffusionModelRunner
 from vllm_omni.diffusion.worker.input_batch import InputBatch
@@ -42,7 +43,7 @@ from vllm_omni.engine.stage_client import StagePoolClient
 from vllm_omni.engine.stage_init_utils import StageMetadata
 from vllm_omni.engine.stage_pool import StagePool
 from vllm_omni.entrypoints.async_omni import AsyncEventResolver, AsyncOmni
-from vllm_omni.inputs.data import OmniDiffusionSamplingParams, OmniInteractionPrompt
+from vllm_omni.inputs.data import OmniDiffusionSamplingParams
 from vllm_omni.outputs import OmniRequestOutput
 
 pytestmark = [pytest.mark.core_model, pytest.mark.diffusion, pytest.mark.cpu]
@@ -60,7 +61,8 @@ def pipeline() -> HeliosPipeline:
         )
     )
     pipeline.prepare_next_chunk = MagicMock()
-    od_config = SimpleNamespace(model_class_name="HeliosPipeline")
+    od_config = SimpleNamespace(model_class_name="HeliosPipeline", streaming_pacing=False)
+    pipeline.od_config = od_config  # pyright: ignore[reportAttributeAccessIssue]
     pipeline._interaction_coordinator = InteractionCoordinator.build(pipeline, od_config)
     return pipeline
 
@@ -94,14 +96,16 @@ def _prompt_interaction(
     *,
     event_id: str = "ui-update-1",
     transition_chunks: int | None = None,
-) -> OmniInteractionPrompt:
+    received_at: float = 0.0,
+) -> OmniTimestampedInteractionPrompt:
     interaction: dict[str, Any] = {
         "event_id": event_id,
         "event": {"prompt": prompt},
+        "received_at": received_at,
     }
     if transition_chunks is not None:
         interaction["transition_chunks"] = transition_chunks
-    return cast(OmniInteractionPrompt, interaction)
+    return cast(OmniTimestampedInteractionPrompt, interaction)
 
 
 class TestPromptUpdateExecution:
@@ -145,10 +149,12 @@ class TestPromptUpdateExecution:
         [
             {
                 "event_id": "cam-only",
+                "received_at": 0.0,
                 "event": {"multi_modal_data": {"camera": {"mode": "target", "data": {"translation": [0, 0, 1]}}}},
             },
             {
                 "event_id": "cam-and-prompt",
+                "received_at": 0.0,
                 "event": {
                     "prompt": "updated",
                     "multi_modal_data": {
@@ -384,7 +390,7 @@ class TestPromptUpdateIntegration:
 
             await omni.submit_interaction_async(
                 "req-omni",
-                interaction=_prompt_interaction("new scene", event_id="ui-update-1", transition_chunks=2),
+                interaction={"event_id": "ui-update-1", "event": {"prompt": "new scene"}, "transition_chunks": 2},
             )
 
             outputs = await generate_task

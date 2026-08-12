@@ -6,7 +6,8 @@ import msgspec
 from vllm.inputs import PromptType
 from vllm.v1.engine import EngineCoreRequest
 
-from vllm_omni.inputs.data import OmniInteractionPrompt, OmniSamplingParams
+from vllm_omni.diffusion.interaction.types import OmniTimestampedInteractionPrompt
+from vllm_omni.inputs.data import OmniSamplingParams
 from vllm_omni.metrics.stats import StageRequestStats as StageRequestMetrics
 from vllm_omni.outputs import OmniRequestOutput
 
@@ -47,7 +48,7 @@ class AbortRequestMessage(EngineQueueMessage, kw_only=True):
 class InteractionMessage(EngineQueueMessage, kw_only=True):
     type: Literal["interaction"] = "interaction"
     request_id: str
-    interaction: OmniInteractionPrompt
+    interaction: OmniTimestampedInteractionPrompt
 
 
 class CollectiveRPCRequestMessage(EngineQueueMessage, kw_only=True):

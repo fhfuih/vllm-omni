@@ -14,7 +14,7 @@ import copy
 import time
 from collections.abc import Callable
 from contextlib import AbstractContextManager, nullcontext
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
 import torch
 from torch.profiler import record_function
@@ -32,6 +32,15 @@ from vllm_omni.diffusion.compile import regionally_compile
 from vllm_omni.diffusion.data import DiffusionOutput, OmniDiffusionConfig
 from vllm_omni.diffusion.forward_context import set_forward_context
 from vllm_omni.diffusion.interaction.coordinator import InteractionCoordinator
+from vllm_omni.diffusion.interaction.pacing import (
+    close_observation_window,
+    ensure_pacing_state,
+    open_observation_window,
+)
+from vllm_omni.diffusion.interaction.types import (
+    InteractionBoundaryContext,
+    OmniTimestampedInteractionPrompt,
+)
 from vllm_omni.diffusion.model_loader.diffusers_loader import DiffusersPipelineLoader
 from vllm_omni.diffusion.models.interface import supports_interaction_apply, supports_step_execution
 from vllm_omni.diffusion.offloader import get_offload_backend
@@ -53,9 +62,6 @@ from vllm_omni.distributed.omni_connectors.kv_transfer_manager import OmniKVTran
 from vllm_omni.inputs.data import OmniDiffusionSamplingParams
 from vllm_omni.platforms import current_omni_platform
 from vllm_omni.worker.omni_connector_model_runner_mixin import OmniConnectorModelRunnerMixin
-
-if TYPE_CHECKING:
-    from vllm_omni.inputs.data import OmniInteractionPrompt
 
 logger = init_logger(__name__)
 
@@ -716,6 +722,16 @@ class DiffusionModelRunner(OmniConnectorModelRunnerMixin):
             is_primary = not torch.distributed.is_initialized() or torch.distributed.get_rank() == 0
             if new_request_ids and not had_active_states and is_primary and current_omni_platform.is_available():
                 current_omni_platform.reset_peak_memory_stats()
+
+            pacing_enabled = self.od_config.streaming_pacing
+            if pacing_enabled:
+                for state in states:
+                    ensure_pacing_state(state)
+                    if state.pending_chunk_boundary:
+                        state.pending_chunk_boundary = False
+                        self._begin_next_chunk_cycle(state)
+                    self._maybe_open_observation_window(state)
+
             input_batch = self._prepare_batch_inputs(states, new_request_ids)
             attn_metadata = {}
 
@@ -759,6 +775,9 @@ class DiffusionModelRunner(OmniConnectorModelRunnerMixin):
                             else:
                                 should_decode = req.denoise_completed
 
+                            # Signal the engine to wait after emitting this RunnerOutput iff
+                            # streaming and pacing are both enabled, and this chunk finishes diffusing (should_decode)
+                            pacing_next_ready_at: float | None = None
                             if should_decode:
                                 clear_pipeline_stage_durations(self.pipeline)
                                 result = self.pipeline.post_decode(req)
@@ -767,10 +786,19 @@ class DiffusionModelRunner(OmniConnectorModelRunnerMixin):
                                         req,
                                         result,
                                     )
-                                    # Consume this chunk's interaction metadata first,
-                                    # then apply pending interactions and prepare the
-                                    # next chunk (prepare_next_chunk may be a no-op).
-                                    if supports_interaction_apply(self.pipeline) and not req.request_denoise_completed:
+                                    if pacing_enabled:
+                                        # Defer apply/prepare until after the engine pacing wait
+                                        # (``_begin_next_chunk_cycle``).
+                                        if not req.request_denoise_completed:
+                                            pacing = req.streaming_pacing_state
+                                            window = None if pacing is None else pacing.current_window
+                                            if window is not None:
+                                                pacing_next_ready_at = window.window_end_at
+                                    elif (
+                                        supports_interaction_apply(self.pipeline) and not req.request_denoise_completed
+                                    ):
+                                        # Non-pacing: apply pending interactions and prepare the
+                                        # next chunk immediately (prepare_next_chunk may be a no-op).
                                         self.pipeline.apply_interaction_at_chunk_boundary(req)
                                         self.pipeline.prepare_next_chunk(req)
                             else:
@@ -787,6 +815,7 @@ class DiffusionModelRunner(OmniConnectorModelRunnerMixin):
                                     step_index=req.step_index,
                                     finished=finished,
                                     result=result,
+                                    pacing_next_ready_at=pacing_next_ready_at,
                                 )
                             )
                             offset = offset + row_num
@@ -836,7 +865,7 @@ class DiffusionModelRunner(OmniConnectorModelRunnerMixin):
     def submit_interaction(
         self,
         request_id: str,
-        interaction: OmniInteractionPrompt,
+        interaction: OmniTimestampedInteractionPrompt,
     ) -> None:
         """Route a midway interaction through the pipeline interaction coordinator."""
         assert self.pipeline is not None, "Model not loaded. Call load_model() first."
@@ -868,7 +897,11 @@ class DiffusionModelRunner(OmniConnectorModelRunnerMixin):
         if state is None:
             raise ValueError(f"No active request state for interaction: {request_id!r}")
 
-        received_at = time.monotonic()
+        if "received_at" not in interaction:
+            raise ValueError(
+                "interaction requires ingress metadata received_at (stamped by AsyncOmni.submit_interaction_async)"
+            )
+        received_at = float(interaction["received_at"])
 
         if has_prompt:
             prompt = event["prompt"]
@@ -895,3 +928,58 @@ class DiffusionModelRunner(OmniConnectorModelRunnerMixin):
                     payload=payload,
                     transition_chunks=transition_chunks,
                 )
+
+    def _begin_next_chunk_cycle(self, state: StepRequestState) -> None:
+        """Close the previous observation window. Prepare interaction for the next chunk.
+
+        Called after paced ``post_decode`` deferred the boundary: ``state.chunk_index``
+        still names the completed chunk, so the upcoming index is ``chunk_index + 1``.
+        """
+        assert self.pipeline is not None
+        pacing = ensure_pacing_state(state)
+        window = close_observation_window(pacing)
+        next_chunk = state.chunk_index + 1
+        media = self.pipeline.peek_chunk_media(state)
+        # Approximate "user is watching" from worker media timeline: once any
+        # chunk has been decoded/emitted, interactions after that time are visible.
+        visible_from = min(pacing.chunk_visible_from.values()) if pacing.chunk_visible_from else None
+        boundary_ctx = InteractionBoundaryContext(
+            boundary_at=time.monotonic(),
+            window_opened_at=None if window is None else window.opened_at,
+            window_end_at=None if window is None else window.window_end_at,
+            visible_from=visible_from,
+        )
+        self.pipeline.apply_interaction_at_chunk_boundary(  # type: ignore[attr-defined]
+            state,
+            chunk_index=next_chunk,
+            num_frames=media.num_frames,
+            fps=media.fps,
+            boundary_ctx=boundary_ctx,
+        )
+        state.chunk_index = next_chunk
+        if supports_interaction_apply(self.pipeline):
+            self.pipeline.prepare_next_chunk(state)  # type: ignore[attr-defined]
+
+    def _maybe_open_observation_window(self, state: StepRequestState) -> None:
+        """Open the time window that observes interaction inputs for the next chunk (namely ``W(k+1)``).
+
+        The observation window is only opened immediately before chunk k starts denoising."""
+        assert self.pipeline is not None
+        if state.step_in_chunk != 0:
+            return
+        if state.chunk_index >= state.total_chunks - 1:
+            # Final chunk: no subsequent chunk to collect interactions for.
+            return
+        pacing = ensure_pacing_state(state)
+        collecting_for = state.chunk_index + 1
+        if pacing.current_window is not None and pacing.current_window.collecting_for_chunk == collecting_for:
+            return
+        media = self.pipeline.peek_chunk_media(state)
+        opened_at = time.monotonic()
+        open_observation_window(
+            pacing,
+            collecting_for_chunk=collecting_for,
+            opened_at=opened_at,
+            media=media,
+        )
+        pacing.chunk_gen_started_at[state.chunk_index] = opened_at

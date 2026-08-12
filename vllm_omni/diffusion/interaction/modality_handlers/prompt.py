@@ -12,7 +12,9 @@ from typing import Any, ClassVar, override
 import torch
 
 from vllm_omni.diffusion.interaction.modality_handlers.base import InteractionHandler
+from vllm_omni.diffusion.interaction.pacing import ObservationWindow, is_event_eligible
 from vllm_omni.diffusion.interaction.types import (
+    InteractionBoundaryContext,
     InteractionChunkMetadata,
     InteractionEvent,
     InteractionMode,
@@ -171,18 +173,44 @@ class PromptInteractionHandler(InteractionHandler):
         chunk_index: int,
         num_frames: int,
         fps: float,
-        boundary_at: float,
+        boundary_ctx: InteractionBoundaryContext,
+        pacing_enabled: bool = False,
     ) -> InteractionChunkMetadata | None:
         """Advance or start prompt interpolation before the next chunk."""
         del chunk_index, num_frames, fps  # Prompt lerp is chunk-based and last-write-wins
         session = _get_prompt_session(state)
         # Prompt ignores frame scheduling but still records the boundary clock.
-        session.last_boundary_at = boundary_at
+        session.last_boundary_at = boundary_ctx.boundary_at
 
         with session.lock:
             pending_event = session.pending_event
             session.pending_event = None
         active_event = session.active_event
+
+        if pending_event is not None and pacing_enabled:
+            window = None
+            if boundary_ctx.window_opened_at is not None:
+                from vllm_omni.diffusion.interaction.types import ChunkMediaSpec
+
+                window = ObservationWindow(
+                    index=0,
+                    collecting_for_chunk=0,
+                    opened_at=boundary_ctx.window_opened_at,
+                    window_end_at=(
+                        boundary_ctx.window_end_at
+                        if boundary_ctx.window_end_at is not None
+                        else boundary_ctx.boundary_at
+                    ),
+                    # Placeholder media: prompt eligibility only uses window times.
+                    media=ChunkMediaSpec(num_frames=1, fps=1.0),
+                )
+            if not is_event_eligible(
+                received_at=pending_event.received_at,
+                window=window,
+                mode=None,
+                visible_from=boundary_ctx.visible_from,
+            ):
+                pending_event = None
 
         embeds_changed = False
         next_chunk_index = state.chunk_index

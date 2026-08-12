@@ -8,6 +8,7 @@ import json
 import logging
 import math
 import os
+import time
 from collections.abc import Iterable, Sequence
 from typing import TYPE_CHECKING, Any, ClassVar, override
 
@@ -917,12 +918,33 @@ class HeliosPipeline(
 
         output = current_latents if extra["output_type"] == "latent" else current_video
         completed_chunk_index = state.chunk_index
-        state.chunk_index += 1
-        finished = state.request_denoise_completed
-        if finished:
-            self._current_timestep = None
-            if current_omni_platform.is_available():
-                current_omni_platform.empty_cache()
+        pacing_enabled = self.od_config.streaming_pacing
+        will_finish = (completed_chunk_index + 1) >= state.total_chunks
+
+        if pacing_enabled:
+            from vllm_omni.diffusion.interaction.pacing import ensure_pacing_state
+
+            pacing = ensure_pacing_state(state)
+            pacing.chunk_visible_from[completed_chunk_index] = time.monotonic()
+            if will_finish:
+                # Mark request complete without deferring a next-chunk boundary.
+                state.chunk_index = state.total_chunks
+                self._current_timestep = None
+                if current_omni_platform.is_available():
+                    current_omni_platform.empty_cache()
+            else:
+                # Keep chunk_index at the completed chunk until the runner applies
+                # interactions after the engine pacing wait.
+                state.pending_chunk_boundary = True
+            finished = will_finish
+        else:
+            # Non-pacing: advance immediately; runner applies interactions + prepare_next_chunk.
+            state.chunk_index += 1
+            finished = state.request_denoise_completed
+            if finished:
+                self._current_timestep = None
+                if current_omni_platform.is_available():
+                    current_omni_platform.empty_cache()
 
         return DiffusionOutput(
             output=output,

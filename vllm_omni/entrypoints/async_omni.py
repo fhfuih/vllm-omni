@@ -44,13 +44,17 @@ if TYPE_CHECKING:
     from vllm.tokenizers import TokenizerLike
     from vllm.v1.engine import PauseMode
 
+    from vllm_omni.diffusion.interaction.types import OmniTimestampedInteractionPrompt
     from vllm_omni.experimental.fullduplex.engine.lease import DuplexLeaseActivity
     from vllm_omni.experimental.fullduplex.engine.messages import (
         DuplexFence,
         DuplexSessionLifecycleMessage,
     )
     from vllm_omni.experimental.fullduplex.request_client import DuplexRequestClient
-    from vllm_omni.inputs.data import OmniInteractionPrompt, OmniPromptType
+    from vllm_omni.inputs.data import (
+        OmniInteractionPrompt,
+        OmniPromptType,
+    )
 
 logger = init_logger(__name__)
 _FINAL_OUTPUT_IDLE_SLEEP_S = 0.001
@@ -1023,7 +1027,10 @@ class AsyncOmni(EngineClient, OmniBase):
 
         ``request_id`` is the external id created by the server-side session,
         matching the value passed to :meth:`generate`.
+
+        ``received_at`` is stamped here before any queueing latency.
         """
+        received_at = time.monotonic()
         event = interaction.get("event")
         prompt = event.get("prompt") if isinstance(event, dict) else None
         if isinstance(event, dict) and "prompt" in event and (not isinstance(prompt, str) or not prompt):
@@ -1046,9 +1053,21 @@ class AsyncOmni(EngineClient, OmniBase):
                 f"interaction requires exactly one active request for {request_id!r}, found {len(internal_ids)}"
             )
 
+        event_id = interaction.get("event_id")
+        if not isinstance(event_id, str) or not event_id:
+            event_id = uuid.uuid4().hex
+
+        timestamped: OmniTimestampedInteractionPrompt = {
+            "event_id": event_id,
+            "event": interaction["event"],
+            "received_at": received_at,
+        }
+        if "transition_chunks" in interaction:
+            timestamped["transition_chunks"] = interaction["transition_chunks"]
+
         await self.engine.submit_interaction_async(
             internal_ids[0],
-            interaction=interaction,
+            interaction=timestamped,
         )
         if self.log_stats:
             logger.info("[AsyncOmni] Queued interaction for request %s", request_id)

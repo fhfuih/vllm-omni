@@ -8,6 +8,7 @@ from abc import ABC, abstractmethod
 from typing import ClassVar
 
 from vllm_omni.diffusion.interaction.types import (
+    InteractionBoundaryContext,
     InteractionChunkMetadata,
     InteractionPayload,
 )
@@ -44,6 +45,7 @@ class InteractionHandler(ABC):
         chunk_index: int,
         num_frames: int,
         fps: float,
-        boundary_at: float,
+        boundary_ctx: InteractionBoundaryContext,
+        pacing_enabled: bool = False,
     ) -> InteractionChunkMetadata | None:
         """Advance request-local state and materialize this chunk's effects."""

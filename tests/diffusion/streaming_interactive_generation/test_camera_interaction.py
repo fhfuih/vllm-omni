@@ -51,6 +51,23 @@ def _make_prompt_pipeline() -> _FakePromptPipeline:
     return _FakePromptPipeline()
 
 
+def _boundary_ctx(
+    boundary_at: float,
+    *,
+    window_opened_at: float | None = None,
+    window_end_at: float | None = None,
+    visible_from: float | None = None,
+):
+    from vllm_omni.diffusion.interaction.types import InteractionBoundaryContext
+
+    return InteractionBoundaryContext(
+        boundary_at=boundary_at,
+        window_opened_at=window_opened_at,
+        window_end_at=window_end_at,
+        visible_from=visible_from,
+    )
+
+
 def _boundary_at(previous_boundary_at: float | None, num_frames: int, fps: float) -> float:
     if previous_boundary_at is None:
         return 0.0
@@ -117,7 +134,7 @@ class TestCameraHandlers:
             chunk_index=0,
             num_frames=4,
             fps=16.0,
-            boundary_at=0.25,
+            boundary_ctx=_boundary_ctx(0.25),
         )
         tensor = state.conditioning["camera"]
         assert meta is not None
@@ -131,7 +148,7 @@ class TestCameraHandlers:
             chunk_index=1,
             num_frames=4,
             fps=16.0,
-            boundary_at=0.5,
+            boundary_ctx=_boundary_ctx(0.5),
         )
         assert meta2 is not None
         assert meta2.started_event_ids == []
@@ -146,7 +163,7 @@ class TestCameraHandlers:
             chunk_index=2,
             num_frames=4,
             fps=16.0,
-            boundary_at=0.75,
+            boundary_ctx=_boundary_ctx(0.75),
         )
         assert meta3 is not None
         assert meta3.started_event_ids == []
@@ -174,7 +191,7 @@ class TestCameraHandlers:
             chunk_index=0,
             num_frames=8,
             fps=16.0,
-            boundary_at=0.5,
+            boundary_ctx=_boundary_ctx(0.5),
         )
         assert meta is not None
         assert meta.started_event_ids == ["cam-fast"]
@@ -187,7 +204,7 @@ class TestCameraHandlers:
             chunk_index=1,
             num_frames=8,
             fps=16.0,
-            boundary_at=1.0,
+            boundary_ctx=_boundary_ctx(1.0),
         )
         assert meta2 is not None
         assert meta2.started_event_ids == []
@@ -208,14 +225,18 @@ class TestCameraHandlers:
             transition_chunks=None,
         )
 
-        meta0 = handler.apply_at_chunk_boundary(state, chunk_index=0, num_frames=3, fps=16.0, boundary_at=0.0)
+        meta0 = handler.apply_at_chunk_boundary(
+            state, chunk_index=0, num_frames=3, fps=16.0, boundary_ctx=_boundary_ctx(0.0)
+        )
         assert meta0 is not None
         assert meta0.started_event_ids == ["vel-1"]
         assert meta0.active_event_ids == ["vel-1"]
         assert meta0.completed_event_ids == []
         assert state.interaction_sessions["camera"].current_pose.translation[2] == pytest.approx(3.0)
 
-        meta1 = handler.apply_at_chunk_boundary(state, chunk_index=1, num_frames=2, fps=16.0, boundary_at=0.125)
+        meta1 = handler.apply_at_chunk_boundary(
+            state, chunk_index=1, num_frames=2, fps=16.0, boundary_ctx=_boundary_ctx(0.125)
+        )
         assert meta1 is not None
         assert meta1.started_event_ids == []
         assert meta1.active_event_ids == ["vel-1"]
@@ -238,7 +259,7 @@ class TestCameraHandlers:
             chunk_index=0,
             num_frames=4,
             fps=16.0,
-            boundary_at=0.25,
+            boundary_ctx=_boundary_ctx(0.25),
         )
         assert meta0 is not None
         assert meta0.active_event_ids == ["vel-1"]
@@ -258,7 +279,7 @@ class TestCameraHandlers:
             chunk_index=1,
             num_frames=4,
             fps=16.0,
-            boundary_at=0.5,
+            boundary_ctx=_boundary_ctx(0.5),
         )
         assert meta1 is not None
         assert meta1.started_event_ids == ["tgt-1"]
@@ -280,7 +301,7 @@ class TestCameraHandlers:
             },
             transition_chunks=None,
         )
-        handler.apply_at_chunk_boundary(state, chunk_index=0, num_frames=3, fps=16.0, boundary_at=0.0)
+        handler.apply_at_chunk_boundary(state, chunk_index=0, num_frames=3, fps=16.0, boundary_ctx=_boundary_ctx(0.0))
         tensor = state.conditioning["camera"]
         assert tensor.ndim == 2
         assert tensor.shape[1] == 8
@@ -309,7 +330,7 @@ class TestCameraHandlers:
                 chunk_index=1,
                 num_frames=num_frames,
                 fps=fps,
-                boundary_at=_boundary_at(boundary, num_frames, fps),
+                boundary_ctx=_boundary_ctx(_boundary_at(boundary, num_frames, fps)),
             )
             return state.conditioning["camera"]
 
@@ -354,7 +375,7 @@ class TestCameraHandlers:
             chunk_index=0,
             num_frames=4,
             fps=16.0,
-            boundary_at=_boundary_at(10.0, 4, 16.0),
+            boundary_ctx=_boundary_ctx(_boundary_at(10.0, 4, 16.0)),
         )
         assert meta is not None
         assert meta.started_event_ids == ["first", "second"]
@@ -399,7 +420,7 @@ class TestCameraHandlers:
             chunk_index=0,
             num_frames=10,
             fps=fps,
-            boundary_at=_boundary_at(boundary, 10, fps),
+            boundary_ctx=_boundary_ctx(_boundary_at(boundary, 10, fps)),
         )
         assert meta is not None
         assert meta.started_event_ids == ["vel", "tgt"]
@@ -408,3 +429,69 @@ class TestCameraHandlers:
         assert state.interaction_sessions["camera"].active_event is None
         # Instant target (transition_chunks=0) finishes on the activation frame.
         assert state.interaction_sessions["camera"].current_pose.translation[2] == pytest.approx(0.0)
+
+    def test_pacing_drops_late_velocity_keeps_late_target(self) -> None:
+        handler = SE3DeltaCameraHandler()
+        state = _make_state()
+        handler.enqueue(
+            state,
+            event_id="late-vel",
+            received_at=1.5,
+            payload={"mode": "velocity", "data": {"translation": [0.0, 0.0, 1.0]}},
+            transition_chunks=None,
+        )
+        handler.enqueue(
+            state,
+            event_id="late-tgt",
+            received_at=1.5,
+            payload={
+                "mode": "target",
+                "data": {"translation": [1.0, 0.0, 0.0], "rotation": [0.0, 0.0, 0.0, 1.0]},
+            },
+            transition_chunks=0,
+        )
+        meta = handler.apply_at_chunk_boundary(
+            state,
+            chunk_index=1,
+            num_frames=10,
+            fps=10.0,
+            boundary_ctx=_boundary_ctx(
+                2.0,
+                window_opened_at=0.0,
+                window_end_at=1.0,
+                visible_from=0.0,
+            ),
+            pacing_enabled=True,
+        )
+        assert meta is not None
+        assert meta.started_event_ids == ["late-tgt"]
+        assert "late-vel" not in meta.started_event_ids
+
+    def test_pacing_drops_invisible_events(self) -> None:
+        handler = SE3DeltaCameraHandler()
+        state = _make_state()
+        handler.enqueue(
+            state,
+            event_id="blind",
+            received_at=0.2,
+            payload={
+                "mode": "target",
+                "data": {"translation": [1.0, 0.0, 0.0], "rotation": [0.0, 0.0, 0.0, 1.0]},
+            },
+            transition_chunks=0,
+        )
+        meta = handler.apply_at_chunk_boundary(
+            state,
+            chunk_index=1,
+            num_frames=10,
+            fps=10.0,
+            boundary_ctx=_boundary_ctx(
+                1.0,
+                window_opened_at=0.0,
+                window_end_at=1.0,
+                visible_from=None,
+            ),
+            pacing_enabled=True,
+        )
+        assert meta is not None
+        assert meta.started_event_ids == []

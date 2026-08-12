@@ -590,8 +590,7 @@ class TestStreamingVideoOutputPromptUpdate:
                 assert done["stopped"] is False
 
         engine_client.submit_interaction_async.assert_awaited_once_with(
-            request_id,
-            interaction={"event_id": "ui-update-42", "event": {"prompt": "new scene"}},
+            request_id, interaction={"event_id": "ui-update-42", "event": {"prompt": "new scene"}}
         )
 
     def test_prompt_update_rejects_duplicate_event_id(self, mocker: MockerFixture):
@@ -647,8 +646,7 @@ class TestStreamingVideoOutputPromptUpdate:
                 assert ws.receive_json()["type"] == "session.done"
 
         engine_client.submit_interaction_async.assert_awaited_once_with(
-            request_id,
-            interaction={"event_id": "ui-update-42", "event": {"prompt": "new scene"}},
+            request_id, interaction={"event_id": "ui-update-42", "event": {"prompt": "new scene"}}
         )
 
     def test_prompt_update_forwards_transition_chunks(self, mocker: MockerFixture):
