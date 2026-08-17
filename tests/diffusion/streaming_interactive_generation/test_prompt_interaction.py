@@ -167,23 +167,38 @@ class TestPromptUpdateExecution:
         "interaction",
         [
             {},
-            {"multi_modal_data": {"camera": {"type": "pose"}}},
-            {"event": {"prompt": "updated", "multi_modal_data": {"camera": {"type": "pose"}}}},
-            {"event": {"prompt": "updated", "multi_modal_data": {}}},
-            {"event": {"prompt": "updated", "multi_modal_data": None}},
-            {"event": {"prompt": "updated", "multi_modal_data": "bad"}},
+            {"event_id": "bad", "event": {"multi_modal_data": {}}},
+            {"event_id": "bad", "event": {"multi_modal_data": None}},
+            {"event_id": "bad", "event": {"prompt": "updated", "multi_modal_data": "bad"}},
+            {
+                "event_id": "cam-only",
+                "event": {
+                    "multi_modal_data": {
+                        "camera": {"mode": "velocity", "data": {"actions": ["w"]}},
+                    }
+                },
+            },
+            {
+                "event_id": "cam-and-prompt",
+                "event": {
+                    "prompt": "updated",
+                    "multi_modal_data": {
+                        "camera": {"mode": "velocity", "data": {"actions": ["w"]}},
+                    },
+                },
+            },
         ],
     )
-    def test_runner_interaction_rejects_structural_payloads_until_implemented(
+    def test_runner_rejects_unsupported_interactions(
         self,
         pipeline: HeliosPipeline,
         interaction: dict[str, Any],
     ) -> None:
-        """Unsupported interaction dict shapes are preserved to and rejected by the runner."""
+        """Helios has no camera handler; malformed / unsupported payloads are rejected."""
         runner = _make_diffusion_model_runner(pipeline=pipeline)
         runner.state_cache["req-1"] = _make_diffusion_request_state()
 
-        with pytest.raises(NotImplementedError, match="Only text-only prompt update interactions"):
+        with pytest.raises(ValueError):
             runner.submit_interaction("req-1", cast(Any, interaction))
 
     @pytest.mark.parametrize("model_class_name", ["HeliosPipeline", "HeliosPyramidPipeline"])

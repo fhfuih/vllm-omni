@@ -24,6 +24,8 @@ from vllm.model_executor.models.utils import AutoWeightsLoader
 from vllm_omni.diffusion.data import DiffusionOutput, OmniDiffusionConfig
 from vllm_omni.diffusion.distributed.autoencoders.autoencoder_kl_wan import DistributedAutoencoderKLWan
 from vllm_omni.diffusion.distributed.utils import get_local_device
+from vllm_omni.diffusion.interaction.mixin import InteractionMixin
+from vllm_omni.diffusion.interaction.types import ChunkMediaSpec
 from vllm_omni.diffusion.model_loader.diffusers_loader import DiffusersPipelineLoader
 from vllm_omni.diffusion.model_loader.hub_prefetch import from_pretrained_with_prefetch, prefetch_subfolders
 from vllm_omni.diffusion.models.interface import SupportImageInput, SupportsComponentDiscovery, SupportsStepExecution
@@ -421,6 +423,7 @@ class LingBotWorldCausalDMDPipeline(
     SupportImageInput,
     SupportsComponentDiscovery,
     SupportsStepExecution,
+    InteractionMixin,
     ProgressBarMixin,
     DiffusionPipelineProfilerMixin,
 ):
@@ -1412,6 +1415,9 @@ class LingBotWorldCausalDMDPipeline(
             raise ValueError("LingBot chunk_index exceeds the configured causal image condition horizon.")
         condition = image_condition[:, :, start_frame:stop_frame]
         previous = extra.get("camera_tail")
+        from vllm_omni.diffusion.interaction.modality_handlers.camera import CameraSession
+
+        camera_session = state.interaction_sessions.get("camera")
         if extra.get("camera_action_script") is not None:
             chunk_actions = extra["camera_action_script"][state.chunk_index]
             action_trajectory, camera_pitch = integrate_lingbot_camera_actions(
@@ -1434,6 +1440,33 @@ class LingBotWorldCausalDMDPipeline(
                 dtype=extra["dtype"],
                 previous=previous,
             )
+        elif isinstance(camera_session, CameraSession) and camera_session.last_trajectory is not None:
+            # Mid-stream camera interaction: SE3DeltaCameraHandler already integrated
+            # absolute C2W poses with the LingBot WASD algorithm for this chunk.
+            action_trajectory = camera_session.last_trajectory
+            if int(action_trajectory.poses.shape[0]) != block_frames:
+                raise ValueError(
+                    "camera interaction must produce exactly one pose per latent frame; "
+                    f"got {int(action_trajectory.poses.shape[0])}, expected {block_frames}."
+                )
+            extra["camera_pitch"] = float(camera_session.current_pitch)
+            # Non-None camera_actions selects the latent-frame trajectory path in
+            # ``_prepare_camera`` (as opposed to pixel-frame interpolation).
+            placeholder_actions = ((),) * block_frames
+            chunk_inputs = replace(
+                inputs,
+                camera_trajectory=action_trajectory,
+                camera_actions=placeholder_actions,
+                num_frames=(block_frames - 1) * self.vae_scale_factor_temporal + 1,
+                num_latent_frames=block_frames,
+            )
+            camera, camera_tail = self._prepare_camera(
+                chunk_inputs,
+                dtype=extra["dtype"],
+                previous=previous,
+            )
+            # Keep session c2w aligned with the pose tail used for the next chunk.
+            camera_session.current_c2w = camera_tail.poses[-1].detach().cpu().double().clone()
         elif extra.get("camera_embedding_cache") is not None:
             # Same slice request mode takes from its one full-trajectory
             # embedding, so both paths condition a block identically.
@@ -1573,16 +1606,34 @@ class LingBotWorldCausalDMDPipeline(
             },
         }
         state.chunk_index += 1
-        finished = state.request_denoise_completed
-        if not finished:
+        # When the runner has wired an InteractionCoordinator, it owns next-chunk
+        # prep via ``prepare_next_chunk`` after ``apply_interaction_at_chunk_boundary``.
+        # Direct stepwise callers (unit tests) still prepare here.
+        if not state.request_denoise_completed and self._interaction_coordinator is None:
             self._prepare_next_chunk(state)
         return DiffusionOutput(
             output=output,
             stage_durations=self.stage_durations if hasattr(self, "stage_durations") else None,
             chunk_index=completed_chunk_index,
             total_chunks=state.total_chunks,
-            finished=finished,
+            finished=state.request_denoise_completed,
         )
+
+    def peek_chunk_media(self, state: StepRequestState) -> ChunkMediaSpec:
+        """Expose this chunk's latent-frame extent for camera interaction timelines."""
+        block_frames = int(state.extra.get("block_frames") or self.transformer.config.num_frames_per_block)
+        fps = state.sampling.fps
+        if fps is None or float(fps) <= 0:
+            # Latent-frame camera controls are not wall-clock paced; a unit fps keeps
+            # resolve_event_frame_offset well-defined when the client omits sampling.fps.
+            fps = float(block_frames)
+        return ChunkMediaSpec(num_frames=int(block_frames), fps=float(fps))
+
+    def prepare_next_chunk(self, state: StepRequestState) -> None:
+        """Prepare the next AR block after chunk-boundary interaction apply."""
+        if state.request_denoise_completed:
+            return
+        self._prepare_next_chunk(state)
 
     def load_weights(self, weights: Iterable[tuple[str, torch.Tensor]]) -> set[str]:
         loader = AutoWeightsLoader(self)
