@@ -143,21 +143,34 @@ class TestPromptUpdateExecution:
     @pytest.mark.parametrize(
         "interaction",
         [
-            {},
-            {"multi_modal_data": {"camera": {"type": "pose"}}},
-            {"event": {"prompt": "updated", "multi_modal_data": {"camera": {"type": "pose"}}}},
+            {
+                "event_id": "cam-only",
+                "event": {"multi_modal_data": {"camera": {"mode": "target", "data": {"translation": [0, 0, 1]}}}},
+            },
+            {
+                "event_id": "cam-and-prompt",
+                "event": {
+                    "prompt": "updated",
+                    "multi_modal_data": {
+                        "camera": {
+                            "mode": "target",
+                            "data": {"translation": [0, 0, 1]},
+                        }
+                    },
+                },
+            },
         ],
     )
-    def test_runner_interaction_rejects_structural_payloads_until_implemented(
+    def test_runner_rejects_unsupported_interactions(
         self,
         pipeline: HeliosPipeline,
         interaction: dict[str, Any],
     ) -> None:
-        """Unsupported interaction dict shapes are preserved to and rejected by the runner."""
+        """Helios has no camera handler; malformed payloads are rejected."""
         runner = _make_diffusion_model_runner(pipeline=pipeline)
         runner.state_cache["req-1"] = _make_diffusion_request_state()
 
-        with pytest.raises(NotImplementedError, match="Only text-only prompt update interactions"):
+        with pytest.raises(ValueError):
             runner.submit_interaction("req-1", cast(Any, interaction))
 
     def test_input_batch_refreshes_prompt_embeds_on_version_change(self) -> None:
