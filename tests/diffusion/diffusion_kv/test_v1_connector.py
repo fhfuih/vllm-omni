@@ -53,7 +53,7 @@ def test_kv_transfer_config_roundtrip_to_worker_vllm_config() -> None:
 def test_unconfigured_does_not_create_scheduler_connector() -> None:
     od_config = OmniDiffusionConfig.from_kwargs()
     assert od_config.kv_transfer_config is None
-    assert create_scheduler_kv_connector_v1(od_config) is None
+    assert create_scheduler_kv_connector_v1(od_config, kv_cache_config=None, vllm_config=None) is None
 
 
 class _ConcreteScheduler(BaseScheduler):

@@ -47,6 +47,8 @@ def test_request_exposes_native_request_and_diffusion_semantics() -> None:
     assert request.skip_reading_prefix_cache is True
     assert request.shared_prefix_boundary == 0
     assert request.status is RequestStatus.WAITING
+    assert request.kv_transfer_params is None
+    assert request.prompt_token_ids is None
 
 
 @pytest.mark.parametrize(

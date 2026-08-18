@@ -181,7 +181,9 @@ class DiffusionModelRunner(OmniConnectorModelRunnerMixin):
             device=device,
         )
         # Compatibility view for callers that inspect the installed config;
-        # physical ownership remains in ``diffusion_kv_backend``.
+        # physical ownership remains in ``diffusion_kv_backend``. This runner
+        # does not expose the backend's cache mapping to Mooncake
+        # ``register_kv_caches``.
         self.kv_cache_config: KVCacheConfig | None = None
 
         # Cache for per-request stepwise state.

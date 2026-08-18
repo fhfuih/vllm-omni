@@ -31,6 +31,7 @@ import pytest
 
 from vllm_omni.diffusion.data import DiffusionOutput
 from vllm_omni.diffusion.diffusion_engine import DiffusionEngine, DiffusionExecutionMode, _RpcTask
+from vllm_omni.diffusion.diffusion_kv.request import DiffusionKVRequest
 from vllm_omni.diffusion.sched import RequestScheduler
 from vllm_omni.diffusion.sched.interface import RequestBatchSamplingParamsKey
 from vllm_omni.diffusion.worker.utils import RunnerOutput
@@ -129,6 +130,7 @@ def _make_request(tag: str):
         prompt=f"prompt_{tag}",
         sampling_params=SimpleNamespace(**sampling_params),
         diffusion_kv_requests=None,
+        kv_transfer_params=None,
     )
 
 
@@ -487,7 +489,15 @@ async def test_native_kv_reservation_error_wakes_stream_without_killing_busy_loo
         free_request=lambda request_id: None,
     )
     request = _make_request("kv-error")
-    request.diffusion_kv_requests = (object(),)
+    request.diffusion_kv_requests = (
+        DiffusionKVRequest(
+            "kv-error/diffusion-kv/0",
+            sequence_id=0,
+            prefix_len=4,
+            target_len=4,
+            seq_len=8,
+        ),
+    )
     try:
         response_stream = engine.async_add_req_and_stream_response(request)
         output_queue = engine._out_streams[request.request_id]
