@@ -34,7 +34,7 @@ from vllm_omni.errors import client_error_metadata
 from vllm_omni.quantization import build_quant_config
 
 if TYPE_CHECKING:
-    from vllm.config import ProfilerConfig
+    from vllm.config import KVTransferConfig, ProfilerConfig
 
 # Import after TYPE_CHECKING to avoid circular imports at runtime
 # The actual import is deferred to __post_init__ to avoid import order issues
@@ -810,6 +810,10 @@ class OmniDiffusionConfig:
 
     # Omni configuration (injected from stage config)
     omni_kv_config: dict[str, Any] = field(default_factory=dict)
+    # Native vLLM KV connector config (MooncakeConnector, etc.). The current
+    # execution path still uses OmniKVTransferManager for actual KV movement;
+    # this field enables connector object assembly and later native paging work.
+    kv_transfer_config: "KVTransferConfig | dict[str, Any] | None" = None
     additional_config: dict[str, Any] = field(default_factory=dict)
 
     profiler_config: "ProfilerConfig | dict[str, Any] | None" = None
@@ -966,6 +970,20 @@ class OmniDiffusionConfig:
                 "paged_scheduler Diffusion KV does not support imported AR KV in Phase 1; "
                 "disable need_recv_cache until connector-aware admission is implemented"
             )
+
+        if self.kv_transfer_config is not None:
+            from vllm_omni.diffusion.diffusion_kv.native_connector import parse_kv_transfer_config
+
+            if self.diffusion_kv_mode is DiffusionKVCacheMode.DENSE_LEGACY and self.omni_kv_config.get(
+                "need_recv_cache", False
+            ):
+                raise ValueError(
+                    "native kv_transfer_config cannot be used with dense_legacy "
+                    "need_recv_cache; the two KV transfer paths must not run together. "
+                    "Use diffusion_kv_mode='paged_scheduler' without "
+                    "omni_kv_config.need_recv_cache, or drop kv_transfer_config."
+                )
+            self.kv_transfer_config = parse_kv_transfer_config(self.kv_transfer_config)
 
         self.master_port = self._resolve_master_port()
         self.request_batch_max_wait_ms = float(self.request_batch_max_wait_ms or 0.0)

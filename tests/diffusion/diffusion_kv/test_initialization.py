@@ -47,6 +47,7 @@ def _od_config(**overrides):
         is_moe=False,
         additional_config={},
         profiler_config=None,
+        kv_transfer_config=None,
         parallel_config=SimpleNamespace(
             tensor_parallel_size=1,
             pipeline_parallel_size=1,

@@ -14,7 +14,7 @@ import copy
 from collections.abc import Mapping
 from dataclasses import dataclass, field, fields
 from pathlib import Path
-from typing import Any, Literal, TypeAlias, TypedDict, cast
+from typing import TYPE_CHECKING, Any, Literal, TypeAlias, TypedDict, cast
 
 from pydantic import ConfigDict, Field
 from vllm.config.utils import config
@@ -38,6 +38,9 @@ from vllm_omni.config.stage_config import (
     load_deploy_config,
 )
 from vllm_omni.diffusion.diffusion_kv.config import DiffusionKVCacheMode
+
+if TYPE_CHECKING:
+    from vllm.config import KVTransferConfig
 
 _EXECUTION_TYPE_TO_STAGE_WORKER: dict[StageExecutionType, tuple[StageType, str | None]] = {
     StageExecutionType.LLM_AR: (StageType.LLM, "ar"),
@@ -612,6 +615,7 @@ class _DiffusionConfigProjection:
     worker_extension_cls: str | None = None
     custom_pipeline_args: dict[str, Any] | None = None
     additional_config: dict[str, Any] = field(default_factory=dict)
+    kv_transfer_config: KVTransferConfig | dict[str, Any] | None = None
     enable_stage_verification: bool = True
     prompt_file_path: str | None = None
     quantization_config: _QuantizationConfigType = None

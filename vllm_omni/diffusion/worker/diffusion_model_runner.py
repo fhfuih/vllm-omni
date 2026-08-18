@@ -165,6 +165,13 @@ class DiffusionModelRunner(OmniConnectorModelRunnerMixin):
             and self.kv_transfer_manager.config.need_recv_cache
         )
 
+    def get_native_kv_caches_dict(self) -> dict[str, torch.Tensor] | None:
+        """Layer-name KV cache tensors.
+
+        Stub and eturn None until native page registration is wired.
+        """
+        return None
+
     @property
     def _target_device(self) -> torch.device | None:
         return getattr(self.pipeline, "device", None)
