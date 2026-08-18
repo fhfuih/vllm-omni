@@ -6,7 +6,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, cast
+from typing import Any
 
 import torch
 from vllm.config import CompilationConfig, DeviceConfig, KVTransferConfig, VllmConfig
@@ -165,7 +165,8 @@ def configure_diffusion_vllm_config(vllm_config: VllmConfig, od_config: OmniDiff
         if max_num_batched_tokens is not None:
             vllm_config.scheduler_config.max_num_batched_tokens = int(max_num_batched_tokens)
     if od_config.kv_transfer_config is not None:
-        vllm_config.kv_transfer_config = cast(KVTransferConfig, od_config.kv_transfer_config)
+        assert isinstance(od_config.kv_transfer_config, KVTransferConfig)
+        vllm_config.kv_transfer_config = od_config.kv_transfer_config
     return vllm_config
 
 

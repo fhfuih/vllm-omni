@@ -12,6 +12,8 @@ from vllm_omni.diffusion.diffusion_kv.metadata import DiffusionKVMetadata
 from vllm_omni.diffusion.request import OmniDiffusionRequest
 
 if TYPE_CHECKING:
+    from vllm.distributed.kv_transfer.kv_connector.v1.base import KVConnectorMetadata
+
     from vllm_omni.diffusion.diffusion_kv.request import DiffusionKVRequest
 
 
@@ -241,6 +243,9 @@ class DiffusionSchedulerOutput:
     num_waiting_reqs: int
     # next request to background-prefetch KV
     kv_prefetch_job: KVPrefetchJob | None = None
+    # Opaque KVConnectorMetadata from the Scheduler-role KV connector v1.
+    # Workers bind this before start_load_kv once the execution path is wired.
+    kv_connector_metadata: KVConnectorMetadata | None = None
 
     @cached_property
     def scheduled_request_ids(self) -> list[str]:

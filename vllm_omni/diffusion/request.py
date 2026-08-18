@@ -48,6 +48,9 @@ class OmniDiffusionRequest:
     # This is populated by a pipeline preprocessor before the request reaches
     # the scheduler; ``None`` keeps the default behavior for other pipelines.
     batch_compatibility_key: tuple[Any, ...] | None = None
+    # KV connector v1's opaque vLLM handshake data. The Scheduler copies this onto
+    # each DiffusionKVRequest sequence that does not already carry its own.
+    kv_transfer_params: dict[str, Any] | None = None
 
     def __post_init__(self):
         """Initialize dependent fields after dataclass initialization."""
