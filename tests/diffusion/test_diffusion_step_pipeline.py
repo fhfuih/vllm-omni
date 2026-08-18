@@ -1057,7 +1057,7 @@ class TestEngine:
     )
     def test_step_engine_returns_error(self, execute_fn, expected_error, mocker: MockerFixture):
         scheduler = StepScheduler()
-        scheduler.initialize(SimpleNamespace())
+        scheduler.initialize(SimpleNamespace(kv_transfer_config=None))
         engine = _make_engine(scheduler, execute_fn=execute_fn)
 
         output = engine.add_req_and_wait_for_response(_make_engine_request("req-error", num_inference_steps=2))
@@ -1067,7 +1067,7 @@ class TestEngine:
 
     def test_step_execution_completes(self, mocker: MockerFixture):
         scheduler = StepScheduler()
-        scheduler.initialize(SimpleNamespace())
+        scheduler.initialize(SimpleNamespace(kv_transfer_config=None))
         engine = _make_engine(scheduler)
         request = _make_engine_request("req-step", num_inference_steps=2)
 
@@ -1093,7 +1093,7 @@ class TestEngine:
 
     def test_step_abort_stops_rescheduling_after_first_step(self, mocker: MockerFixture):
         scheduler = StepScheduler()
-        scheduler.initialize(SimpleNamespace())
+        scheduler.initialize(SimpleNamespace(kv_transfer_config=None))
         engine = _make_engine(scheduler)
         request = _make_engine_request("req-stop", num_inference_steps=4)
 
@@ -1118,7 +1118,7 @@ class TestEngine:
 
     def test_step_abort_after_reschedule_returns_aborted_output(self, mocker: MockerFixture):
         scheduler = StepScheduler()
-        scheduler.initialize(SimpleNamespace())
+        scheduler.initialize(SimpleNamespace(kv_transfer_config=None))
         engine = _make_engine(scheduler)
         request = _make_engine_request("req-mid", num_inference_steps=4)
 
@@ -1145,7 +1145,7 @@ class TestEngine:
 
     def test_finished_step_without_result_returns_error(self, mocker: MockerFixture):
         scheduler = StepScheduler()
-        scheduler.initialize(SimpleNamespace())
+        scheduler.initialize(SimpleNamespace(kv_transfer_config=None))
         engine = _make_engine(
             scheduler,
             execute_fn=lambda _: RunnerOutput(

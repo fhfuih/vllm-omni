@@ -109,6 +109,7 @@ def _initialize_paged_scheduler(
     )
     scheduler.initialize(
         SimpleNamespace(
+            kv_transfer_config=None,
             diffusion_kv_mode=DiffusionKVCacheMode.PAGED_SCHEDULER,
             max_model_len=64,
             max_num_seqs=max_num_seqs,
@@ -351,10 +352,10 @@ class TestGetRequestBatchSamplingParamsKey:
 class TestRequestScheduler:
     def setup_method(self) -> None:
         self.scheduler: RequestScheduler = RequestScheduler()
-        self.scheduler.initialize(SimpleNamespace(request_batch_max_wait_ms=0.0))
+        self.scheduler.initialize(SimpleNamespace(kv_transfer_config=None, request_batch_max_wait_ms=0.0))
 
     def test_admission_wait_disabled_with_zero_max_wait(self) -> None:
-        self.scheduler.initialize(SimpleNamespace(request_batch_max_wait_ms=0.0))
+        self.scheduler.initialize(SimpleNamespace(kv_transfer_config=None, request_batch_max_wait_ms=0.0))
         decision = self.scheduler.get_admission_wait_decision(now=10.0)
 
         assert decision.should_wait is False
@@ -370,6 +371,7 @@ class TestRequestScheduler:
     ) -> None:
         self.scheduler.initialize(
             SimpleNamespace(
+                kv_transfer_config=None,
                 max_num_seqs=4,
                 request_batch_max_wait_ms=1000.0,
             )
@@ -388,6 +390,7 @@ class TestRequestScheduler:
     def test_admission_wait_disabled_while_wave_is_running(self) -> None:
         self.scheduler.initialize(
             SimpleNamespace(
+                kv_transfer_config=None,
                 max_num_seqs=1,
                 request_batch_max_wait_ms=1000.0,
             )
@@ -402,6 +405,7 @@ class TestRequestScheduler:
     def test_admission_wait_end_conditions(self) -> None:
         self.scheduler.initialize(
             SimpleNamespace(
+                kv_transfer_config=None,
                 max_num_seqs=2,
                 request_batch_max_wait_ms=1000.0,
             )
@@ -721,7 +725,7 @@ class TestRequestScheduler:
 
     def test_streaming_output_keeps_request_running_until_final_chunk(self) -> None:
         scheduler = StepScheduler()
-        scheduler.initialize(SimpleNamespace())
+        scheduler.initialize(SimpleNamespace(kv_transfer_config=None))
         req_id = scheduler.add_request(_make_request("stream"))
 
         sched_output = scheduler.schedule()
@@ -788,7 +792,7 @@ class TestRequestScheduler:
 
     def test_batches_compatible_requests_up_to_max_num_seqs(self) -> None:
         scheduler = RequestScheduler()
-        scheduler.initialize(SimpleNamespace(max_num_seqs=2))
+        scheduler.initialize(SimpleNamespace(kv_transfer_config=None, max_num_seqs=2))
 
         req_id_a = scheduler.add_request(
             _make_step_request(
@@ -811,7 +815,7 @@ class TestRequestScheduler:
 
     def test_batches_incompatible_request_sampling_params_separately(self) -> None:
         scheduler = RequestScheduler()
-        scheduler.initialize(SimpleNamespace(max_num_seqs=2))
+        scheduler.initialize(SimpleNamespace(kv_transfer_config=None, max_num_seqs=2))
 
         req_id_a = scheduler.add_request(
             _make_step_request(
@@ -832,7 +836,7 @@ class TestRequestScheduler:
 
     def test_batches_different_quality_levels_separately(self) -> None:
         scheduler = RequestScheduler()
-        scheduler.initialize(SimpleNamespace(max_num_seqs=2))
+        scheduler.initialize(SimpleNamespace(kv_transfer_config=None, max_num_seqs=2))
 
         high = scheduler.add_request(
             _make_step_request(
@@ -861,7 +865,7 @@ class TestRequestScheduler:
 
     def test_batches_omitted_and_explicit_lossless_separately(self) -> None:
         scheduler = RequestScheduler()
-        scheduler.initialize(SimpleNamespace(max_num_seqs=2))
+        scheduler.initialize(SimpleNamespace(kv_transfer_config=None, max_num_seqs=2))
 
         omitted = scheduler.add_request(
             _make_step_request(
@@ -889,7 +893,7 @@ class TestRequestScheduler:
 
     def test_batches_incompatible_pipeline_conditions_separately(self) -> None:
         scheduler = RequestScheduler()
-        scheduler.initialize(SimpleNamespace(max_num_seqs=2))
+        scheduler.initialize(SimpleNamespace(kv_transfer_config=None, max_num_seqs=2))
 
         request_a = OmniDiffusionRequest(
             prompt="a",
@@ -921,7 +925,7 @@ class TestRequestScheduler:
 
     def test_batches_different_request_local_seed_together(self) -> None:
         scheduler = RequestScheduler()
-        scheduler.initialize(SimpleNamespace(max_num_seqs=2))
+        scheduler.initialize(SimpleNamespace(kv_transfer_config=None, max_num_seqs=2))
 
         req_id_a = scheduler.add_request(
             _make_step_request(
@@ -957,7 +961,7 @@ class TestRequestScheduler:
         second_extra_args: dict,
     ) -> None:
         scheduler = RequestScheduler()
-        scheduler.initialize(SimpleNamespace(max_num_seqs=2))
+        scheduler.initialize(SimpleNamespace(kv_transfer_config=None, max_num_seqs=2))
         first_id = scheduler.add_request(
             _make_step_request(
                 "a",
@@ -985,7 +989,7 @@ class TestRequestScheduler:
 
     def test_incompatible_waiting_head_blocks_later_compatible_request(self) -> None:
         scheduler = RequestScheduler()
-        scheduler.initialize(SimpleNamespace(max_num_seqs=3))
+        scheduler.initialize(SimpleNamespace(kv_transfer_config=None, max_num_seqs=3))
 
         req_id_a = scheduler.add_request(_make_request("a"))
         req_id_b = scheduler.add_request(
@@ -1078,7 +1082,7 @@ class TestDiffusionEngine:
         engine = DiffusionEngine.__new__(DiffusionEngine)
         engine.od_config = SimpleNamespace(streaming_output=False)
         engine.scheduler = RequestScheduler()
-        engine.scheduler.initialize(SimpleNamespace())
+        engine.scheduler.initialize(SimpleNamespace(kv_transfer_config=None))
         engine._rpc_lock = threading.RLock()
         engine._cv = threading.Condition(engine._rpc_lock)
         engine._closed = False
@@ -1125,7 +1129,7 @@ class TestDiffusionEngine:
         monkeypatch: pytest.MonkeyPatch,
         mocker: MockerFixture,
     ) -> None:
-        od_config = SimpleNamespace(model_class_name="mock_model", streaming_output=False)
+        od_config = SimpleNamespace(kv_transfer_config=None, model_class_name="mock_model", streaming_output=False)
         fake_executor_cls = mocker.Mock(return_value=mocker.Mock())
 
         monkeypatch.setattr(
@@ -1152,7 +1156,7 @@ class TestDiffusionEngine:
         monkeypatch: pytest.MonkeyPatch,
         mocker: MockerFixture,
     ) -> None:
-        od_config = SimpleNamespace(model_class_name="mock_model", streaming_output=False)
+        od_config = SimpleNamespace(kv_transfer_config=None, model_class_name="mock_model", streaming_output=False)
         fake_executor_cls = mocker.Mock(return_value=mocker.Mock())
         scheduler = mocker.Mock()
         kv_cache_config = object()
@@ -1188,7 +1192,7 @@ class TestDiffusionEngine:
 
     def test_scheduler_alias_keeps_default_request_scheduler(self) -> None:
         scheduler = Scheduler()
-        scheduler.initialize(SimpleNamespace())
+        scheduler.initialize(SimpleNamespace(kv_transfer_config=None))
 
         req_id = scheduler.add_request(_make_request("alias"))
         sched_output = scheduler.schedule()
@@ -1230,7 +1234,7 @@ class TestDiffusionEngine:
         engine._cv = threading.Condition(engine._rpc_lock)
         engine._closed = False
         engine.scheduler = RequestScheduler()
-        engine.scheduler.initialize(SimpleNamespace())
+        engine.scheduler.initialize(SimpleNamespace(kv_transfer_config=None))
         engine.abort_queue = queue.Queue()
 
         req_id = engine.scheduler.add_request(_make_request("req-abort"))
@@ -1242,7 +1246,7 @@ class TestDiffusionEngine:
     def test_finalize_finished_request_returns_aborted_output(self) -> None:
         engine = DiffusionEngine.__new__(DiffusionEngine)
         engine.scheduler = StepScheduler()
-        engine.scheduler.initialize(SimpleNamespace())
+        engine.scheduler.initialize(SimpleNamespace(kv_transfer_config=None))
 
         req_id = engine.scheduler.add_request(_make_request("req-finalize"))
         engine.scheduler.finish_requests(req_id, DiffusionRequestStatus.FINISHED_ABORTED)
@@ -1255,7 +1259,7 @@ class TestDiffusionEngine:
     def test_finalize_finished_request_returns_scheduler_admission_error(self) -> None:
         engine = DiffusionEngine.__new__(DiffusionEngine)
         engine.scheduler = StepScheduler()
-        engine.scheduler.initialize(SimpleNamespace())
+        engine.scheduler.initialize(SimpleNamespace(kv_transfer_config=None))
 
         req_id = engine.scheduler.add_request(_make_request("req-error"))
         engine.scheduler._finish_requests(
@@ -1271,7 +1275,7 @@ class TestDiffusionEngine:
     async def test_streaming_runner_output_notifies_each_chunk(self) -> None:
         engine = DiffusionEngine.__new__(DiffusionEngine)
         engine.scheduler = StepScheduler()
-        engine.scheduler.initialize(SimpleNamespace())
+        engine.scheduler.initialize(SimpleNamespace(kv_transfer_config=None))
         engine._rpc_lock = threading.RLock()
         engine._cv = threading.Condition(engine._rpc_lock)
         engine._out_streams = {}
@@ -1315,7 +1319,7 @@ class TestDiffusionEngine:
     async def test_finished_streaming_request_without_runner_output_notifies_waiter(self) -> None:
         engine = DiffusionEngine.__new__(DiffusionEngine)
         engine.scheduler = RequestScheduler()
-        engine.scheduler.initialize(SimpleNamespace())
+        engine.scheduler.initialize(SimpleNamespace(kv_transfer_config=None))
         engine._rpc_lock = threading.RLock()
         engine._cv = threading.Condition(engine._rpc_lock)
         engine._out_streams = {}
@@ -1338,7 +1342,7 @@ class TestDiffusionEngine:
         monkeypatch: pytest.MonkeyPatch,
         mocker: MockerFixture,
     ) -> None:
-        od_config = SimpleNamespace(model_class_name="mock_model", streaming_output=False)
+        od_config = SimpleNamespace(kv_transfer_config=None, model_class_name="mock_model", streaming_output=False)
         od_config.step_execution = True
         fake_executor = mocker.Mock()
         fake_executor_cls = mocker.Mock(return_value=fake_executor)
@@ -1387,7 +1391,7 @@ class TestDiffusionEngine:
 class TestStepScheduler:
     def setup_method(self) -> None:
         self.scheduler: StepScheduler = StepScheduler()
-        self.scheduler.initialize(SimpleNamespace())
+        self.scheduler.initialize(SimpleNamespace(kv_transfer_config=None))
 
     def test_admission_wait_is_not_supported(self) -> None:
         decision = self.scheduler.get_admission_wait_decision(
@@ -1548,7 +1552,7 @@ class TestStepScheduler:
 
     def test_batches_compatible_step_requests(self) -> None:
         scheduler = StepScheduler()
-        scheduler.initialize(SimpleNamespace(max_num_seqs=2))
+        scheduler.initialize(SimpleNamespace(kv_transfer_config=None, max_num_seqs=2))
 
         req_a = scheduler.add_request(_make_step_request("a"))
         req_b = scheduler.add_request(_make_step_request("b"))
@@ -1561,7 +1565,7 @@ class TestStepScheduler:
 
     def test_step_batch_allows_different_num_inference_steps(self) -> None:
         scheduler = StepScheduler()
-        scheduler.initialize(SimpleNamespace(max_num_seqs=2))
+        scheduler.initialize(SimpleNamespace(kv_transfer_config=None, max_num_seqs=2))
 
         req_a = scheduler.add_request(_make_step_request("a", num_inference_steps=2))
         req_b = scheduler.add_request(_make_step_request("b", num_inference_steps=4))
@@ -1607,7 +1611,7 @@ class TestStepScheduler:
 
     def test_step_batch_rejects_different_sampling_key(self) -> None:
         scheduler = StepScheduler()
-        scheduler.initialize(SimpleNamespace(max_num_seqs=3))
+        scheduler.initialize(SimpleNamespace(kv_transfer_config=None, max_num_seqs=3))
 
         req_a = scheduler.add_request(_make_step_request("a"))
         req_b = scheduler.add_request(
@@ -1639,7 +1643,7 @@ class TestStepScheduler:
 
     def test_step_batch_rejects_different_quality_levels(self) -> None:
         scheduler = StepScheduler()
-        scheduler.initialize(SimpleNamespace(max_num_seqs=2))
+        scheduler.initialize(SimpleNamespace(kv_transfer_config=None, max_num_seqs=2))
 
         high = scheduler.add_request(
             _make_step_request(
@@ -1671,7 +1675,7 @@ class TestStepScheduler:
         from vllm_omni.lora.request import LoRARequest
 
         scheduler = StepScheduler()
-        scheduler.initialize(SimpleNamespace(max_num_seqs=3))
+        scheduler.initialize(SimpleNamespace(kv_transfer_config=None, max_num_seqs=3))
 
         lora = LoRARequest(lora_name="adapter", lora_int_id=42, lora_path="/tmp/lora")
 
@@ -1696,7 +1700,7 @@ class TestStepScheduler:
         from vllm_omni.lora.request import LoRARequest
 
         scheduler = StepScheduler()
-        scheduler.initialize(SimpleNamespace(max_num_seqs=4))
+        scheduler.initialize(SimpleNamespace(kv_transfer_config=None, max_num_seqs=4))
 
         lora_a = LoRARequest(lora_name="adapter-A", lora_int_id=1, lora_path="/tmp/lora-a")
         lora_b = LoRARequest(lora_name="adapter-B", lora_int_id=2, lora_path="/tmp/lora-b")
@@ -1733,7 +1737,7 @@ class TestStepScheduler:
         from vllm_omni.lora.request import LoRARequest
 
         scheduler = StepScheduler()
-        scheduler.initialize(SimpleNamespace(max_num_seqs=4))
+        scheduler.initialize(SimpleNamespace(kv_transfer_config=None, max_num_seqs=4))
 
         lora = LoRARequest(lora_name="adapter", lora_int_id=7, lora_path="/tmp/lora")
 
@@ -1758,7 +1762,7 @@ class TestStepScheduler:
         from vllm_omni.lora.request import LoRARequest
 
         scheduler = StepScheduler()
-        scheduler.initialize(SimpleNamespace(max_num_seqs=4))
+        scheduler.initialize(SimpleNamespace(kv_transfer_config=None, max_num_seqs=4))
 
         lora = LoRARequest(lora_name="adapter", lora_int_id=3, lora_path="/tmp/lora")
 

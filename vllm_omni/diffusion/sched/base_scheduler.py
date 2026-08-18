@@ -55,6 +55,7 @@ class BaseScheduler(ABC):
         self.max_num_running_reqs: int = 1
         self._prefetch_enabled: bool = False
         self._diffusion_kv_manager: DiffusionKVCacheManager | None = None
+        self._native_kv_connector = None
 
     def initialize(
         self,
@@ -109,7 +110,15 @@ class BaseScheduler(ABC):
             ):
                 raise ValueError("dense_legacy Scheduler received unexpected Diffusion KV cache initialization state")
             self._diffusion_kv_manager = None
+        from vllm_omni.diffusion.diffusion_kv.native_connector import create_scheduler_native_kv_connector
+
+        self._native_kv_connector = create_scheduler_native_kv_connector(od_config)
         self._reset_scheduler_state()
+
+    @property
+    def native_kv_connector(self):
+        """Native vLLM KV connector (SCHEDULER role), or None when unconfigured."""
+        return self._native_kv_connector
 
     def add_request(self, request: OmniDiffusionRequest) -> str:
         return self._add_request_with_request_id(request.request_id, request)
@@ -286,6 +295,10 @@ class BaseScheduler(ABC):
         if self._diffusion_kv_manager is not None:
             self._diffusion_kv_manager.close()
             self._diffusion_kv_manager = None
+        from vllm_omni.diffusion.diffusion_kv.native_connector import shutdown_native_kv_connector
+
+        shutdown_native_kv_connector(scheduler_connector=self._native_kv_connector)
+        self._native_kv_connector = None
         self._request_states.clear()
         self._waiting.clear()
         self._running.clear()
