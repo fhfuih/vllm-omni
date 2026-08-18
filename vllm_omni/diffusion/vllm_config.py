@@ -6,7 +6,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any
+from typing import TYPE_CHECKING, Any, cast
 
 import torch
 from vllm.config import CompilationConfig, DeviceConfig, VllmConfig
@@ -14,6 +14,9 @@ from vllm.transformers_utils.config import get_hf_text_config
 
 from vllm_omni.diffusion.data import OmniDiffusionConfig
 from vllm_omni.diffusion.diffusion_kv.config import DiffusionKVCacheMode
+
+if TYPE_CHECKING:
+    from vllm.config import KVTransferConfig
 
 
 def resolve_diffusion_max_model_len(od_config: OmniDiffusionConfig) -> int:
@@ -227,6 +230,8 @@ def configure_diffusion_vllm_config(vllm_config: VllmConfig, od_config: OmniDiff
         max_num_batched_tokens = getattr(od_config, "max_num_batched_tokens", None)
         if max_num_batched_tokens is not None:
             vllm_config.scheduler_config.max_num_batched_tokens = int(max_num_batched_tokens)
+    if od_config.kv_transfer_config is not None:
+        vllm_config.kv_transfer_config = cast(KVTransferConfig, od_config.kv_transfer_config)
     return vllm_config
 
 

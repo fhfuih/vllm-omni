@@ -44,6 +44,11 @@ from vllm_omni.diffusion.data import (
 )
 from vllm_omni.diffusion.diffusion_kv.config import DiffusionKVCacheMode
 from vllm_omni.diffusion.diffusion_kv.metadata import DiffusionKVMetadata
+from vllm_omni.diffusion.diffusion_kv.native_connector import (
+    init_worker_native_kv_connector,
+    maybe_register_native_kv_caches,
+    shutdown_native_kv_connector,
+)
 from vllm_omni.diffusion.distributed.parallel_state import (
     destroy_distributed_env,
     init_distributed_environment,
@@ -305,6 +310,10 @@ class DiffusionWorker:
                     format_gib(self.requested_memory),
                 )
             init_workspace_manager(self.device)
+            # Native MooncakeConnector worker half must be created after distributed
+            # init (TransferEngine reads vLLM TP/PP groups). DiT workers are
+            # separate processes; do not double-init in an inline AR+DiT process.
+            init_worker_native_kv_connector(self.vllm_config)
 
     def _create_profiler(self) -> WorkerProfiler | None:
         profiler_config = self.od_config.profiler_config
@@ -356,6 +365,9 @@ class DiffusionWorker:
         # When load_format is "dummy", pipeline will init with custom pipeline later
         if load_format != "dummy":
             assert self.model_runner.pipeline is not None
+
+        if self.model_runner is not None:
+            maybe_register_native_kv_caches(self.model_runner.get_native_kv_caches_dict())
 
     def get_kv_cache_specs(self) -> list[dict[str, KVCacheSpec]]:
         """Return native rank-local specs for every diffusion Worker."""
@@ -891,6 +903,7 @@ class DiffusionWorker:
             mgr = getattr(self.model_runner, "kv_transfer_manager", None)
             if mgr is not None:
                 mgr.shutdown_prefetch()
+        shutdown_native_kv_connector()
         destroy_distributed_env()
 
 
