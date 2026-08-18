@@ -3,8 +3,11 @@
 """KV connector v1 assembly for the Diffusion stage.
 
 Creates Scheduler- and Worker-role vLLM ``MooncakeConnector`` instances without
-switching the KV data path away from ``OmniKVTransferManager``. Real KV
-sizing, admission, and ``register_kv_caches`` wiring are added by later work.
+switching the KV data path away from ``OmniKVTransferManager``. Scheduler
+admission uses the page pool when ``paged_scheduler`` is enabled.
+Worker ``register_kv_caches`` / ``start_load_kv`` remain unwired. The paged
+Worker backend owns ``kv_caches_by_layer``; this module does not pass that
+mapping into the Worker connector.
 
 ``v1`` here means Omni's new connector system versus the legacy Omni connector,
 not upstream ``KVConnectorBase_V1``.
@@ -35,8 +38,8 @@ if TYPE_CHECKING:
 
 logger = init_logger(__name__)
 
-# Temporary placeholder sizing. Page allocation is wired later from the
-# Diffusion KV cache manager once the scheduler owns real allocation metadata.
+# Placeholder KVCacheConfig for dense_legacy assembly and Worker init before
+# page tensors are registered.
 _PLACEHOLDER_BLOCK_SIZE = 16
 
 
@@ -63,8 +66,16 @@ def parse_kv_transfer_config(value: object | None) -> KVTransferConfig | None:
 
 def create_scheduler_kv_connector_v1(
     od_config: OmniDiffusionConfig,
+    *,
+    kv_cache_config: KVCacheConfig | None,
+    vllm_config: VllmConfig | None,
 ) -> KVConnectorBase_V1 | None:
-    """Create ``KVConnectorRole.SCHEDULER`` when KV connector v1 is configured."""
+    """Create ``KVConnectorRole.SCHEDULER`` when KV connector v1 is configured.
+
+    ``paged_scheduler`` passes the Scheduler-owned ``KVCacheConfig`` used for
+    page allocation. ``dense_legacy`` omits it and keeps a placeholder config
+    so the connector can still be assembled without running admission.
+    """
     kv_transfer_config = od_config.kv_transfer_config
     if kv_transfer_config is None:
         return None
@@ -73,11 +84,18 @@ def create_scheduler_kv_connector_v1(
             f"Diffusion stage kv_transfer_config must be KVTransferConfig, got {type(kv_transfer_config)!r}"
         )
 
-    vllm_config = _build_kv_connector_v1_vllm_config(od_config)
+    if vllm_config is None:
+        connector_vllm_config = _build_kv_connector_v1_vllm_config(od_config)
+    else:
+        connector_vllm_config = vllm_config
+        if connector_vllm_config.kv_transfer_config is None:
+            connector_vllm_config.kv_transfer_config = kv_transfer_config
+
+    cache_config = kv_cache_config if kv_cache_config is not None else _placeholder_kv_cache_config()
     connector = KVConnectorFactory.create_connector(
-        config=vllm_config,
+        config=connector_vllm_config,
         role=KVConnectorRole.SCHEDULER,
-        kv_cache_config=_placeholder_kv_cache_config(),
+        kv_cache_config=cache_config,
     )
     logger.info(
         "Created KV connector v1 (SCHEDULER role): connector=%s engine_id=%s",
@@ -107,8 +125,10 @@ def init_worker_kv_connector_v1(vllm_config: VllmConfig) -> None:
 def maybe_register_vllm_kv_caches(kv_caches_by_layer: dict[str, torch.Tensor] | None) -> None:
     """Register layer-name tensors in the format the vLLM KV connector expects.
 
-    An empty or missing dict is a no-op so Mooncake ``register_kv_caches`` is
-    not reached. The Worker does not call this helper yet.
+    ``kv_caches_by_layer`` is the layer-name mapping owned by
+    ``DiffusionKVModelRunnerBackend``. An empty or missing dict is a no-op so
+    Mooncake ``register_kv_caches`` is not reached. The Worker does not call
+    this helper: tensors are allocated later in ``set_kv_cache_config``.
     """
     if not kv_caches_by_layer:
         logger.info_once(
@@ -133,7 +153,7 @@ def shutdown_kv_connector_v1(*, scheduler_connector: KVConnectorBase_V1 | None =
 
 
 def _placeholder_kv_cache_config(*, block_size: int = _PLACEHOLDER_BLOCK_SIZE) -> KVCacheConfig:
-    """Empty ``KVCacheConfig`` used until Diffusion owns real page sizing."""
+    """Empty ``KVCacheConfig`` used when the Scheduler has no page pool."""
     del block_size
     return KVCacheConfig(
         num_blocks=0,
