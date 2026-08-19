@@ -25,6 +25,7 @@ import torch.distributed as dist
 import zmq
 from vllm.config import VllmConfig, set_current_vllm_config
 from vllm.distributed.device_communicators.shm_broadcast import MessageQueue
+from vllm.distributed.kv_transfer.kv_transfer_state import has_kv_transfer_group
 from vllm.logger import init_logger
 from vllm.profiler.wrapper import CudaProfilerWrapper, WorkerProfiler
 from vllm.utils.import_utils import resolve_obj_by_qualname
@@ -308,7 +309,6 @@ class DiffusionWorker:
             # KV connector v1 worker half must be created after distributed
             # init (TransferEngine reads vLLM TP/PP groups). DiT workers are
             # separate processes; do not double-init in an inline AR+DiT process.
-            init_worker_kv_connector_v1(self.vllm_config)
 
     def _create_profiler(self) -> WorkerProfiler | None:
         profiler_config = self.od_config.profiler_config
@@ -449,7 +449,16 @@ class DiffusionWorker:
                 "Diffusion KVCacheConfig rank count mismatch: "
                 f"expected={self.od_config.num_gpus}, got={len(kv_cache_configs)}"
             )
-        self.model_runner.set_kv_cache_config(kv_cache_configs[self.rank])
+        rank_config = kv_cache_configs[self.rank]
+        self.model_runner.set_kv_cache_config(rank_config)
+        # self.model_runner.diffusion_kv_backend.initialize_kv_cache(rank_config)  # PR 6102
+        if (
+            self.vllm_config is not None
+            and self.vllm_config.kv_transfer_config is not None
+            and not has_kv_transfer_group()
+        ):
+            init_worker_kv_connector_v1(self.vllm_config, kv_cache_config=rank_config)
+        # maybe_register_vllm_kv_caches(self.model_runner.diffusion_kv_backend.kv_caches_by_layer)  # PR 6102
 
     def init_lora_manager(self) -> None:
         """Initialize the LoRA manager for this worker."""
