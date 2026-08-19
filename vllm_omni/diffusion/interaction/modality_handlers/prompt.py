@@ -111,6 +111,7 @@ class PromptInteractionHandler(InteractionHandler):
         self._dtype = dtype
 
     @classmethod
+    @override
     def from_pipeline(cls, pipeline: Any) -> PromptInteractionHandler:
         """Build a handler from a diffusion pipeline that exposes ``encode_prompt``."""
         return cls(

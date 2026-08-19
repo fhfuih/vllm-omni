@@ -6,7 +6,6 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from vllm_omni.diffusion.interaction.modality_handlers.prompt import PromptInteractionHandler
 from vllm_omni.diffusion.interaction.registry import STRUCTURED_HANDLER_REGISTRY
 from vllm_omni.diffusion.interaction.types import (
     InteractionChunkMetadata,
@@ -43,10 +42,8 @@ class InteractionCoordinator:
         handlers: dict[str, InteractionHandler] = {}
 
         if supports_interaction_apply(pipeline):
-            handlers["prompt"] = PromptInteractionHandler.from_pipeline(pipeline)
-
-        for modality, handler_cls in STRUCTURED_HANDLER_REGISTRY.get(model_class_name or "", {}).items():
-            handlers[modality] = handler_cls()
+            for modality, handler_cls in STRUCTURED_HANDLER_REGISTRY.get(model_class_name or "", {}).items():
+                handlers[modality] = handler_cls.from_pipeline(pipeline)
 
         return cls(handlers, model_class_name=model_class_name)
 

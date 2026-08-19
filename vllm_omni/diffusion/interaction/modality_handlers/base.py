@@ -5,7 +5,7 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from typing import ClassVar
+from typing import ClassVar, Self
 
 from vllm_omni.diffusion.interaction.types import (
     InteractionChunkMetadata,
@@ -23,6 +23,16 @@ class InteractionHandler(ABC):
     """
 
     modality: ClassVar[str]
+
+    @classmethod
+    def from_pipeline(cls, pipeline: object) -> Self:
+        """Bind a request-agnostic handler to ``pipeline`` when construction needs it.
+
+        Default construction ignores the pipeline. Prompt handlers override this to
+        capture ``encode_prompt`` / device / dtype.
+        """
+        del pipeline
+        return cls()
 
     @abstractmethod
     def enqueue(
