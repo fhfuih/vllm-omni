@@ -43,11 +43,13 @@ class OmniInteractionEvent(OmniTextPrompt, total=False):
     pass
 
 
-class OmniInteractionPrompt(TypedDict, total=False):
-    """Mid-stream interaction payload."""
+class OmniInteractionPrompt(TypedDict):
+    """Mid-stream interaction payload"""
 
-    event_id: NotRequired[str]
-    event: NotRequired[OmniInteractionEvent]
+    # `event_id` is optional in the user payload, but since interaction is only possible in online mode,
+    # and API layer always guarantees its presence from raw payload, it is not marked `NotRequired` here.
+    event_id: str
+    event: OmniInteractionEvent
     transition_chunks: NotRequired[int]
 
 
