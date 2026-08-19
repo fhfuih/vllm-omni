@@ -10,11 +10,11 @@ import torch
 from vllm.config import KVTransferConfig
 
 from vllm_omni.diffusion.data import OmniDiffusionConfig
-from vllm_omni.diffusion.diffusion_kv.native_connector import (
-    create_scheduler_native_kv_connector,
-    maybe_register_native_kv_caches,
+from vllm_omni.diffusion.diffusion_kv.v1.connector import (
+    create_scheduler_kv_connector_v1,
+    maybe_register_vllm_kv_caches,
     parse_kv_transfer_config,
-    shutdown_native_kv_connector,
+    shutdown_kv_connector_v1,
 )
 from vllm_omni.diffusion.sched.base_scheduler import BaseScheduler
 from vllm_omni.diffusion.vllm_config import create_diffusion_vllm_config
@@ -53,7 +53,7 @@ def test_kv_transfer_config_roundtrip_to_worker_vllm_config() -> None:
 def test_unconfigured_does_not_create_scheduler_connector() -> None:
     od_config = OmniDiffusionConfig.from_kwargs()
     assert od_config.kv_transfer_config is None
-    assert create_scheduler_native_kv_connector(od_config) is None
+    assert create_scheduler_kv_connector_v1(od_config) is None
 
 
 class _ConcreteScheduler(BaseScheduler):
@@ -62,21 +62,22 @@ class _ConcreteScheduler(BaseScheduler):
         return set()
 
 
-def test_scheduler_creates_native_connector_when_configured() -> None:
+def test_scheduler_creates_kv_connector_v1_when_configured() -> None:
     od_config = OmniDiffusionConfig.from_kwargs(kv_transfer_config=dict(KV_TRANSFER_YAML))
     scheduler = _ConcreteScheduler()
     fake_connector = mock.Mock()
 
     with mock.patch(
-        "vllm_omni.diffusion.diffusion_kv.native_connector.KVConnectorFactory.create_connector",
+        "vllm_omni.diffusion.diffusion_kv.v1.connector.KVConnectorFactory.create_connector",
         return_value=fake_connector,
     ) as create_connector:
         scheduler.initialize(od_config)
 
-    assert scheduler.native_kv_connector is fake_connector
+    assert scheduler.kv_connector_v1 is fake_connector
     create_connector.assert_called_once()
     _, kwargs = create_connector.call_args
     assert kwargs["role"].name == "SCHEDULER"
+    assert kwargs["kv_cache_config"].num_blocks == 0
 
 
 def test_worker_init_calls_ensure_kv_transfer_initialized(monkeypatch) -> None:
@@ -84,7 +85,7 @@ def test_worker_init_calls_ensure_kv_transfer_initialized(monkeypatch) -> None:
     init_mock = mock.Mock()
 
     monkeypatch.setattr(
-        "vllm_omni.diffusion.worker.diffusion_worker.init_worker_native_kv_connector",
+        "vllm_omni.diffusion.worker.diffusion_worker.init_worker_kv_connector_v1",
         init_mock,
     )
     monkeypatch.setattr(
@@ -125,26 +126,27 @@ def test_worker_init_calls_ensure_kv_transfer_initialized(monkeypatch) -> None:
 
 
 def test_skip_register_without_layer_name_kv_caches() -> None:
-    with mock.patch("vllm_omni.diffusion.diffusion_kv.native_connector.get_kv_transfer_group") as get_group:
-        maybe_register_native_kv_caches(None)
+    with mock.patch("vllm_omni.diffusion.diffusion_kv.v1.connector.get_kv_transfer_group") as get_group:
+        maybe_register_vllm_kv_caches(None)
+        maybe_register_vllm_kv_caches({})
         get_group.assert_not_called()
 
 
-def test_register_native_kv_caches_when_dict_present() -> None:
+def test_register_vllm_kv_caches_when_dict_present() -> None:
     fake_group = mock.Mock()
     kv_caches = {"layer.0": torch.zeros(1)}
 
     with (
         mock.patch(
-            "vllm_omni.diffusion.diffusion_kv.native_connector.has_kv_transfer_group",
+            "vllm_omni.diffusion.diffusion_kv.v1.connector.has_kv_transfer_group",
             return_value=True,
         ),
         mock.patch(
-            "vllm_omni.diffusion.diffusion_kv.native_connector.get_kv_transfer_group",
+            "vllm_omni.diffusion.diffusion_kv.v1.connector.get_kv_transfer_group",
             return_value=fake_group,
         ),
     ):
-        maybe_register_native_kv_caches(kv_caches)
+        maybe_register_vllm_kv_caches(kv_caches)
 
     fake_group.register_kv_caches.assert_called_once_with(kv_caches)
 
@@ -154,15 +156,15 @@ def test_shutdown_is_idempotent() -> None:
 
     with (
         mock.patch(
-            "vllm_omni.diffusion.diffusion_kv.native_connector.has_kv_transfer_group",
+            "vllm_omni.diffusion.diffusion_kv.v1.connector.has_kv_transfer_group",
             side_effect=[True, False],
         ),
         mock.patch(
-            "vllm_omni.diffusion.diffusion_kv.native_connector.ensure_kv_transfer_shutdown",
+            "vllm_omni.diffusion.diffusion_kv.v1.connector.ensure_kv_transfer_shutdown",
         ) as ensure_shutdown,
     ):
-        shutdown_native_kv_connector(scheduler_connector=scheduler_connector)
-        shutdown_native_kv_connector(scheduler_connector=None)
+        shutdown_kv_connector_v1(scheduler_connector=scheduler_connector)
+        shutdown_kv_connector_v1(scheduler_connector=None)
 
     scheduler_connector.shutdown.assert_called_once()
     ensure_shutdown.assert_called_once()
@@ -183,7 +185,7 @@ def test_parse_kv_transfer_config_requires_engine_id() -> None:
         parse_kv_transfer_config(payload)
 
 
-def test_native_kv_transfer_rejects_dense_legacy_recv() -> None:
+def test_kv_transfer_rejects_dense_legacy_recv() -> None:
     with pytest.raises(ValueError, match="cannot be used with dense_legacy"):
         OmniDiffusionConfig.from_kwargs(
             kv_transfer_config=dict(KV_TRANSFER_YAML),
@@ -191,21 +193,21 @@ def test_native_kv_transfer_rejects_dense_legacy_recv() -> None:
         )
 
 
-def test_scheduler_close_shuts_down_native_connector() -> None:
+def test_scheduler_close_shuts_down_kv_connector_v1() -> None:
     od_config = OmniDiffusionConfig.from_kwargs(kv_transfer_config=dict(KV_TRANSFER_YAML))
     scheduler = _ConcreteScheduler()
     fake_connector = mock.Mock()
 
     with mock.patch(
-        "vllm_omni.diffusion.diffusion_kv.native_connector.create_scheduler_native_kv_connector",
+        "vllm_omni.diffusion.diffusion_kv.v1.connector.create_scheduler_kv_connector_v1",
         return_value=fake_connector,
     ):
         scheduler.initialize(od_config)
 
     with mock.patch(
-        "vllm_omni.diffusion.diffusion_kv.native_connector.shutdown_native_kv_connector",
+        "vllm_omni.diffusion.diffusion_kv.v1.connector.shutdown_kv_connector_v1",
     ) as shutdown_mock:
         scheduler.close()
 
     shutdown_mock.assert_called_once_with(scheduler_connector=fake_connector)
-    assert scheduler.native_kv_connector is None
+    assert scheduler.kv_connector_v1 is None
