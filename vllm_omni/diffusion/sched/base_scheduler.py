@@ -7,6 +7,7 @@ import time
 from abc import ABC, abstractmethod
 from collections import deque
 from dataclasses import fields
+from typing import TYPE_CHECKING
 
 from vllm.config import VllmConfig
 from vllm.logger import init_logger
@@ -29,6 +30,9 @@ from vllm_omni.diffusion.sched.interface import (
     _AdmissionWaitDecision,
 )
 from vllm_omni.diffusion.worker.utils import RunnerOutput
+
+if TYPE_CHECKING:
+    from vllm.distributed.kv_transfer.kv_connector.v1.base import KVConnectorBase_V1
 
 logger = init_logger(__name__)
 
@@ -55,7 +59,7 @@ class BaseScheduler(ABC):
         self.max_num_running_reqs: int = 1
         self._prefetch_enabled: bool = False
         self._diffusion_kv_manager: DiffusionKVCacheManager | None = None
-        self._native_kv_connector = None
+        self._kv_connector_v1: KVConnectorBase_V1 | None = None
 
     def initialize(
         self,
@@ -110,15 +114,15 @@ class BaseScheduler(ABC):
             ):
                 raise ValueError("dense_legacy Scheduler received unexpected Diffusion KV cache initialization state")
             self._diffusion_kv_manager = None
-        from vllm_omni.diffusion.diffusion_kv.native_connector import create_scheduler_native_kv_connector
+        from vllm_omni.diffusion.diffusion_kv.v1.connector import create_scheduler_kv_connector_v1
 
-        self._native_kv_connector = create_scheduler_native_kv_connector(od_config)
+        self._kv_connector_v1 = create_scheduler_kv_connector_v1(od_config)
         self._reset_scheduler_state()
 
     @property
-    def native_kv_connector(self):
-        """Native vLLM KV connector (SCHEDULER role), or None when unconfigured."""
-        return self._native_kv_connector
+    def kv_connector_v1(self) -> KVConnectorBase_V1 | None:
+        """KV connector v1 (SCHEDULER role), or None when unconfigured."""
+        return self._kv_connector_v1
 
     def add_request(self, request: OmniDiffusionRequest) -> str:
         return self._add_request_with_request_id(request.request_id, request)
@@ -295,10 +299,10 @@ class BaseScheduler(ABC):
         if self._diffusion_kv_manager is not None:
             self._diffusion_kv_manager.close()
             self._diffusion_kv_manager = None
-        from vllm_omni.diffusion.diffusion_kv.native_connector import shutdown_native_kv_connector
+        from vllm_omni.diffusion.diffusion_kv.v1.connector import shutdown_kv_connector_v1
 
-        shutdown_native_kv_connector(scheduler_connector=self._native_kv_connector)
-        self._native_kv_connector = None
+        shutdown_kv_connector_v1(scheduler_connector=self._kv_connector_v1)
+        self._kv_connector_v1 = None
         self._request_states.clear()
         self._waiting.clear()
         self._running.clear()

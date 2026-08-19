@@ -6,17 +6,14 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any, cast
+from typing import Any, cast
 
 import torch
-from vllm.config import CompilationConfig, DeviceConfig, VllmConfig
+from vllm.config import CompilationConfig, DeviceConfig, KVTransferConfig, VllmConfig
 from vllm.transformers_utils.config import get_hf_text_config
 
 from vllm_omni.diffusion.data import OmniDiffusionConfig
 from vllm_omni.diffusion.diffusion_kv.config import DiffusionKVCacheMode
-
-if TYPE_CHECKING:
-    from vllm.config import KVTransferConfig
 
 
 def resolve_diffusion_max_model_len(od_config: OmniDiffusionConfig) -> int:
