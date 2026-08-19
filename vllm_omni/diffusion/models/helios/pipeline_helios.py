@@ -537,7 +537,6 @@ class HeliosPipeline(
         self.prepare_next_chunk(state)
         return state
 
-    @override
     def peek_chunk_media(self, state: StepRequestState) -> ChunkMediaSpec:
         """Expose this chunk's decoded media extent for interaction timelines."""
         num_frames = int(state.extra["window_num_frames"])
