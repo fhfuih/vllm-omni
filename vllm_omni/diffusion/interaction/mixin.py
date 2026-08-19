@@ -5,33 +5,26 @@
 from __future__ import annotations
 
 import time
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
-from vllm_omni.diffusion.interaction.types import ChunkMediaSpec
 from vllm_omni.diffusion.worker.utils import StepRequestState
 
 if TYPE_CHECKING:
     from vllm_omni.diffusion.interaction.coordinator import InteractionCoordinator
+    from vllm_omni.diffusion.models.interface import SupportsInteractionApply
 
 
 class InteractionMixin:
     """Unified chunk-boundary interaction hook.
 
-    Pipelines call only ``apply_interaction_at_chunk_boundary`` without knowing which modality is being interacted with.
+    Pipelines inherit this mixin and implement ``peek_chunk_media`` to support interaction apply.
+    Diffusion runner calls ``apply_interaction_at_chunk_boundary`` without providing the interacting modality.
 
     Per-modality session state lives on ``StepRequestState.interaction_sessions``;
     handler strategy objects live on the pipeline/runner ``InteractionCoordinator``.
     """
 
     _interaction_coordinator: InteractionCoordinator | None = None
-
-    def peek_chunk_media(self, state: StepRequestState) -> ChunkMediaSpec:
-        """Return the media timeline for the current/next chunk.
-
-        Concrete pipelines must override this. Interaction apply uses it when
-        ``num_frames`` / ``fps`` are not passed explicitly.
-        """
-        raise NotImplementedError(f"{type(self).__name__} must implement peek_chunk_media() for interaction apply")
 
     def apply_interaction_at_chunk_boundary(
         self,
@@ -43,7 +36,7 @@ class InteractionMixin:
     ) -> None:
         """Advance all active interaction tracks before the next chunk."""
         if chunk_index is None or num_frames is None or fps is None:
-            media = self.peek_chunk_media(state)
+            media = cast(SupportsInteractionApply, self).peek_chunk_media(state)
             if chunk_index is None:
                 chunk_index = state.chunk_index
             if num_frames is None:
