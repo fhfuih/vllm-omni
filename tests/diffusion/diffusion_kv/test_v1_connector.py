@@ -3,16 +3,20 @@
 
 from __future__ import annotations
 
+from types import SimpleNamespace
 from unittest import mock
 
 import pytest
 import torch
+import vllm.v1.core.single_type_kv_cache_manager as native_kv_managers
 from vllm.config import KVTransferConfig
+from vllm.v1.kv_cache_interface import FullAttentionSpec, KVCacheConfig, KVCacheGroupSpec, KVCacheTensor
 
 from vllm_omni.diffusion.data import OmniDiffusionConfig
 from vllm_omni.diffusion.diffusion_kv.v1.connector import (
     create_scheduler_kv_connector_v1,
     maybe_register_vllm_kv_caches,
+    mint_transfer_id,
     parse_kv_transfer_config,
     shutdown_kv_connector_v1,
 )
@@ -29,13 +33,22 @@ KV_TRANSFER_YAML = {
 }
 
 
+def _paged_od_config(**kwargs) -> OmniDiffusionConfig:
+    return OmniDiffusionConfig.from_kwargs(
+        diffusion_kv_mode="paged_scheduler",
+        max_model_len=64,
+        kv_transfer_config=dict(KV_TRANSFER_YAML),
+        **kwargs,
+    )
+
+
 @pytest.fixture(autouse=True)
 def _fixed_master_port(monkeypatch) -> None:
     monkeypatch.setattr(OmniDiffusionConfig, "_resolve_master_port", lambda _self: 29500)
 
 
 def test_kv_transfer_config_roundtrip_to_worker_vllm_config() -> None:
-    od_config = OmniDiffusionConfig.from_kwargs(kv_transfer_config=dict(KV_TRANSFER_YAML))
+    od_config = _paged_od_config()
 
     assert od_config.kv_transfer_config is not None
     assert isinstance(od_config.kv_transfer_config, KVTransferConfig)
@@ -62,8 +75,35 @@ class _ConcreteScheduler(BaseScheduler):
         return set()
 
 
+def _initialize_paged_scheduler(scheduler: BaseScheduler, od_config: OmniDiffusionConfig) -> KVCacheConfig:
+    native_kv_managers.register_all_kvcache_specs(None)
+    spec = FullAttentionSpec(
+        block_size=4,
+        num_kv_heads=2,
+        head_size=8,
+        dtype=torch.bfloat16,
+    )
+    kv_cache_config = KVCacheConfig(
+        num_blocks=8,
+        kv_cache_tensors=[KVCacheTensor(size=1024, shared_by=["layer.0"])],
+        kv_cache_groups=[KVCacheGroupSpec(layer_names=["layer.0"], kv_cache_spec=spec)],
+    )
+    scheduler.initialize(
+        od_config,
+        kv_cache_config=kv_cache_config,
+        scheduler_block_size=4,
+        hash_block_size=4,
+        kv_vllm_config=SimpleNamespace(
+            model_config=SimpleNamespace(max_model_len=64),
+            max_in_flight_tokens=64,
+            kv_transfer_config=od_config.kv_transfer_config,
+        ),
+    )
+    return kv_cache_config
+
+
 def test_scheduler_creates_kv_connector_v1_when_configured() -> None:
-    od_config = OmniDiffusionConfig.from_kwargs(kv_transfer_config=dict(KV_TRANSFER_YAML))
+    od_config = _paged_od_config()
     scheduler = _ConcreteScheduler()
     fake_connector = mock.Mock()
 
@@ -71,17 +111,18 @@ def test_scheduler_creates_kv_connector_v1_when_configured() -> None:
         "vllm_omni.diffusion.diffusion_kv.v1.connector.KVConnectorFactory.create_connector",
         return_value=fake_connector,
     ) as create_connector:
-        scheduler.initialize(od_config)
+        kv_cache_config = _initialize_paged_scheduler(scheduler, od_config)
 
     assert scheduler.kv_connector_v1 is fake_connector
     create_connector.assert_called_once()
     _, kwargs = create_connector.call_args
     assert kwargs["role"].name == "SCHEDULER"
-    assert kwargs["kv_cache_config"].num_blocks == 0
+    assert kwargs["kv_cache_config"] is kv_cache_config
+    assert kwargs["kv_cache_config"].num_blocks == 8
 
 
-def test_worker_init_calls_ensure_kv_transfer_initialized(monkeypatch) -> None:
-    od_config = OmniDiffusionConfig.from_kwargs(kv_transfer_config=dict(KV_TRANSFER_YAML))
+def test_worker_init_device_defers_connector_until_kv_config(monkeypatch) -> None:
+    od_config = _paged_od_config()
     init_mock = mock.Mock()
 
     monkeypatch.setattr(
@@ -100,10 +141,22 @@ def test_worker_init_calls_ensure_kv_transfer_initialized(monkeypatch) -> None:
         lambda config: None,
     )
     monkeypatch.setattr(
+        "vllm_omni.diffusion.worker.diffusion_worker.current_omni_platform.empty_cache",
+        lambda: None,
+    )
+    monkeypatch.setattr(
         "vllm_omni.diffusion.worker.diffusion_worker.init_distributed_environment", lambda **kwargs: None
     )
     monkeypatch.setattr("vllm_omni.diffusion.worker.diffusion_worker.initialize_model_parallel", lambda **kwargs: None)
     monkeypatch.setattr("vllm_omni.diffusion.worker.diffusion_worker.init_workspace_manager", lambda device: None)
+    monkeypatch.setattr(
+        "vllm_omni.diffusion.worker.diffusion_worker.MemorySnapshot",
+        lambda **kwargs: SimpleNamespace(),
+    )
+    monkeypatch.setattr(
+        "vllm_omni.diffusion.worker.diffusion_worker.request_memory",
+        lambda *args, **kwargs: 0,
+    )
 
     from vllm_omni.diffusion.worker.diffusion_worker import DiffusionWorker
 
@@ -122,7 +175,35 @@ def test_worker_init_calls_ensure_kv_transfer_initialized(monkeypatch) -> None:
     worker.stage_id = 0
 
     worker.init_device()
-    init_mock.assert_called_once_with(worker.vllm_config)
+    init_mock.assert_not_called()
+
+
+def test_set_kv_cache_configs_inits_worker_connector(monkeypatch) -> None:
+    od_config = _paged_od_config()
+    init_mock = mock.Mock()
+    monkeypatch.setattr(
+        "vllm_omni.diffusion.worker.diffusion_worker.init_worker_kv_connector_v1",
+        init_mock,
+    )
+    monkeypatch.setattr(
+        "vllm_omni.diffusion.worker.diffusion_worker.has_kv_transfer_group",
+        lambda: False,
+    )
+
+    from vllm_omni.diffusion.worker.diffusion_worker import DiffusionWorker
+
+    worker = DiffusionWorker.__new__(DiffusionWorker)
+    worker.rank = 0
+    worker.od_config = od_config
+    worker.vllm_config = create_diffusion_vllm_config(torch.device("cpu"), od_config)
+    runner = SimpleNamespace(set_kv_cache_config=mock.Mock())
+    worker.model_runner = runner
+
+    rank_config = KVCacheConfig(num_blocks=4, kv_cache_tensors=[], kv_cache_groups=[])
+    worker.set_kv_cache_configs([rank_config])
+
+    runner.set_kv_cache_config.assert_called_once_with(rank_config)
+    init_mock.assert_called_once_with(worker.vllm_config, kv_cache_config=rank_config)
 
 
 def test_skip_register_without_layer_name_kv_caches() -> None:
@@ -185,16 +266,13 @@ def test_parse_kv_transfer_config_requires_engine_id() -> None:
         parse_kv_transfer_config(payload)
 
 
-def test_kv_transfer_rejects_dense_legacy_recv() -> None:
-    with pytest.raises(ValueError, match="cannot be used with dense_legacy"):
-        OmniDiffusionConfig.from_kwargs(
-            kv_transfer_config=dict(KV_TRANSFER_YAML),
-            omni_kv_config={"need_recv_cache": True},
-        )
+def test_kv_transfer_rejects_dense_legacy() -> None:
+    with pytest.raises(ValueError, match="requires diffusion_kv_mode='paged_scheduler'"):
+        OmniDiffusionConfig.from_kwargs(kv_transfer_config=dict(KV_TRANSFER_YAML))
 
 
 def test_scheduler_close_shuts_down_kv_connector_v1() -> None:
-    od_config = OmniDiffusionConfig.from_kwargs(kv_transfer_config=dict(KV_TRANSFER_YAML))
+    od_config = _paged_od_config()
     scheduler = _ConcreteScheduler()
     fake_connector = mock.Mock()
 
@@ -202,7 +280,7 @@ def test_scheduler_close_shuts_down_kv_connector_v1() -> None:
         "vllm_omni.diffusion.diffusion_kv.v1.connector.create_scheduler_kv_connector_v1",
         return_value=fake_connector,
     ):
-        scheduler.initialize(od_config)
+        _initialize_paged_scheduler(scheduler, od_config)
 
     with mock.patch(
         "vllm_omni.diffusion.diffusion_kv.v1.connector.shutdown_kv_connector_v1",
@@ -211,3 +289,8 @@ def test_scheduler_close_shuts_down_kv_connector_v1() -> None:
 
     shutdown_mock.assert_called_once_with(scheduler_connector=fake_connector)
     assert scheduler.kv_connector_v1 is None
+
+
+def test_mint_transfer_id_is_stable_per_request() -> None:
+    assert mint_transfer_id("req-a") == mint_transfer_id("req-a")
+    assert mint_transfer_id("req-a") != mint_transfer_id("req-b")

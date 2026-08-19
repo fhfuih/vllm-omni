@@ -445,3 +445,31 @@ def test_paged_preprocess_attaches_layout_and_scheduler_kv_requests(monkeypatch)
         (12, 17, 32)
     ]
     assert len(tokenizer.calls) == 1
+
+
+def test_paged_preprocess_preserves_kv_transfer_params(monkeypatch) -> None:
+    tokenizer, image_processor = _components([12])
+    hf_config = SimpleNamespace(
+        vae_downsample_factor=(8, 8),
+        patch_size=2,
+        image_base_size=1024,
+    )
+    monkeypatch.setattr(pipeline_module, "get_config", lambda *_args, **_kwargs: hf_config)
+    monkeypatch.setattr(pipeline_module, "HunyuanImage3ImageProcessor", lambda _config: image_processor)
+    monkeypatch.setattr(pipeline_module, "TokenizerWrapper", lambda _model: tokenizer)
+    monkeypatch.setattr(
+        pipeline_module.GenerationConfig,
+        "from_pretrained",
+        lambda _model: SimpleNamespace(sequence_template="instruct", drop_think=False),
+    )
+    preprocess = get_hunyuan_image_3_pre_process_func(
+        SimpleNamespace(model="model", diffusion_kv_mode=DiffusionKVCacheMode.PAGED_SCHEDULER)
+    )
+    handshake = {"transfer_id": "xfer-req", "do_remote_prefill": True, "remote_engine_id": "ar-engine"}
+    request = _request(guidance_scale=1.0)
+    request.kv_transfer_params = dict(handshake)
+
+    prepared_request = preprocess(request)
+
+    assert prepared_request.kv_transfer_params == handshake
+    assert prepared_request.diffusion_kv_requests is not None
