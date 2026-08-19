@@ -7,11 +7,11 @@ from __future__ import annotations
 import time
 from typing import TYPE_CHECKING, cast
 
+from vllm_omni.diffusion.models.interface import SupportsInteractionApply
 from vllm_omni.diffusion.worker.utils import StepRequestState
 
 if TYPE_CHECKING:
     from vllm_omni.diffusion.interaction.coordinator import InteractionCoordinator
-    from vllm_omni.diffusion.models.interface import SupportsInteractionApply
 
 
 class InteractionMixin:
