@@ -25,6 +25,7 @@ import torch.distributed as dist
 import zmq
 from vllm.config import VllmConfig, set_current_vllm_config
 from vllm.distributed.device_communicators.shm_broadcast import MessageQueue
+from vllm.distributed.kv_transfer.kv_transfer_state import has_kv_transfer_group
 from vllm.logger import init_logger
 from vllm.profiler.wrapper import CudaProfilerWrapper, WorkerProfiler
 from vllm.utils.import_utils import resolve_obj_by_qualname
@@ -312,7 +313,6 @@ class DiffusionWorker:
             # KV connector v1 worker half must be created after distributed
             # init (TransferEngine reads vLLM TP/PP groups). DiT workers are
             # separate processes; do not double-init in an inline AR+DiT process.
-            init_worker_kv_connector_v1(self.vllm_config)
 
     def _create_profiler(self) -> WorkerProfiler | None:
         profiler_config = self.od_config.profiler_config
@@ -470,6 +470,8 @@ class DiffusionWorker:
         self.vllm_config.cache_config.num_gpu_blocks = kv_cache_config.num_blocks
         with self._maybe_get_memory_pool_context("kv_cache"):
             self.model_runner.set_kv_cache_config(kv_cache_config)
+        if self.vllm_config.kv_transfer_config is not None and not has_kv_transfer_group():
+            init_worker_kv_connector_v1(self.vllm_config, kv_cache_config=kv_cache_config)
 
     def remove_diffusion_kv_requests(self, request_ids: list[str]) -> int:
         """Clear Worker-local rows without freeing Scheduler-owned blocks."""

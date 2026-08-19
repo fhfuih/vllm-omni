@@ -1081,14 +1081,10 @@ class OmniDiffusionConfig:
         if self.kv_transfer_config is not None:
             from vllm_omni.diffusion.diffusion_kv.v1.connector import parse_kv_transfer_config
 
-            if self.diffusion_kv_mode is DiffusionKVCacheMode.DENSE_LEGACY and self.omni_kv_config.get(
-                "need_recv_cache", False
-            ):
+            if self.diffusion_kv_mode is not DiffusionKVCacheMode.PAGED_SCHEDULER:
                 raise ValueError(
-                    "kv_transfer_config cannot be used with dense_legacy "
-                    "need_recv_cache; the two KV transfer paths must not run together. "
-                    "Use diffusion_kv_mode='paged_scheduler' without "
-                    "omni_kv_config.need_recv_cache, or drop kv_transfer_config."
+                    "kv_transfer_config requires diffusion_kv_mode='paged_scheduler'; "
+                    "dense_legacy continues to use OmniKVTransferManager only."
                 )
             self.kv_transfer_config = parse_kv_transfer_config(self.kv_transfer_config)
 
