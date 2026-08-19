@@ -253,10 +253,9 @@ class BaseScheduler(ABC):
             # drain internal recv queues, so a dummy object is enough to
             # snapshot metadata. Passing this stub does not populate any
             # SchedulerOutput fields and must not be treated as a real
-            # schedule payload. When the Worker path starts consuming
-            # kv_connector_metadata in future PRs, replace the stub with a real
-            # SchedulerOutput (or a Diffusion adapter that satisfies the
-            # connector) if that implementation reads scheduled-request fields.
+            # schedule payload. Mooncake currently drains internal recv
+            # queues and ignores scheduled-request fields, so the dummy
+            # remains valid. Call this once after every update_state_after_alloc.
             kv_connector_metadata = self._kv_connector_v1.build_connector_meta(
                 object()  # type: ignore[arg-type]
             )

@@ -93,6 +93,7 @@ class MultiprocDiffusionExecutor(DiffusionExecutor):
     # Class-level defaults so tests using object.__new__ (without _init_executor)
     # don't hit AttributeError when collective_rpc accesses these.
     _rpc_wave_id: int = 0
+    _kv_output_aggregator: Any = None
 
     def _init_executor(self) -> None:
         self._processes: list[mp.Process] = []
@@ -465,6 +466,16 @@ class MultiprocDiffusionExecutor(DiffusionExecutor):
         for new_req in new_reqs:
             validate_new_request_data_identity(new_req)
 
+        kv_connector_output = None
+        if scheduler_output.kv_connector_metadata is not None:
+            prepare_results = self.collective_rpc(
+                "prepare_remote_kv",
+                args=(scheduler_output,),
+                unique_reply_rank=None,
+                exec_all_ranks=True,
+            )
+            kv_connector_output = self._aggregate_kv_connector_outputs(prepare_results)
+
         # DP multi-concurrency: when DLO+AllGather is active and multiple
         # requests are scheduled, send every complete NewRequestData envelope
         # in one broadcast RPC. Each rank picks one envelope, keeping its
@@ -539,7 +550,7 @@ class MultiprocDiffusionExecutor(DiffusionExecutor):
                             result=DiffusionOutput(error=str(exc)),
                         )
                     )
-            return BatchRunnerOutput.from_list(runner_outputs)
+            return BatchRunnerOutput.from_list(runner_outputs, kv_connector_output=kv_connector_output)
 
         for new_req in new_reqs:
             req = new_req.req
@@ -584,7 +595,7 @@ class MultiprocDiffusionExecutor(DiffusionExecutor):
                     )
                 )
 
-        return BatchRunnerOutput.from_list(runner_outputs)
+        return BatchRunnerOutput.from_list(runner_outputs, kv_connector_output=kv_connector_output)
 
     def execute_batch(self, scheduler_output: DiffusionSchedulerOutput) -> BaseRunnerOutput:
         """Execute request-mode work through the unified request-batch path.
@@ -618,9 +629,11 @@ class MultiprocDiffusionExecutor(DiffusionExecutor):
         result = self.collective_rpc(
             "execute_model_batch",
             args=(scheduler_output, self.od_config),
-            unique_reply_rank=0,
+            unique_reply_rank=None if scheduler_output.kv_connector_metadata is not None else 0,
             exec_all_ranks=True,
         )
+        if scheduler_output.kv_connector_metadata is not None and isinstance(result, list):
+            result = self._merge_native_kv_rank_outputs(result)
         if isinstance(result, AsyncDiffusionOutput) and result.kind == AsyncOutputKind.COMPUTE_DONE:
             # Propagate async_output_id to per-request RunnerOutputs so the
             # engine waits in step_streaming() instead of blocking here.
@@ -666,16 +679,53 @@ class MultiprocDiffusionExecutor(DiffusionExecutor):
         from vllm_omni.diffusion.worker.utils import BaseRunnerOutput
 
         self._ensure_open()
+        native_kv = scheduler_output.kv_connector_metadata is not None
         result = self.collective_rpc(
             "execute_stepwise",
             args=(scheduler_output,),
-            unique_reply_rank=0,
+            unique_reply_rank=None if native_kv else 0,
             exec_all_ranks=True,
         )
 
+        if native_kv and isinstance(result, list):
+            result = self._merge_native_kv_rank_outputs(result)
         if isinstance(result, BaseRunnerOutput):
             return result
         raise RuntimeError(f"Unexpected response type for execute_step: {type(result)!r}")
+
+    def _ensure_kv_output_aggregator(self, world_size: int):
+        from vllm.distributed.kv_transfer.kv_connector.utils import KVOutputAggregator
+
+        if self._kv_output_aggregator is None:
+            self._kv_output_aggregator = KVOutputAggregator(world_size)
+        return self._kv_output_aggregator
+
+    def _aggregate_kv_connector_outputs(self, rank_outputs: Any):
+        from vllm.v1.outputs import KVConnectorOutput, ModelRunnerOutput
+
+        outputs = rank_outputs if isinstance(rank_outputs, list) else [rank_outputs]
+        aggregator = self._ensure_kv_output_aggregator(len(outputs))
+        wrapped = []
+        for item in outputs:
+            kv_out = item if isinstance(item, KVConnectorOutput) else None
+            wrapped.append(ModelRunnerOutput.with_kv_conn_output_only(kv_out))
+        aggregated = aggregator.aggregate(wrapped, output_rank=0)
+        if aggregated is None:
+            return None
+        return aggregated.kv_connector_output
+
+    def _merge_native_kv_rank_outputs(self, rank_outputs: list[Any]) -> Any:
+        from vllm.v1.outputs import ModelRunnerOutput
+
+        from vllm_omni.diffusion.worker.utils import BatchRunnerOutput
+
+        aggregator = self._ensure_kv_output_aggregator(len(rank_outputs))
+        wrapped = [ModelRunnerOutput.with_kv_conn_output_only(out.kv_connector_output) for out in rank_outputs]
+        aggregated = aggregator.aggregate(wrapped, output_rank=0)
+        rank0 = rank_outputs[0]
+        if isinstance(rank0, BatchRunnerOutput) and aggregated is not None:
+            rank0.kv_connector_output = aggregated.kv_connector_output
+        return rank0
 
     def collective_rpc(
         self,

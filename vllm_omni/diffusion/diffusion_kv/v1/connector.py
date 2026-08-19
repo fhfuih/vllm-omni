@@ -2,12 +2,11 @@
 # SPDX-FileCopyrightText: Copyright contributors to the vLLM project
 """KV connector v1 assembly for the Diffusion stage.
 
-Creates Scheduler- and Worker-role vLLM ``MooncakeConnector`` instances without
-switching the KV data path away from ``OmniKVTransferManager``. Scheduler
-admission uses the page pool when ``paged_scheduler`` is enabled.
-Worker ``register_kv_caches`` / ``start_load_kv`` remain unwired. The paged
-Worker backend owns ``kv_caches_by_layer``; this module does not pass that
-mapping into the Worker connector.
+Creates Scheduler- and Worker-role vLLM ``MooncakeConnector`` instances.
+Scheduler admission uses the page pool when ``paged_scheduler`` is enabled.
+The Worker binds connector metadata, starts a remote page load, and waits
+for completion before forward. The paged Worker backend owns
+``kv_caches_by_layer``; this module registers that mapping after it exists.
 
 ``v1`` here means Omni's new connector system versus the legacy Omni connector,
 not upstream ``KVConnectorBase_V1``.
@@ -15,6 +14,7 @@ not upstream ``KVConnectorBase_V1``.
 
 from __future__ import annotations
 
+import time
 from collections.abc import Mapping
 from typing import TYPE_CHECKING
 
@@ -30,9 +30,10 @@ from vllm.distributed.kv_transfer.kv_transfer_state import (
 )
 from vllm.logger import init_logger
 from vllm.v1.kv_cache_interface import KVCacheConfig
+from vllm.v1.outputs import KVConnectorOutput
 
 if TYPE_CHECKING:
-    from vllm.distributed.kv_transfer.kv_connector.v1.base import KVConnectorBase_V1
+    from vllm.distributed.kv_transfer.kv_connector.v1.base import KVConnectorBase_V1, KVConnectorMetadata
 
     from vllm_omni.diffusion.data import OmniDiffusionConfig
 
@@ -41,6 +42,8 @@ logger = init_logger(__name__)
 # Placeholder KVCacheConfig for dense_legacy assembly and Worker init before
 # page tensors are registered.
 _PLACEHOLDER_BLOCK_SIZE = 16
+_DEFAULT_REMOTE_KV_TIMEOUT_S = 30.0
+_REMOTE_KV_POLL_INTERVAL_S = 0.01
 
 
 def parse_kv_transfer_config(value: object | None) -> KVTransferConfig | None:
@@ -105,20 +108,27 @@ def create_scheduler_kv_connector_v1(
     return connector
 
 
-def init_worker_kv_connector_v1(vllm_config: VllmConfig) -> None:
+def init_worker_kv_connector_v1(
+    vllm_config: VllmConfig,
+    kv_cache_config: KVCacheConfig | None = None,
+) -> None:
     """Create ``KVConnectorRole.WORKER`` singleton after distributed init.
 
+    ``paged_scheduler`` passes the rank-local ``KVCacheConfig`` from
+    ``set_kv_cache_configs``. ``dense_legacy`` keeps a placeholder config.
     Assumes DiT workers run in separate processes (multiproc). Do not call from
     the same process that already hosts another KV transfer agent.
     """
     if vllm_config.kv_transfer_config is None:
         return
 
-    ensure_kv_transfer_initialized(vllm_config, _placeholder_kv_cache_config())
+    cache_config = kv_cache_config if kv_cache_config is not None else _placeholder_kv_cache_config()
+    ensure_kv_transfer_initialized(vllm_config, cache_config)
     logger.info(
-        "Initialized KV connector v1 (WORKER role): connector=%s engine_id=%s",
+        "Initialized KV connector v1 (WORKER role): connector=%s engine_id=%s num_blocks=%s",
         vllm_config.kv_transfer_config.kv_connector,
         vllm_config.kv_transfer_config.engine_id,
+        cache_config.num_blocks,
     )
 
 
@@ -127,13 +137,12 @@ def maybe_register_vllm_kv_caches(kv_caches_by_layer: dict[str, torch.Tensor] | 
 
     ``kv_caches_by_layer`` is the layer-name mapping owned by
     ``DiffusionKVModelRunnerBackend``. An empty or missing dict is a no-op so
-    Mooncake ``register_kv_caches`` is not reached. The Worker does not call
-    this helper: tensors are allocated later in ``set_kv_cache_config``.
+    Mooncake ``register_kv_caches`` is not reached.
     """
     if not kv_caches_by_layer:
         logger.info_once(
             "Skipping vLLM KV cache registration: kv_caches_by_layer is empty; "
-            "Mooncake register_kv_caches is deferred until a later execution-path PR."
+            "Mooncake register_kv_caches waits until initialize_kv_cache fills pages."
         )
         return
     if not has_kv_transfer_group():
@@ -141,6 +150,111 @@ def maybe_register_vllm_kv_caches(kv_caches_by_layer: dict[str, torch.Tensor] | 
 
     get_kv_transfer_group().register_kv_caches(kv_caches_by_layer)
     logger.info("Registered %d vLLM KV cache tensors with the worker connector.", len(kv_caches_by_layer))
+
+
+def start_load_kv(kv_connector_metadata: KVConnectorMetadata) -> None:
+    """Bind Scheduler metadata and start a Worker-role remote page load."""
+    if not has_kv_transfer_group():
+        return
+    connector = get_kv_transfer_group()
+    connector.bind_connector_metadata(kv_connector_metadata)
+    connector.start_load_kv(None)
+    logger.info("start_load_kv: bound connector metadata and started remote KV load")
+
+
+def wait_remote_kv_before_forward(
+    request_ids: list[str] | set[str],
+    timeout: float | None = None,
+) -> KVConnectorOutput:
+    """Block until this rank has received remote KV for ``request_ids``.
+
+    Mooncake ``get_finished`` empties its completion set on each call, so
+    recving/sending ids are accumulated locally. Timeout or a missing transfer
+    group raises before the model runs.
+    """
+    pending = set(request_ids)
+    finished_recving: set[str] = set()
+    finished_sending: set[str] = set()
+    if not pending:
+        return KVConnectorOutput(finished_sending=None, finished_recving=None)
+    if not has_kv_transfer_group():
+        raise TimeoutError("Remote KV wait failed: no KV transfer group is initialized")
+
+    timeout_s = _DEFAULT_REMOTE_KV_TIMEOUT_S if timeout is None else float(timeout)
+    deadline = time.monotonic() + timeout_s
+    connector = get_kv_transfer_group()
+    while pending:
+        if time.monotonic() > deadline:
+            raise TimeoutError(f"Timed out waiting for remote KV after {timeout_s}s; still pending={sorted(pending)}")
+        sending, recving = connector.get_finished(pending)
+        if sending:
+            finished_sending.update(sending)
+        if recving:
+            finished_recving.update(recving)
+            pending.difference_update(recving)
+        if pending:
+            time.sleep(_REMOTE_KV_POLL_INTERVAL_S)
+
+    logger.info("wait_remote_kv_before_forward complete: recving=%s", sorted(finished_recving))
+    return KVConnectorOutput(
+        finished_sending=finished_sending or None,
+        finished_recving=finished_recving or None,
+    )
+
+
+def mint_transfer_id(request_id: str) -> str:
+    """Handshake id shared by AR source and DiT target params for one request."""
+    return f"xfer-{request_id}"
+
+
+def build_source_kv_transfer_params(
+    *,
+    transfer_id: str,
+    remote_engine_id: str | None,
+    remote_bootstrap_addr: str | None,
+) -> dict[str, object]:
+    """Mooncake producer (AR) handshake bag. Do not use ``request_finished`` params."""
+    params: dict[str, object] = {
+        "transfer_id": transfer_id,
+        "do_remote_decode": True,
+        "do_remote_prefill": False,
+    }
+    if remote_engine_id:
+        params["remote_engine_id"] = remote_engine_id
+    if remote_bootstrap_addr:
+        params["remote_bootstrap_addr"] = remote_bootstrap_addr
+    return params
+
+
+def build_target_kv_transfer_params(
+    *,
+    transfer_id: str,
+    remote_engine_id: str | None,
+    remote_bootstrap_addr: str | None,
+) -> dict[str, object]:
+    """Mooncake consumer (DiT) handshake bag."""
+    params: dict[str, object] = {
+        "transfer_id": transfer_id,
+        "do_remote_prefill": True,
+        "do_remote_decode": False,
+    }
+    if remote_engine_id:
+        params["remote_engine_id"] = remote_engine_id
+    if remote_bootstrap_addr:
+        params["remote_bootstrap_addr"] = remote_bootstrap_addr
+    return params
+
+
+def bootstrap_addr_from_kv_transfer_config(kv_transfer_config: KVTransferConfig | None) -> str | None:
+    """Read Mooncake bootstrap address from connector extra_config when present."""
+    if kv_transfer_config is None:
+        return None
+    extra = kv_transfer_config.kv_connector_extra_config or {}
+    for key in ("bootstrap_addr", "prefill_bootstrap_addr", "mooncake_master"):
+        value = extra.get(key)
+        if isinstance(value, str) and value.strip():
+            return value
+    return None
 
 
 def shutdown_kv_connector_v1(*, scheduler_connector: KVConnectorBase_V1 | None = None) -> None:

@@ -9,6 +9,7 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
 import torch
+from vllm.v1.outputs import KVConnectorOutput
 
 if TYPE_CHECKING:
     from vllm_omni.diffusion.data import DiffusionOutput
@@ -195,6 +196,7 @@ class RunnerOutput(BaseRunnerOutput):
 @dataclass
 class BatchRunnerOutput(BaseRunnerOutput):
     runner_outputs: list[RunnerOutput]
+    kv_connector_output: KVConnectorOutput | None = None
     _id_to_idx: dict[str, int] = field(init=False, repr=False)
 
     def __post_init__(self) -> None:
@@ -216,5 +218,9 @@ class BatchRunnerOutput(BaseRunnerOutput):
         return len(self.runner_outputs)
 
     @classmethod
-    def from_list(cls, runner_output_list: list[RunnerOutput]) -> BatchRunnerOutput:
-        return cls(runner_outputs=runner_output_list)
+    def from_list(
+        cls,
+        runner_output_list: list[RunnerOutput],
+        kv_connector_output: KVConnectorOutput | None = None,
+    ) -> BatchRunnerOutput:
+        return cls(runner_outputs=runner_output_list, kv_connector_output=kv_connector_output)

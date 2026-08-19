@@ -13,8 +13,10 @@ from vllm_omni.diffusion.data import OmniDiffusionConfig
 from vllm_omni.diffusion.diffusion_kv.v1.connector import (
     create_scheduler_kv_connector_v1,
     maybe_register_vllm_kv_caches,
+    mint_transfer_id,
     parse_kv_transfer_config,
     shutdown_kv_connector_v1,
+    wait_remote_kv_before_forward,
 )
 from vllm_omni.diffusion.sched.base_scheduler import BaseScheduler
 from vllm_omni.diffusion.vllm_config import create_diffusion_vllm_config
@@ -211,3 +213,51 @@ def test_scheduler_close_shuts_down_kv_connector_v1() -> None:
 
     shutdown_mock.assert_called_once_with(scheduler_connector=fake_connector)
     assert scheduler.kv_connector_v1 is None
+
+
+def test_wait_remote_kv_accumulates_emptied_get_finished() -> None:
+    fake_group = mock.Mock()
+    fake_group.get_finished.side_effect = [
+        (None, {"req-0"}),
+        (None, {"req-1"}),
+    ]
+
+    with (
+        mock.patch(
+            "vllm_omni.diffusion.diffusion_kv.v1.connector.has_kv_transfer_group",
+            return_value=True,
+        ),
+        mock.patch(
+            "vllm_omni.diffusion.diffusion_kv.v1.connector.get_kv_transfer_group",
+            return_value=fake_group,
+        ),
+        mock.patch("vllm_omni.diffusion.diffusion_kv.v1.connector.time.sleep"),
+    ):
+        output = wait_remote_kv_before_forward(["req-0", "req-1"], timeout=1.0)
+
+    assert output.finished_recving == {"req-0", "req-1"}
+    assert fake_group.get_finished.call_count == 2
+
+
+def test_wait_remote_kv_timeout_does_not_complete() -> None:
+    fake_group = mock.Mock()
+    fake_group.get_finished.return_value = (None, None)
+
+    with (
+        mock.patch(
+            "vllm_omni.diffusion.diffusion_kv.v1.connector.has_kv_transfer_group",
+            return_value=True,
+        ),
+        mock.patch(
+            "vllm_omni.diffusion.diffusion_kv.v1.connector.get_kv_transfer_group",
+            return_value=fake_group,
+        ),
+        mock.patch("vllm_omni.diffusion.diffusion_kv.v1.connector.time.sleep"),
+        pytest.raises(TimeoutError, match="Timed out waiting for remote KV"),
+    ):
+        wait_remote_kv_before_forward(["req-0"], timeout=0.0)
+
+
+def test_mint_transfer_id_is_stable_per_request() -> None:
+    assert mint_transfer_id("req-a") == mint_transfer_id("req-a")
+    assert mint_transfer_id("req-a") != mint_transfer_id("req-b")
