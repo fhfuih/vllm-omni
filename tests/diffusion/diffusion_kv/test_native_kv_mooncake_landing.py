@@ -50,7 +50,6 @@ from types import SimpleNamespace
 
 import pytest
 import torch
-import vllm.v1.core.single_type_kv_cache_manager as native_kv_managers
 from vllm.config import set_current_vllm_config
 from vllm.distributed.kv_transfer.kv_connector.factory import KVConnectorFactory
 from vllm.distributed.kv_transfer.kv_connector.v1.base import KVConnectorRole
@@ -66,9 +65,10 @@ from vllm.distributed.parallel_state import (
     init_distributed_environment,
 )
 from vllm.utils.network_utils import get_open_port
-from vllm.v1.kv_cache_interface import FullAttentionSpec, KVCacheConfig, KVCacheGroupSpec, KVCacheTensor
+from vllm.v1.kv_cache_interface import FullAttentionSpec
 from vllm.v1.request import RequestStatus
 
+from tests.diffusion.diffusion_kv.helper import ConcreteScheduler, make_kv_cache_config
 from tests.helpers.mark import hardware_marks
 from vllm_omni.diffusion.data import OmniDiffusionConfig
 from vllm_omni.diffusion.diffusion_kv.request import DiffusionKVRequest
@@ -130,12 +130,6 @@ def test_ar_injected_pages_land_on_dit_registered_kv() -> None:
             _run_dit_consumer_and_assert(dist_port_dit, bootstrap_addr)
         finally:
             _cleanup_process(producer, stop_queue=stop_queue)
-
-
-class _ConcreteScheduler(BaseScheduler):
-    def update_from_output(self, sched_output, output) -> set[str]:
-        del sched_output, output
-        return set()
 
 
 class _ProducerRequest:
@@ -215,22 +209,14 @@ def _cleanup_process(process: Process, *, stop_queue: Queue | None = None) -> No
         process.join(timeout=5)
 
 
-def _make_spec() -> FullAttentionSpec:
-    native_kv_managers.register_all_kvcache_specs(None)
-    return FullAttentionSpec(
+def _make_kv_cache_config():
+    return make_kv_cache_config(
+        num_blocks=NUM_BLOCKS,
         block_size=BLOCK_SIZE,
         num_kv_heads=NUM_KV_HEADS,
         head_size=HEAD_SIZE,
         dtype=DTYPE,
-    )
-
-
-def _make_kv_cache_config() -> KVCacheConfig:
-    spec = _make_spec()
-    return KVCacheConfig(
-        num_blocks=NUM_BLOCKS,
-        kv_cache_tensors=[KVCacheTensor(size=spec.page_size_bytes * NUM_BLOCKS, shared_by=[LAYER_NAME])],
-        kv_cache_groups=[KVCacheGroupSpec(layer_names=[LAYER_NAME], kv_cache_spec=spec)],
+        layer_names=[LAYER_NAME],
     )
 
 
@@ -239,7 +225,8 @@ def _alloc_paged_kv_tensor(device: torch.device) -> torch.Tensor:
 
     Stand-in for #6102 ``initialize_kv_cache`` physical allocation.
     """
-    spec = _make_spec()
+    spec = _make_kv_cache_config().kv_cache_groups[0].kv_cache_spec
+    assert isinstance(spec, FullAttentionSpec)
     page_elems = spec.page_size_bytes // spec.dtype.itemsize
     tensor = torch.zeros(NUM_BLOCKS, page_elems, dtype=spec.dtype, device=device)
     assert tensor.stride(0) * tensor.element_size() == spec.page_size_bytes
@@ -431,7 +418,7 @@ def _run_dit_consumer_and_assert(dist_port: int, bootstrap_addr: str) -> None:
             init_worker_kv_connector_v1(vllm_config, kv_cache_config=kv_cache_config)
             dit_kv = _stub_6102_allocate_and_register_pages(device)
 
-            scheduler = _ConcreteScheduler()
+            scheduler = ConcreteScheduler()
             scheduler.initialize(
                 od_config,
                 kv_cache_config=kv_cache_config,
