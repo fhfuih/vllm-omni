@@ -70,7 +70,7 @@ def create_scheduler_kv_connector_v1(
     """Create ``KVConnectorRole.SCHEDULER`` when KV connector v1 is configured.
 
     ``paged_scheduler`` passes the Scheduler-owned ``KVCacheConfig`` used for
-    page allocation. Can be omitted when the caller has not yet supplied a real config.
+    page allocation. May be omitted when the caller does not supply a config.
     """
     kv_transfer_config = od_config.kv_transfer_config
     if kv_transfer_config is None:
@@ -242,6 +242,6 @@ def _validate_diffusion_kv_transfer_config(kv_transfer_config: KVTransferConfig)
     if kv_transfer_config.kv_role not in (None, "kv_consumer", "kv_both"):
         logger.warning(
             "Diffusion stage kv_transfer_config has kv_role=%r; "
-            "expected kv_consumer for AR-to-DiT page transfer; producer wiring is added later.",
+            "expected kv_consumer for AR-to-DiT page transfer on the DiT consumer stage.",
             kv_transfer_config.kv_role,
         )

@@ -810,9 +810,9 @@ class OmniDiffusionConfig:
 
     # Omni configuration (injected from stage config)
     omni_kv_config: dict[str, Any] = field(default_factory=dict)
-    # Native vLLM KV connector config (MooncakeConnector, etc.). The current
-    # execution path still uses OmniKVTransferManager for actual KV movement;
-    # this field enables connector object assembly and later native paging work.
+    # Native vLLM KV connector config (MooncakeConnector, etc.). This field
+    # enables new (v1) KV connector that supports paged transfer and routes
+    # away from old OmniKVTransferManager.
     kv_transfer_config: "KVTransferConfig | dict[str, Any] | None" = None
     additional_config: dict[str, Any] = field(default_factory=dict)
 
