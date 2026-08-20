@@ -30,14 +30,22 @@ the real backend init + Worker registration, and optionally assert through
 installed BlockTables rather than raw tensors.
 
 Requires: CUDA GPU, ``mooncake`` TransferEngine, and a working local
-``mooncake_protocol`` (defaults to ``tcp``). Missing deps skip the test.
+``mooncake_protocol`` (defaults to ``tcp``). The test forces an eth-only
+Mooncake topology so TransferEngine does not fall back to broken RDMA NICs.
+Missing deps skip the test.
 """
 
 from __future__ import annotations
 
+import json
 import os
+import signal
+import tempfile
 import time
-from multiprocessing import Queue, get_context
+from collections.abc import Iterator
+from contextlib import contextmanager
+from multiprocessing import Process, Queue, get_context
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -79,8 +87,7 @@ from vllm_omni.inputs.data import OmniDiffusionSamplingParams
 pytestmark = [
     pytest.mark.core_model,
     pytest.mark.diffusion,
-    pytest.mark.gpu,
-    hardware_marks(res={"cuda": "L4"}, num_cards=1),
+    *hardware_marks(res={"cuda": "L4"}, num_cards=1),
 ]
 
 LAYER_NAME = "model.layers.0.self_attn"
@@ -100,6 +107,31 @@ RECV_TIMEOUT_S = 60.0
 DTYPE = torch.bfloat16
 
 
+def test_ar_injected_pages_land_on_dit_registered_kv() -> None:
+    """Verify Mooncake-transferred AR KV pages land on DiT-registered paged tensors."""
+    with _mooncake_tcp_env():
+        ctx = get_context("spawn")
+        dist_port_ar = get_open_port()
+        dist_port_dit = get_open_port()
+        bootstrap_port = get_open_port()
+        handshake: Queue = ctx.Queue()
+        stop_queue: Queue = ctx.Queue()
+        producer = ctx.Process(
+            target=_run_ar_producer,
+            args=(dist_port_ar, bootstrap_port, handshake, stop_queue),
+            daemon=True,
+        )
+        producer.start()
+        try:
+            result = handshake.get(timeout=120)
+            if not result.get("ok"):
+                pytest.skip(f"Mooncake producer failed to start: {result.get('error')}")
+            bootstrap_addr = result["bootstrap_addr"]
+            _run_dit_consumer_and_assert(dist_port_dit, bootstrap_addr)
+        finally:
+            _cleanup_process(producer, stop_queue=stop_queue)
+
+
 class _ConcreteScheduler(BaseScheduler):
     def update_from_output(self, sched_output, output) -> set[str]:
         del sched_output, output
@@ -117,31 +149,70 @@ class _ProducerRequest:
         self.num_prompt_tokens = prompt_len
 
 
-def test_ar_injected_pages_land_on_dit_registered_kv() -> None:
-    ctx = get_context("spawn")
-    dist_port_ar = get_open_port()
-    dist_port_dit = get_open_port()
-    bootstrap_port = get_open_port()
-    handshake: Queue = ctx.Queue()
-    stop_queue: Queue = ctx.Queue()
-    producer = ctx.Process(
-        target=_run_ar_producer,
-        args=(dist_port_ar, bootstrap_port, handshake, stop_queue),
-        daemon=True,
-    )
-    producer.start()
+def _pick_tcp_netif() -> str:
+    """Pick a non-loopback netdev for Mooncake TCP topology."""
+    net_dir = Path("/sys/class/net")
+    if not net_dir.is_dir():
+        return "lo"
+    for name in sorted(p.name for p in net_dir.iterdir()):
+        if name == "lo" or name.startswith("bonding") or name.startswith("veth"):
+            continue
+        return name
+    return "lo"
+
+
+@contextmanager
+def _mooncake_tcp_env() -> Iterator[None]:
+    """Force Mooncake onto TCP transport for same-host landing.
+
+    With broken/unreachable RDMA NICs present, TransferEngine still
+    auto-discovers HCAs even when ``mooncake_protocol=tcp`` and then fails
+    QP setup. A custom eth-only topology makes initialize install TcpTransport
+    instead. Also pin ``VLLM_HOST_IP`` so both processes advertise loopback.
+    """
+    netif = _pick_tcp_netif()
+    # Visible CUDA device is always cuda:0 under CUDA_VISIBLE_DEVICES remapping.
+    topo = {
+        "cpu:0": [[netif]],
+        "cuda:0": [[netif]],
+    }
+    fd, topo_path = tempfile.mkstemp(prefix="mooncake-tcp-topo-", suffix=".json")
+    os.close(fd)
+    Path(topo_path).write_text(json.dumps(topo), encoding="utf-8")
+    overrides = {
+        "MC_CUSTOM_TOPO_JSON": topo_path,
+        "VLLM_HOST_IP": "127.0.0.1",
+        # Landing path does not need flashinfer kernels; bypass host mismatches.
+        "FLASHINFER_DISABLE_VERSION_CHECK": "1",
+    }
+    previous = {key: os.environ.get(key) for key in overrides}
     try:
-        result = handshake.get(timeout=120)
-        if not result.get("ok"):
-            pytest.skip(f"Mooncake producer failed to start: {result.get('error')}")
-        bootstrap_addr = result["bootstrap_addr"]
-        _run_dit_consumer_and_assert(dist_port_dit, bootstrap_addr)
+        os.environ.update(overrides)
+        yield
     finally:
-        stop_queue.put("stop")
-        producer.join(timeout=30)
-        if producer.is_alive():
-            producer.terminate()
-            producer.join(timeout=5)
+        for key, old in previous.items():
+            if old is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = old
+        Path(topo_path).unlink(missing_ok=True)
+
+
+def _cleanup_process(process: Process, *, stop_queue: Queue | None = None) -> None:
+    """Best-effort teardown for the spawned AR producer."""
+    if stop_queue is not None and process.is_alive():
+        try:
+            stop_queue.put("stop")
+        except (BrokenPipeError, OSError, ValueError):
+            pass
+
+    process.join(timeout=30)
+    if process.is_alive():
+        process.terminate()
+        process.join(timeout=5)
+    if process.is_alive() and process.pid is not None:
+        os.kill(process.pid, signal.SIGKILL)
+        process.join(timeout=5)
 
 
 def _make_spec() -> FullAttentionSpec:
@@ -247,17 +318,19 @@ def _run_ar_producer(
     os.environ["VLLM_MOONCAKE_BOOTSTRAP_PORT"] = str(bootstrap_port)
     device = torch.device("cuda:0")
     torch.cuda.set_device(device)
-    kv_cache_config = _make_kv_cache_config()
     try:
         od_config = OmniDiffusionConfig.from_kwargs(
             diffusion_kv_mode="paged_scheduler",
             max_model_len=64,
             kv_transfer_config=_kv_transfer_config(engine_id=AR_ENGINE_ID, kv_role="kv_producer"),
         )
-        _init_single_gpu_parallel(dist_port)
+        # Spawned producer has no pytest ``default_vllm_config`` fixture;
+        # ``ensure_model_parallel_initialized`` requires a current config.
         vllm_config = create_diffusion_vllm_config(device, od_config)
         _patch_model_config_for_mooncake(vllm_config.model_config)
         with set_current_vllm_config(vllm_config):
+            kv_cache_config = _make_kv_cache_config()
+            _init_single_gpu_parallel(dist_port)
             scheduler = KVConnectorFactory.create_connector(
                 config=vllm_config,
                 role=KVConnectorRole.SCHEDULER,
@@ -281,16 +354,22 @@ def _run_ar_producer(
                 "remote_bootstrap_addr": bootstrap_addr,
             }
             request = _ProducerRequest(REQUEST_ID, params, SEQ_LEN)
+            # update_state_after_alloc enqueues an empty send slot; request_finished
+            # later fills block IDs and marks ready. Both reach the worker via
+            # async record_send_reqs — wait so the empty slot exists before the
+            # finished path KeyErrors on a missing transfer_id.
             scheduler.update_state_after_alloc(request, SimpleNamespace(), 0)  # pyright: ignore[reportArgumentType]
             meta = scheduler.build_connector_meta(object())  # pyright: ignore[reportArgumentType]
             worker.bind_connector_metadata(meta)
             worker.start_load_kv(None)  # pyright: ignore[reportArgumentType]
+            _wait_producer_send_slot(worker, mint_transfer_id(REQUEST_ID))
 
             request.status = RequestStatus.FINISHED_LENGTH_CAPPED
             scheduler.request_finished(request, SOURCE_BLOCK_IDS)  # pyright: ignore[reportArgumentType]
             meta = scheduler.build_connector_meta(object())  # pyright: ignore[reportArgumentType]
             worker.bind_connector_metadata(meta)
             worker.start_load_kv(None)  # pyright: ignore[reportArgumentType]
+            _wait_producer_send_ready(worker, mint_transfer_id(REQUEST_ID))
 
             handshake.put({"ok": True, "bootstrap_addr": bootstrap_addr})
             stop_queue.get(timeout=RECV_TIMEOUT_S + 30)
@@ -305,22 +384,50 @@ def _run_ar_producer(
             pass
 
 
+def _producer_worker_side(worker: object):
+    connector_worker = worker.connector_worker  # type: ignore[attr-defined]
+    if connector_worker is None:
+        raise RuntimeError("Mooncake producer worker role is not initialized")
+    return connector_worker
+
+
+def _wait_producer_send_slot(worker: object, transfer_id: str, *, timeout_s: float = 10.0) -> None:
+    connector_worker = _producer_worker_side(worker)
+    deadline = time.monotonic() + timeout_s
+    while time.monotonic() < deadline:
+        if transfer_id in connector_worker.reqs_need_send:
+            return
+        time.sleep(0.05)
+    raise TimeoutError(f"producer send slot for transfer_id={transfer_id!r} not recorded in time")
+
+
+def _wait_producer_send_ready(worker: object, transfer_id: str, *, timeout_s: float = 10.0) -> None:
+    connector_worker = _producer_worker_side(worker)
+    deadline = time.monotonic() + timeout_s
+    while time.monotonic() < deadline:
+        send_meta = connector_worker.reqs_need_send.get(transfer_id)
+        if send_meta is not None and send_meta.ready.is_set() and send_meta.local_block_ids:
+            return
+        time.sleep(0.05)
+    raise TimeoutError(f"producer send ready for transfer_id={transfer_id!r} not set in time")
+
+
 def _run_dit_consumer_and_assert(dist_port: int, bootstrap_addr: str) -> None:
     device = torch.device("cuda:0")
     torch.cuda.set_device(device)
-    kv_cache_config = _make_kv_cache_config()
     od_config = OmniDiffusionConfig.from_kwargs(
         diffusion_kv_mode="paged_scheduler",
         max_model_len=64,
         kv_transfer_config=_kv_transfer_config(engine_id=DIT_ENGINE_ID, kv_role="kv_consumer"),
     )
-    _init_single_gpu_parallel(dist_port)
     scheduler: BaseScheduler | None = None
     dit_kv: torch.Tensor | None = None
     try:
         vllm_config = create_diffusion_vllm_config(device, od_config)
         _patch_model_config_for_mooncake(vllm_config.model_config)
         with set_current_vllm_config(vllm_config):
+            kv_cache_config = _make_kv_cache_config()
+            _init_single_gpu_parallel(dist_port)
             init_worker_kv_connector_v1(vllm_config, kv_cache_config=kv_cache_config)
             dit_kv = _stub_6102_allocate_and_register_pages(device)
 
@@ -370,7 +477,8 @@ def _run_dit_consumer_and_assert(dist_port: int, bootstrap_addr: str) -> None:
             finished = False
             while time.monotonic() < deadline:
                 if has_kv_transfer_group():
-                    finished_recving, _finished_sending = get_kv_transfer_group().get_finished(set())
+                    # Upstream contract: (finished_sending, finished_recving).
+                    _finished_sending, finished_recving = get_kv_transfer_group().get_finished(set())
                     if finished_recving and REQUEST_ID in finished_recving:
                         finished = True
                         break
