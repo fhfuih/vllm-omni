@@ -8,28 +8,328 @@ owners:
   - "@SamitHuang"
   - "@fhfuih"
 primary_code_paths:
+  - vllm_omni/diffusion/diffusion_engine.py
+  - vllm_omni/diffusion/request.py
+  - vllm_omni/diffusion/data.py
   - vllm_omni/diffusion/sched/**
   - vllm_omni/diffusion/executor/**
   - vllm_omni/diffusion/worker/**
 related_code_paths:
+  - vllm_omni/diffusion/stage_diffusion_client.py
+  - vllm_omni/diffusion/stage_diffusion_proc.py
+  - vllm_omni/diffusion/inline_stage_diffusion_client.py
+  - vllm_omni/diffusion/ipc.py
   - vllm_omni/diffusion/hooks/**
   - vllm_omni/diffusion/postprocess/**
 depends_on:
   - ../engine_orchestration.md
+  - ../stage_runtime.md
   - ../input_output_modality_contracts.md
   - diffusion_model_integration.md
 validation_paths:
-  - tests/diffusion/diffusion_backend/**
-  - tests/diffusion/hooks/**
+  - tests/diffusion/test_diffusion_engine.py
+  - tests/diffusion/test_diffusion_engine_cleanup.py
+  - tests/diffusion/test_diffusion_engine_rpc_routing.py
+  - tests/diffusion/test_diffusion_scheduler.py
+  - tests/diffusion/test_diffusion_model_runner.py
+  - tests/diffusion/test_diffusion_worker.py
+  - tests/diffusion/test_multiproc_engine_concurrency.py
+  - tests/diffusion/test_result_pump.py
+  - tests/diffusion/test_diffusion_ipc.py
+  - tests/diffusion/test_stage_diffusion_proc.py
+  - tests/diffusion/test_inline_stage_diffusion_client.py
 upstream_refs:
   - diffusers.DiffusionPipeline
-last_reviewed: 2026-07-16
+last_reviewed: 2026-08-12
+last_verified_commit: 9b0df3909ae06207337cff817ce47e09cbbfe697
 ---
 
 # Diffusion runtime
 
 The diffusion runtime owns request admission, scheduling, execution, progress,
 output, cancellation, and cleanup inside a diffusion stage.
+
+It is easiest to think of the runtime as a small control loop:
+
+1. the **scheduler** chooses ready requests;
+2. the **executor** sends that choice to worker processes;
+3. each **worker** manages its device and delegates model work to a **runner**;
+4. the runner calls the model pipeline and returns per-request results; and
+5. the engine feeds those results back to the scheduler and output streams.
+
+!!! note
+
+    This page describes the runtime plumbing. Model loading and pipeline
+    contracts belong to [Diffusion model integration](diffusion_model_integration.md).
+    Batch compatibility and step-state details belong to
+    [Diffusion continuous batching](continuous_batching.md).
+
+## Goals and non-goals
+
+The runtime aims to keep request policy separate from device execution. It
+also keeps request identity stable from admission through the final output,
+including cancellation and failures.
+
+This module does **not** choose the next Omni stage, place stage replicas, or
+define a model's denoising algorithm:
+
+- cross-stage routing belongs to [Engine orchestration](../engine_orchestration.md);
+- process placement and replica lifecycle belong to
+  [Stage runtime](../stage_runtime.md); and
+- model-specific work belongs to
+  [Diffusion model integration](diffusion_model_integration.md).
+
+## Runtime at a glance
+
+In a process-backed deployment, the stage process owns `DiffusionEngine` and
+`MultiprocDiffusionExecutor`. The inline stage client keeps the same stack in
+its caller process. In either layout, the executor starts one `WorkerProc` per
+configured device. Each worker process owns its device, distributed state,
+`DiffusionWorker`, `DiffusionModelRunner`, and pipeline instance.
+
+```mermaid
+flowchart TB
+    client["Stage client"]
+
+    subgraph stage["Diffusion stage process"]
+        stageProc["StageDiffusionProc<br/>stage transport and lifecycle"]
+        engine["DiffusionEngine<br/>admission and control loop"]
+        scheduler["RequestScheduler or StepScheduler<br/>request state and policy"]
+        executor["DiffusionExecutor<br/>worker transport and lifecycle"]
+        streams["Per-request output streams"]
+
+        stageProc --> engine
+        engine --> scheduler
+        scheduler -->|"DiffusionSchedulerOutput"| engine
+        engine --> executor
+        engine --> streams
+    end
+
+    subgraph workers["Worker processes (one per device)"]
+        workerProc["WorkerProc<br/>IPC loop"]
+        worker["DiffusionWorker<br/>device and distributed setup"]
+        runner["DiffusionModelRunner<br/>model state and execution"]
+        pipeline["Diffusion pipeline<br/>model-specific computation"]
+
+        workerProc --> worker --> runner --> pipeline
+    end
+
+    client -->|"process-backed: ZMQ"| stageProc
+    client -.->|"inline: direct call"| engine
+    executor <-->|"broadcast requests / collect results"| workerProc
+    streams -->|"process-backed"| stageProc
+    stageProc -->|"ZMQ results"| client
+    streams -.->|"inline"| client
+```
+
+!!! info "Two separate process layers"
+
+    A deployed stage may already run in a `StageDiffusionProc` child process.
+    Inside that process, the multiprocess executor starts the device workers
+    shown above. Do not confuse the stage process with a worker process.
+
+## Component responsibilities
+
+| Component | Owns | Does not own |
+| --- | --- | --- |
+| `DiffusionEngine` | Admission, the busy loop, scheduler/executor coordination, RPC ordering, output streams, warmup, abort routing | Batch policy details, device setup, model computation |
+| `BaseScheduler` | Request states, waiting/running sets, capacity, compatibility, terminal transitions | IPC, worker calls, output formatting |
+| `RequestScheduler` | Complete-request waves and optional admission delay for request-level batching | Denoising-step progress |
+| `StepScheduler` | Per-request denoising progress and step-wise completion | Pipeline tensors and model state |
+| `DiffusionExecutor` | Execution backend contract, worker RPC, health, shutdown | Admission and request-state transitions |
+| `MultiprocDiffusionExecutor` | Worker processes, shared-memory message queues, result dispatch, worker monitoring | Model/device internals |
+| `WorkerProc` | One worker process's IPC loop and reply rules | Scheduling policy |
+| `DiffusionWorker` | Device/distributed setup, LoRA activation, profiling, sleep/wake, runner delegation | Request admission |
+| `DiffusionModelRunner` | Pipeline loading, request-local model state, cache/compile setup, request or step execution | Queueing and cross-stage routing |
+
+The boundary between policy and execution is
+`DiffusionSchedulerOutput`. It contains newly admitted request payloads,
+IDs for requests whose runner state is already cached, finished IDs, and
+optional KV-prefetch work. Executors and workers consume this output; they do
+not decide what should run next.
+
+## One scheduling tick
+
+Async requests share one engine busy loop. Worker calls and control RPCs pass
+through that loop, so they cannot race on the executor transport.
+
+```mermaid
+sequenceDiagram
+    participant Caller
+    participant Engine as DiffusionEngine
+    participant Scheduler
+    participant Executor
+    participant Worker
+    participant Runner
+
+    Caller->>Engine: add request
+    Engine->>Scheduler: add_request(request)
+    Engine->>Scheduler: schedule()
+    Scheduler-->>Engine: DiffusionSchedulerOutput
+    Engine->>Executor: execute_batch() or execute_step()
+    Executor->>Worker: RPC over message queue
+    Worker->>Runner: execute model or one step
+    Runner-->>Worker: RunnerOutput(s)
+    Worker-->>Executor: result message
+    Executor-->>Engine: BaseRunnerOutput
+    Engine->>Scheduler: update_from_output(...)
+    Scheduler-->>Engine: finished request IDs
+    Engine-->>Caller: chunk or final output
+```
+
+The engine catches request execution errors and turns them into per-request
+error outputs. A dead worker group is different: the executor marks itself
+failed, health checks raise `EngineDeadError`, and the owning stage client
+handles the stage-level failure.
+
+## Execution modes
+
+The engine resolves one mode at startup and binds the matching scheduler and
+executor call.
+
+| Mode | Scheduler | Executor call | Runner path |
+| --- | --- | --- | --- |
+| Request batch | `RequestScheduler` | `execute_batch()` | `execute_model()` for one request, or `execute_model_batch()` for a supported batch |
+| Step batch | `StepScheduler` | `execute_step()` | `execute_stepwise()` |
+
+Request mode runs a complete pipeline forward for each scheduled wave. A
+single-request wave is the conservative path. A multi-request wave requires
+the pipeline to declare request-batch support.
+
+Step mode keeps `StepRequestState` in the runner. New requests run
+`prepare_encode()` once; every tick runs `denoise_step()` and
+`step_scheduler()`; completed requests run `post_decode()`. The scheduler keeps
+only lifecycle and progress metadata—it does not hold model tensors.
+
+!!! tip
+
+    For user-facing flags and examples, see
+    [Diffusion execution modes](../../../user_guide/diffusion/execution_modes.md).
+    That guide explains how to select a mode; this page explains what happens
+    after the choice is made.
+
+## Request state and identity
+
+The scheduler is the source of truth for an admitted request. Its normal state
+flow is:
+
+```mermaid
+stateDiagram-v2
+    [*] --> WAITING: add_request
+    WAITING --> RUNNING: schedule
+    RUNNING --> PREEMPTED: preempt
+    PREEMPTED --> RUNNING: schedule again
+    WAITING --> FINISHED_ABORTED: abort
+    RUNNING --> FINISHED_ABORTED: abort
+    RUNNING --> FINISHED_COMPLETED: successful output
+    RUNNING --> FINISHED_ERROR: failed or missing output
+    FINISHED_COMPLETED --> [*]: deliver and remove state
+    FINISHED_ABORTED --> [*]: deliver and remove state
+    FINISHED_ERROR --> [*]: deliver and remove state
+```
+
+`request_id` ties together scheduler state, runner state, executor results, and
+the output queue. Batch positions are temporary and must never replace request
+identity when results are mapped back.
+
+Only compatible requests enter the same running wave. The scheduler compares a
+mode-specific sampling-parameter key and stops at the first incompatible
+waiting request. This is intentionally conservative and can cause
+head-of-line blocking.
+
+## Executor and IPC
+
+`DiffusionExecutor` is the backend interface. The current built-in backend is
+`MultiprocDiffusionExecutor`, selected by `distributed_executor_backend="mp"`
+(also the default and only implementation). Ray and external-launcher
+diffusion backends are not implemented in diffusion call path.
+
+The multiprocess backend:
+
+1. creates a broadcast queue shared by all workers;
+2. spawns one worker process per configured device;
+3. waits until every worker reports ready;
+4. sends generation and control calls as RPC messages;
+5. applies rank-aware reply rules so only expected ranks respond; and
+6. monitors worker process sentinels and fails the executor if a worker dies.
+
+In request mode, workers may return a lightweight `COMPUTE_DONE` message first.
+A worker-side thread then copies output to host/shared memory, and the
+executor's result-pump threads resolve the final output later. This lets the
+device begin more compute without waiting for output packing. Step mode uses
+the synchronous result path.
+
+See [Async diffusion output](../../feature/async_diffusion_output.md) for that
+feature's detailed timeline.
+
+## Worker and runner boundary
+
+`WorkerProc` receives messages and calls methods through `WorkerWrapperBase`.
+`DiffusionWorker` handles the parts tied to a device: distributed
+initialization, model-runner construction, LoRA activation, profiling, and
+memory sleep/wake. It delegates actual model work to `DiffusionModelRunner`.
+
+The runner owns long-lived model-side state:
+
+- the loaded pipeline and compilation setup;
+- cache and offload integration;
+- random-generator setup;
+- request batches for complete forwards; and
+- `StepRequestState` plus `InputBatch` for step execution.
+
+This split keeps infrastructure out of model pipelines. A pipeline receives a
+request batch or step state and performs model work; it should not inspect
+engine queues or change scheduler state.
+
+## Lifecycle and cleanup
+
+### Startup
+
+`DiffusionEngine.make_engine()` resolves the engine class, constructs the
+executor and scheduler, then normally runs a small dummy request to warm up the
+model. Some distributed offload layouts skip this request because every rank
+must enter the same collective. If initialization or warmup fails, the runtime
+closes scheduler state and worker resources before returning the error.
+
+### Cancellation
+
+`abort()` places request IDs on an abort queue. The busy loop marks those
+requests `FINISHED_ABORTED`; finalization removes scheduler state and emits an
+aborted output when a consumer still exists. The runner removes cached
+step-mode state when it receives a scheduler output that reports the finished
+request ID.
+
+Dropping an output-stream consumer removes only that consumer's queue. It does
+not silently take ownership of scheduler cleanup.
+
+### Shutdown and worker failure
+
+`DiffusionEngine.close()` is idempotent. It stops the busy loop, wakes pending
+streams with an error, closes scheduler state, and shuts down the executor.
+The executor asks workers to stop, waits for them, then terminates workers that
+miss the grace period. Worker cleanup tears down the model runner, IPC context,
+and distributed environment.
+
+!!! warning
+
+    Do not continue using a worker group after a fatal collective timeout or
+    unexpected worker exit. Distributed state may be incomplete. The
+    multiprocess executor deliberately fails closed so the stage can restart.
+
+## Extension boundaries
+
+- A custom engine may set `default_diffusion_model_runner_cls`; an explicit
+  `diffusion_model_runner_cls` configuration still wins.
+- Tests and custom engine integrations may inject a `BaseScheduler` subclass.
+  `SchedulerInterface` remains only as a deprecated compatibility name.
+- `distributed_executor_backend` may be a `DiffusionExecutor` subclass or its
+  import path. A backend must preserve scheduler output, request identity,
+  health, and cleanup contracts.
+- Worker extensions go through `WorkerWrapperBase`. They add worker methods;
+  they do not become a second scheduler or request lifecycle.
+
+These are advanced Python integration points, not stable end-user CLI
+customization surfaces.
 
 ## Candidate invariants
 
@@ -53,7 +353,33 @@ hooks, and runtime-owned resources.
 **Rule:** Cache, profiling, offload, and parallel features SHOULD integrate at
 defined hooks instead of creating another request lifecycle.
 
+### DIFF-RUNTIME-INV-005: Results keep request identity
+
+**Rule:** Batched and asynchronous results MUST be mapped by stable request ID,
+not by assumed completion order.
+
 ## Safe-change guide
 
-Test success, cancellation, failure, shutdown, multiple requests, and resource
-cleanup.
+Test the smallest affected slice, then cover its neighboring boundary:
+
+| Change area | Minimum evidence |
+| --- | --- |
+| Admission or state transitions | `test_diffusion_scheduler.py`, including duplicate IDs, compatibility, abort, and missing output |
+| Engine loop or output delivery | `test_diffusion_engine.py`, `test_diffusion_engine_cleanup.py`, `test_diffusion_engine_rpc_routing.py` |
+| Executor or IPC | `test_multiproc_engine_concurrency.py`, `test_result_pump.py`, `test_diffusion_ipc.py` |
+| Worker or runner | `test_diffusion_worker.py`, `test_diffusion_model_runner.py` |
+| Stage boundary | `test_stage_diffusion_proc.py`, `test_inline_stage_diffusion_client.py` |
+
+Always exercise success, cancellation, per-request failure, fatal worker
+failure, repeated shutdown, one request, and multiple compatible requests.
+For step-mode changes, also test partial progress and cleanup of runner state.
+
+## Related documents
+
+- [Diffusion module overview](index.md)
+- [Diffusion model integration](diffusion_model_integration.md)
+- [Diffusion continuous batching](continuous_batching.md)
+- [Diffusion execution modes](../../../user_guide/diffusion/execution_modes.md)
+- [Async diffusion output](../../feature/async_diffusion_output.md)
+- [Engine orchestration](../engine_orchestration.md)
+- [Stage runtime](../stage_runtime.md)
