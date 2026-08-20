@@ -244,8 +244,8 @@ class DiffusionSchedulerOutput:
     num_waiting_reqs: int
     # next request to background-prefetch KV
     kv_prefetch_job: KVPrefetchJob | None = None
-    # Opaque KVConnectorMetadata from the Scheduler-role KV connector v1.
-    # Workers bind this before start_load_kv once the execution path is wired.
+    # Opaque KVConnectorMetadata for the new (v1) paged KV connector.
+    # The Scheduler-role. Workers bind this before start_load_kv.
     kv_connector_metadata: KVConnectorMetadata | None = None
 
     @cached_property

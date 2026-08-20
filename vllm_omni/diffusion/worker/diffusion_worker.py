@@ -310,9 +310,6 @@ class DiffusionWorker:
                     format_gib(self.requested_memory),
                 )
             init_workspace_manager(self.device)
-            # KV connector v1 worker half must be created after distributed
-            # init (TransferEngine reads vLLM TP/PP groups). DiT workers are
-            # separate processes; do not double-init in an inline AR+DiT process.
 
     def _create_profiler(self) -> WorkerProfiler | None:
         profiler_config = self.od_config.profiler_config
