@@ -2896,14 +2896,14 @@ class Orchestrator:
         pool = self.stage_pools[stage_id]
         cfg = pool.stage_vllm_config
         if cfg is not None:
-            kv_cfg = cfg.kv_transfer_config if hasattr(cfg, "kv_transfer_config") else None
+            kv_cfg = getattr(cfg, "kv_transfer_config", None)
             if kv_cfg is not None:
                 return kv_cfg
         for replica_id in pool.live_replica_ids():
             client = pool.clients[replica_id]
             if client is None:
                 continue
-            od_config = client.od_config if hasattr(client, "od_config") else None
+            od_config = getattr(client, "od_config", None)
             if od_config is not None and od_config.kv_transfer_config is not None:
                 return od_config.kv_transfer_config
         return None
