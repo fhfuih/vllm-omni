@@ -484,7 +484,7 @@ def _run_dit_consumer_and_assert(dist_port: int, bootstrap_addr: str) -> None:
                 )
     finally:
         if scheduler is not None:
-            shutdown_kv_connector_v1(scheduler_connector=scheduler.kv_connector_v1)
+            shutdown_kv_connector_v1(scheduler_connector=scheduler._kv_connector_v1)
         elif has_kv_transfer_group():
             ensure_kv_transfer_shutdown()
         _destroy_parallel()
