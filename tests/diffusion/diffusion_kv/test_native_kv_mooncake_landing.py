@@ -14,20 +14,22 @@ The AR side injects a recognizable numeric pattern into GPU pages.
 
 #6102 stubs
 -----------
-#6102 owns ``DiffusionKVModelRunnerBackend.initialize_kv_cache``, BlockTables,
-and the Worker ``maybe_register_vllm_kv_caches`` call site. Those are not
-landed on this branch, so this test **does not** call them. Instead it:
+#6102 owns ``DiffusionKVModelRunnerBackend`` (constructed on the model
+runner), physical ``initialize_kv_cache`` inside
+``DiffusionModelRunner.set_kv_cache_config``, and BlockTables. Page
+registration with Mooncake (``maybe_register_vllm_kv_caches``) remains this
+connector PR's responsibility and is not wired yet. This test therefore:
 
-- allocates GPU paged tensors from ``KVCacheConfig`` (stand-in for
-  ``initialize_kv_cache``)
+- allocates GPU paged tensors from ``KVCacheConfig`` (stand-in for #6102
+  ``set_kv_cache_config`` → ``initialize_kv_cache``)
 - calls ``maybe_register_vllm_kv_caches`` directly (stand-in for the Worker
-  hook after backend init)
+  hook after backend init; #6102 does not expose ``kv_caches_by_layer``)
 - skips ``install_diffusion_kv_metadata`` / paged-attention forward and
   asserts landing on the registered tensors
 
 After #6102 merges, replace ``_stub_6102_allocate_and_register_pages`` with
-the real backend init + Worker registration, and optionally assert through
-installed BlockTables rather than raw tensors.
+real runner/backend init + Worker registration, and optionally assert
+through installed BlockTables rather than raw tensors.
 
 Requires: CUDA GPU, ``mooncake`` TransferEngine, and a working local
 ``mooncake_protocol`` (defaults to ``tcp``). The test forces an eth-only
@@ -223,7 +225,8 @@ def _make_kv_cache_config():
 def _alloc_paged_kv_tensor(device: torch.device) -> torch.Tensor:
     """Blocks-first GPU tensor whose stride(0) matches one FullAttention page.
 
-    Stand-in for #6102 ``initialize_kv_cache`` physical allocation.
+    Stand-in for #6102 ``set_kv_cache_config`` → ``initialize_kv_cache``
+    physical allocation.
     """
     spec = _make_kv_cache_config().kv_cache_groups[0].kv_cache_spec
     assert isinstance(spec, FullAttentionSpec)
@@ -287,8 +290,9 @@ def _kv_transfer_config(*, engine_id: str, kv_role: str, extra: dict[str, object
 def _stub_6102_allocate_and_register_pages(device: torch.device) -> torch.Tensor:
     """Allocate and register DiT pages without #6102 backend init.
 
-    TODO(#6102): replace with ``initialize_kv_cache`` then the Worker
-    ``maybe_register_vllm_kv_caches(backend.kv_caches_by_layer)`` call.
+    TODO(#6102): replace with ``ModelRunner.set_kv_cache_config`` (which
+    calls ``backend.initialize_kv_cache``), then the Worker
+    ``maybe_register_vllm_kv_caches(<layer_named_kv_caches>)`` hook.
     """
     kv_tensor = _alloc_paged_kv_tensor(device)
     maybe_register_vllm_kv_caches({LAYER_NAME: kv_tensor})

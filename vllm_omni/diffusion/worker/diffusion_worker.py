@@ -470,6 +470,22 @@ class DiffusionWorker:
         if self.vllm_config.kv_transfer_config is not None and not has_kv_transfer_group():
             init_worker_kv_connector_v1(self.vllm_config, kv_cache_config=kv_cache_config)
 
+        # Connector registration is intentionally left as a stub in this PR.
+        # ``set_kv_cache_config`` binds pages to layer adapters through
+        # ``AttentionLayerBase.bind_kv_cache``; a later change can collect
+        # those layer caches and register them with the connector.
+        # configured_layers = {
+        #     layer_name
+        #     for group in kv_cache_config.kv_cache_groups
+        #     for layer_name in group.layer_names
+        # }
+        # forward_context = self.vllm_config.compilation_config.static_forward_context
+        # kv_caches_by_layer = {
+        #     layer_name: forward_context[layer_name].kv_cache
+        #     for layer_name in configured_layers
+        # }
+        # maybe_register_vllm_kv_caches(kv_caches_by_layer)
+
     def remove_diffusion_kv_requests(self, request_ids: list[str]) -> int:
         """Clear Worker-local rows without freeing Scheduler-owned blocks."""
 
