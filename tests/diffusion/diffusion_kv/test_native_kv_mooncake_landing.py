@@ -85,6 +85,7 @@ from vllm_omni.diffusion.sched.base_scheduler import BaseScheduler
 from vllm_omni.diffusion.vllm_config import create_diffusion_vllm_config
 from vllm_omni.diffusion.worker.diffusion_model_runner import DiffusionModelRunner
 from vllm_omni.inputs.data import OmniDiffusionSamplingParams
+from vllm_omni.platforms import current_omni_platform
 
 pytestmark = [
     pytest.mark.core_model,
@@ -167,10 +168,11 @@ def _mooncake_tcp_env() -> Iterator[None]:
     instead. Also pin ``VLLM_HOST_IP`` so both processes advertise loopback.
     """
     netif = _pick_tcp_netif()
-    # Visible CUDA device is always cuda:0 under CUDA_VISIBLE_DEVICES remapping.
+    # Visible accelerator is always :0 under device-visibility remapping.
+    device_key = f"{current_omni_platform.device_type}:0"
     topo = {
         "cpu:0": [[netif]],
-        "cuda:0": [[netif]],
+        device_key: [[netif]],
     }
     fd, topo_path = tempfile.mkstemp(prefix="mooncake-tcp-topo-", suffix=".json")
     os.close(fd)
@@ -307,8 +309,8 @@ def _run_ar_producer(
 ) -> None:
     """Producer process: real MooncakeConnector, fake KV pages, no AR model."""
     os.environ["VLLM_MOONCAKE_BOOTSTRAP_PORT"] = str(bootstrap_port)
-    device = torch.device("cuda:0")
-    torch.cuda.set_device(device)
+    device = current_omni_platform.get_torch_device(0)
+    current_omni_platform.set_device(device)
     try:
         od_config = OmniDiffusionConfig.from_kwargs(
             diffusion_kv_mode="paged_scheduler",
@@ -404,8 +406,8 @@ def _wait_producer_send_ready(worker: object, transfer_id: str, *, timeout_s: fl
 
 
 def _run_dit_consumer_and_assert(dist_port: int, bootstrap_addr: str) -> None:
-    device = torch.device("cuda:0")
-    torch.cuda.set_device(device)
+    device = current_omni_platform.get_torch_device(0)
+    current_omni_platform.set_device(device)
     od_config = OmniDiffusionConfig.from_kwargs(
         diffusion_kv_mode="paged_scheduler",
         max_model_len=64,
@@ -480,7 +482,7 @@ def _run_dit_consumer_and_assert(dist_port: int, bootstrap_addr: str) -> None:
                 time.sleep(0.2)
             assert finished, "DiT Mooncake consumer did not report finished_recving in time"
 
-            torch.accelerator.synchronize()
+            current_omni_platform.synchronize()
             for dest_block, source_block in zip(target_block_ids, SOURCE_BLOCK_IDS, strict=True):
                 got = dit_kv[dest_block].float().mean().item()
                 assert got == pytest.approx(_expected_page_value(source_block), abs=1e-2), (
