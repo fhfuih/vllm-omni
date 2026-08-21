@@ -29,19 +29,22 @@ depends_on:
 validation_paths:
   - tests/diffusion/test_diffusion_engine.py
   - tests/diffusion/test_diffusion_engine_cleanup.py
+  - tests/diffusion/test_diffusion_engine_dummy_run.py
   - tests/diffusion/test_diffusion_engine_rpc_routing.py
   - tests/diffusion/test_diffusion_scheduler.py
   - tests/diffusion/test_diffusion_model_runner.py
   - tests/diffusion/test_diffusion_worker.py
   - tests/diffusion/test_multiproc_engine_concurrency.py
   - tests/diffusion/test_result_pump.py
+  - tests/diffusion/test_async_output_worker.py
   - tests/diffusion/test_diffusion_ipc.py
+  - tests/diffusion/test_diffusion_streaming_output.py
   - tests/diffusion/test_stage_diffusion_proc.py
   - tests/diffusion/test_inline_stage_diffusion_client.py
 upstream_refs:
   - diffusers.DiffusionPipeline
-last_reviewed: 2026-08-12
-last_verified_commit: 9b0df3909ae06207337cff817ce47e09cbbfe697
+last_reviewed: 2026-08-20
+last_verified_commit: ce985ac944473bee1ed073dd66fe8926a030977e
 ---
 
 # Diffusion runtime
@@ -189,12 +192,15 @@ executor call.
 
 | Mode | Scheduler | Executor call | Runner path |
 | --- | --- | --- | --- |
-| Request batch | `RequestScheduler` | `execute_batch()` | `execute_model()` for one request, or `execute_model_batch()` for a supported batch |
+| Request batch | `RequestScheduler` | `execute_batch()` | `execute_model()` for one request, or `execute_model_batch()` for a fused batch |
 | Step batch | `StepScheduler` | `execute_step()` | `execute_stepwise()` |
 
 Request mode runs a complete pipeline forward for each scheduled wave. A
-single-request wave is the conservative path. A multi-request wave requires
-the pipeline to declare request-batch support.
+single-request wave is the conservative path. A multi-request wave usually
+uses fused `execute_model_batch()` and requires the pipeline to declare
+request-batch support. One exception is distributed layerwise offload with
+AllGather: the engine may schedule one request per DP replica and keep the
+per-request `execute_model()` path instead of a fused batch.
 
 Step mode keeps `StepRequestState` in the runner. New requests run
 `prepare_encode()` once; every tick runs `denoise_step()` and
@@ -253,11 +259,11 @@ The multiprocess backend:
 5. applies rank-aware reply rules so only expected ranks respond; and
 6. monitors worker process sentinels and fails the executor if a worker dies.
 
-In request mode, workers may return a lightweight `COMPUTE_DONE` message first.
-A worker-side thread then copies output to host/shared memory, and the
+In request mode, workers always return a lightweight `COMPUTE_DONE` message
+first. A worker-side thread then copies output to host/shared memory, and the
 executor's result-pump threads resolve the final output later. This lets the
-device begin more compute without waiting for output packing. Step mode uses
-the synchronous result path.
+device begin more compute without waiting for output packing. Step mode keeps
+the synchronous result path and does not start those pumps.
 
 See [Async diffusion output](../../feature/async_diffusion_output.md) for that
 feature's detailed timeline.
@@ -366,9 +372,10 @@ Test the smallest affected slice, then cover its neighboring boundary:
 | --- | --- |
 | Admission or state transitions | `test_diffusion_scheduler.py`, including duplicate IDs, compatibility, abort, and missing output |
 | Engine loop or output delivery | `test_diffusion_engine.py`, `test_diffusion_engine_cleanup.py`, `test_diffusion_engine_rpc_routing.py` |
-| Executor or IPC | `test_multiproc_engine_concurrency.py`, `test_result_pump.py`, `test_diffusion_ipc.py` |
+| Executor or IPC | `test_multiproc_engine_concurrency.py`, `test_result_pump.py`, `test_diffusion_ipc.py`, `test_async_output_worker.py` |
 | Worker or runner | `test_diffusion_worker.py`, `test_diffusion_model_runner.py` |
 | Stage boundary | `test_stage_diffusion_proc.py`, `test_inline_stage_diffusion_client.py` |
+| Warmup or streaming | `test_diffusion_engine_dummy_run.py`, `test_diffusion_streaming_output.py` |
 
 Always exercise success, cancellation, per-request failure, fatal worker
 failure, repeated shutdown, one request, and multiple compatible requests.
