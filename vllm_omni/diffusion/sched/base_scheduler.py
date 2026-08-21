@@ -125,11 +125,6 @@ class BaseScheduler(ABC):
         )
         self._reset_scheduler_state()
 
-    @property
-    def kv_connector_v1(self) -> KVConnectorBase_V1 | None:
-        """KV connector v1 (SCHEDULER role), or None when unconfigured."""
-        return self._kv_connector_v1
-
     def add_request(self, request: OmniDiffusionRequest) -> str:
         return self._add_request_with_request_id(request.request_id, request)
 
@@ -453,7 +448,7 @@ class BaseScheduler(ABC):
         request: OmniDiffusionRequest,
         kv_requests: tuple[DiffusionKVRequest, ...],
     ) -> None:
-        """Copy opaque connector params and fill remote-load token length."""
+        """When using v1 KV connector, copy opaque connector params and fill remote-load token length."""
         public_params = request.kv_transfer_params
         for seq in kv_requests:
             if seq.kv_transfer_params is None and public_params is not None:
@@ -466,7 +461,7 @@ class BaseScheduler(ABC):
                 seq.prompt_token_ids = [0] * seq.seq_len
 
     def _admit_kv_connector_v1(self, state: SchedulerRequestState) -> tuple[bool, bool]:
-        """Run connector lookup/update for a newly reserved public request.
+        """When using v1 KV connector, run connector lookup/update for a newly reserved public request.
 
         Returns ``(ready, needs_meta)``. ``ready`` is False when the connector
         cannot yet resolve the external match (``ext_tokens is None``); the
