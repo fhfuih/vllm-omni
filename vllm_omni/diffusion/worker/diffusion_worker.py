@@ -448,14 +448,27 @@ class DiffusionWorker:
             )
         rank_config = kv_cache_configs[self.rank]
         self.model_runner.set_kv_cache_config(rank_config)
-        # self.model_runner.diffusion_kv_backend.initialize_kv_cache(rank_config)  # PR 6102
         if (
             self.vllm_config is not None
             and self.vllm_config.kv_transfer_config is not None
             and not has_kv_transfer_group()
         ):
             init_worker_kv_connector_v1(self.vllm_config, kv_cache_config=rank_config)
-        # maybe_register_vllm_kv_caches(self.model_runner.diffusion_kv_backend.kv_caches_by_layer)  # PR 6102
+        ## NOTE(stub) Connector registration (this PR, not yet wired).
+        ## After #6102, ``set_kv_cache_config`` → ``initialize_kv_cache`` binds
+        ## pages onto layer adapters in ``static_forward_context`` via
+        ## ``AttentionLayerBase.bind_kv_cache``.
+        # configured_layers = {
+        #     layer_name
+        #     for group in rank_config.kv_cache_groups
+        #     for layer_name in group.layer_names
+        # }
+        # forward_context = self.vllm_config.compilation_config.static_forward_context
+        # kv_caches_by_layer = {
+        #     layer_name: forward_context[layer_name].kv_cache
+        #     for layer_name in configured_layers
+        # }
+        # maybe_register_vllm_kv_caches(kv_caches_by_layer)
 
     def init_lora_manager(self) -> None:
         """Initialize the LoRA manager for this worker."""
