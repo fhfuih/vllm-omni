@@ -196,6 +196,8 @@ class OrchestratorRequestState:
     duplex_stage_fences: dict[int, DuplexFence] = field(default_factory=dict)
     duplex_config_generation: int = -1
     running_counter_registered: bool = False
+
+    # fields for AR-DiT KV connection v1
     native_kv_transfer_id: str | None = None
     native_kv_source_params: dict[str, Any] | None = None
     native_kv_target_params: dict[str, Any] | None = None
@@ -2410,7 +2412,7 @@ class Orchestrator:
         return None
 
     def _maybe_attach_native_kv_handshake(self, req_state: OrchestratorRequestState) -> None:
-        """Mint one transfer_id and matching source/target Mooncake params."""
+        """Mint one transfer_id and matching source/target Mooncake params, if there is a subsequent DiT stage."""
         from vllm_omni.diffusion.diffusion_kv.v1.connector import (
             bootstrap_addr_from_kv_transfer_config,
             build_source_kv_transfer_params,

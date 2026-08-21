@@ -66,7 +66,7 @@ def test_scheduler_creates_kv_connector_v1_when_configured() -> None:
     ) as create_connector:
         kv_cache_config = initialize_paged_scheduler(scheduler, od_config=od_config, num_blocks=8)
 
-    assert scheduler.kv_connector_v1 is fake_connector
+    assert scheduler._kv_connector_v1 is fake_connector
     create_connector.assert_called_once()
     _, kwargs = create_connector.call_args
     assert kwargs["role"].name == "SCHEDULER"
@@ -187,4 +187,4 @@ def test_scheduler_close_shuts_down_kv_connector_v1() -> None:
         scheduler.close()
 
     shutdown_mock.assert_called_once_with(scheduler_connector=fake_connector)
-    assert scheduler.kv_connector_v1 is None
+    assert scheduler._kv_connector_v1 is None
