@@ -30,6 +30,7 @@ from vllm_omni.diffusion.data import (
     build_attention_config,
     parse_attention_config,
 )
+from vllm_omni.diffusion.diffusion_kv.config import DiffusionKVCacheMode
 
 pytestmark = [pytest.mark.core_model, pytest.mark.diffusion, pytest.mark.cpu]
 
@@ -419,7 +420,19 @@ class TestCurrentDiffusionConfig:
 
 
 class TestAttentionInitUsesCurrentDiffusionConfig:
-    def test_attention_init_uses_current_diffusion_config_without_forward_context(self, monkeypatch):
+    @pytest.mark.parametrize(
+        ("diffusion_kv_mode", "expected_require_paged_kv"),
+        [
+            (DiffusionKVCacheMode.DENSE_LEGACY, False),
+            (DiffusionKVCacheMode.PAGED_SCHEDULER, True),
+        ],
+    )
+    def test_attention_init_uses_current_diffusion_config_without_forward_context(
+        self,
+        monkeypatch,
+        diffusion_kv_mode,
+        expected_require_paged_kv,
+    ):
         class _FakeAttentionImpl:
             def __init__(self, **kwargs):
                 self.kwargs = kwargs
@@ -444,11 +457,13 @@ class TestAttentionInitUsesCurrentDiffusionConfig:
             attention_config=None,
             role_category=None,
             allow_trtllm_default=False,
+            require_paged_kv=False,
         ):
             captured["role"] = role
             captured["head_size"] = head_size
             captured["role_category"] = role_category
             captured["attention_config"] = attention_config
+            captured["require_paged_kv"] = require_paged_kv
             return _FakeBackend, AttentionSpec(backend="TRTLLM_ATTN", skip_softmax={"target_sparsity": 0.5})
 
         class _FakeRingParallelAttention:
@@ -477,6 +492,7 @@ class TestAttentionInitUsesCurrentDiffusionConfig:
             diffusion_kv_cache_dtype=None,
             diffusion_kv_cache_skip_step_indices=None,
             diffusion_kv_cache_skip_layer_indices=None,
+            diffusion_kv_mode=diffusion_kv_mode,
         )
 
         with set_current_diffusion_config(od_config):
@@ -488,12 +504,14 @@ class TestAttentionInitUsesCurrentDiffusionConfig:
                 role="cross",
                 role_category="cross",
                 qkv_layout="BSND",
+                paged_kv_cache_role="primary",
             )
 
         assert captured["role"] == "cross"
         assert captured["role_category"] == "cross"
         assert captured["head_size"] == 64
         assert captured["attention_config"] is od_config.diffusion_attention_config
+        assert captured["require_paged_kv"] is expected_require_paged_kv
         assert attn.backend_pref == "TRTLLM_ATTN"
         assert attn.attention.kwargs["backend_kwargs"] == {"target_sparsity": 0.5}
         assert attn.attention.kwargs["qkv_layout"] == "BSND"
@@ -533,7 +551,12 @@ class TestDiffusionKvCacheQuantization:
         monkeypatch.setattr(
             layer_mod,
             "get_attn_backend_for_role",
-            lambda role, head_size, attention_config=None, role_category=None, allow_trtllm_default=False: (
+            lambda role,
+            head_size,
+            attention_config=None,
+            role_category=None,
+            allow_trtllm_default=False,
+            require_paged_kv=False: (
                 _FakeBackend,
                 None,
             ),

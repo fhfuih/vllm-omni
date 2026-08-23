@@ -113,7 +113,7 @@ class StepScheduler(BaseScheduler):
             else:
                 state.error = None
 
-        return self._finalize_update_from_output(sched_output, terminal_statuses, terminal_errors)
+        return self._finalize_update_from_output(sched_output, output, terminal_statuses, terminal_errors)
 
     def _pop_extra_request_state(self, request_id: str) -> None:
         self._request_progress.pop(request_id, None)

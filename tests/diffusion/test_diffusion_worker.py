@@ -37,6 +37,8 @@ def mock_od_config(mocker: MockerFixture):
     config.cache_backend = None
     config.cache_config = None
     config.model = "test-model"
+    config.kv_transfer_config = None
+    config.omni_kv_config = None
     return config
 
 

@@ -97,7 +97,7 @@ def _make_kv_cleanup_engine(mode: DiffusionKVCacheMode) -> tuple[DiffusionEngine
     return engine, cleanup
 
 
-def test_paged_terminal_output_clears_worker_rows() -> None:
+def test_emit_finished_output_clears_worker_request_state() -> None:
     engine, cleanup = _make_kv_cleanup_engine(DiffusionKVCacheMode.PAGED_SCHEDULER)
     engine._finalize_finished_request = lambda request_id, *_args: request_id
     engine._put_output = lambda *_args: None
@@ -108,7 +108,7 @@ def test_paged_terminal_output_clears_worker_rows() -> None:
     assert set(cleanup.call_args.args[0]) == {"req-0", "req-1"}
 
 
-def test_paged_abort_clears_worker_rows_before_scheduler_free() -> None:
+def test_paged_abort_clears_worker_bindings_before_scheduler_free() -> None:
     engine, cleanup = _make_kv_cleanup_engine(DiffusionKVCacheMode.PAGED_SCHEDULER)
     engine.scheduler = SimpleNamespace(
         get_request_state=lambda _request_id: None,
@@ -121,7 +121,7 @@ def test_paged_abort_clears_worker_rows_before_scheduler_free() -> None:
     engine.scheduler.finish_requests.assert_not_called()
 
 
-def test_dense_terminal_and_abort_paths_skip_worker_row_cleanup() -> None:
+def test_dense_terminal_and_abort_paths_skip_worker_binding_cleanup() -> None:
     engine, cleanup = _make_kv_cleanup_engine(DiffusionKVCacheMode.DENSE_LEGACY)
     engine._finalize_finished_request = lambda request_id, *_args: request_id
     engine._put_output = lambda *_args: None
@@ -145,6 +145,8 @@ def test_init_accepts_custom_scheduler(monkeypatch: pytest.MonkeyPatch) -> None:
         execute_request=Mock(),
         execute_batch=Mock(),
         execute_step=Mock(),
+        init_kv_output_aggregator=Mock(),
+        shutdown=Mock(),
     )
 
     monkeypatch.setattr(

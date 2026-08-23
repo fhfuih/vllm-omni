@@ -483,10 +483,11 @@ async def test_native_kv_reservation_error_wakes_stream_without_killing_busy_loo
     def fail_reservation(*args, **kwargs):
         raise RuntimeError("native allocation bug")
 
-    engine.scheduler._diffusion_kv_manager = SimpleNamespace(
+    engine.scheduler.kv_cache_manager = SimpleNamespace(
         has_request=lambda request_id: False,
         reserve_request=fail_reservation,
         free_request=lambda request_id: None,
+        native_manager=SimpleNamespace(empty_kv_cache_blocks=object()),
     )
     request = _make_request("kv-error")
     request.diffusion_kv_requests = (

@@ -901,6 +901,10 @@ def _project_omni_stage_engine_args(
     engine_args["async_chunk"] = connector_config.async_chunk
     if connector_config.omni_kv_config is not None:
         engine_args["omni_kv_config"] = copy.deepcopy(connector_config.omni_kv_config)
+    if not is_diffusion and connector_config.kv_transfer_config is not None:
+        engine_args["kv_transfer_config"] = copy.deepcopy(
+            connector_config.kv_transfer_config
+        )
 
     if is_diffusion:
         engine_args["parallel_config"] = _project_omni_config_fields(

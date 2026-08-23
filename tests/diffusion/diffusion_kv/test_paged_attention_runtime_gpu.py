@@ -16,12 +16,12 @@ from vllm.v1.worker.gpu.block_table import BlockTables
 
 from vllm_omni.diffusion.attention.backends.abstract import AttentionMetadata
 from vllm_omni.diffusion.attention.backends.flash_attn import FlashAttentionImpl
-from vllm_omni.diffusion.diffusion_kv.paged_attention_adapter import (
-    DiffusionPagedAttentionAdapter,
+from vllm_omni.diffusion.diffusion_kv.paged_attention_runtime import (
+    DiffusionKVSequenceBinding,
     DiffusionPagedAttentionLayerAdapter,
-    DiffusionPagedAttentionRow,
-    DiffusionPagedAttentionRowBinding,
+    DiffusionPagedAttentionRuntime,
 )
+from vllm_omni.diffusion.diffusion_kv.request import DiffusionPagedAttentionSequence
 from vllm_omni.diffusion.vllm_config import _DiffusionVllmModelConfig
 
 pytestmark = [pytest.mark.core_model, pytest.mark.diffusion, pytest.mark.gpu]
@@ -42,7 +42,7 @@ class _SmokeDiffusionAttention(nn.Module):
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA is required for native paged attention")
-def test_adapter_executes_native_paged_attention_on_non_contiguous_blocks() -> None:
+def test_runtime_executes_native_paged_attention_on_non_contiguous_blocks() -> None:
     device = torch.device("cuda", torch.accelerator.current_device_index())
     vllm_config = VllmConfig(
         cache_config=CacheConfig(
@@ -129,21 +129,21 @@ def test_adapter_executes_native_paged_attention_on_non_contiguous_blocks() -> N
 
     block_tables.append_block_ids(0, ([3, 1],), overwrite=True)
     block_tables.apply_staged_writes()
-    adapter = DiffusionPagedAttentionAdapter(
+    runtime = DiffusionPagedAttentionRuntime(
         vllm_config=vllm_config,
         device=device,
         kv_cache_config=kv_cache_config,
         block_tables=block_tables,
         attn_groups=attn_groups,
         layers={_LAYER_NAME: native_layer},
-        resolve_row=lambda _request_id, _sequence_id, _context_id: DiffusionPagedAttentionRowBinding(
-            row_index=0,
+        resolve_sequence=lambda _request_id, _sequence_id: DiffusionKVSequenceBinding(
+            req_index=0,
             max_seq_len=19,
         ),
     )
-    prefix_batch = adapter.prepare_batch(
+    prefix_batch = runtime.prepare_batch(
         [
-            DiffusionPagedAttentionRow(
+            DiffusionPagedAttentionSequence(
                 request_id="req-0",
                 sequence_id=0,
                 query_len=17,
@@ -162,14 +162,14 @@ def test_adapter_executes_native_paged_attention_on_non_contiguous_blocks() -> N
         softmax_scale=diffusion_layer.softmax_scale,
         num_kv_heads=_NUM_HEADS,
     )
-    with adapter.activate(prefix_batch):
-        prefix_context = adapter.prepare_layer_context(_LAYER_NAME, query[:17], key[:17], value[:17])
+    with runtime.activate(prefix_batch):
+        prefix_context = runtime.prepare_layer_context(_LAYER_NAME, query[:17], key[:17], value[:17])
         prefix_output = omni_backend.forward_paged(prefix_context)
     prefix_slot_mappings = prefix_batch.slot_mappings.clone()
 
-    suffix_batch = adapter.prepare_batch(
+    suffix_batch = runtime.prepare_batch(
         [
-            DiffusionPagedAttentionRow(
+            DiffusionPagedAttentionSequence(
                 request_id="req-0",
                 sequence_id=0,
                 query_len=2,
@@ -178,14 +178,14 @@ def test_adapter_executes_native_paged_attention_on_non_contiguous_blocks() -> N
             )
         ]
     )
-    with adapter.activate(suffix_batch):
-        suffix_context = adapter.prepare_layer_context(_LAYER_NAME, query[17:], key[17:], value[17:])
+    with runtime.activate(suffix_batch):
+        suffix_context = runtime.prepare_layer_context(_LAYER_NAME, query[17:], key[17:], value[17:])
         suffix_output = omni_backend.forward_paged(suffix_context)
     suffix_slot_mappings = suffix_batch.slot_mappings.clone()
 
-    piecewise_batch = adapter.prepare_batch(
+    piecewise_batch = runtime.prepare_batch(
         [
-            DiffusionPagedAttentionRow(
+            DiffusionPagedAttentionSequence(
                 request_id="req-0",
                 sequence_id=0,
                 query_len=19,
@@ -199,8 +199,8 @@ def test_adapter_executes_native_paged_attention_on_non_contiguous_blocks() -> N
         attn_mask=mixed_mask.unsqueeze(0).unsqueeze(0),
         full_attn_spans=[[(5, 10)]],
     )
-    with adapter.activate(piecewise_batch):
-        piecewise_context = adapter.prepare_layer_context(
+    with runtime.activate(piecewise_batch):
+        piecewise_context = runtime.prepare_layer_context(
             _LAYER_NAME,
             query,
             key,

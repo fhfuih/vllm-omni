@@ -341,6 +341,9 @@ class DiffusionEngine:
                 hash_block_size=hash_block_size,
                 kv_vllm_config=kv_vllm_config,
             )
+        connector = self.scheduler.get_kv_connector()
+        if connector is not None:
+            self.executor.init_kv_output_aggregator(connector)
 
     def _init_runtime_state(self) -> None:
         # DP multi-concurrency: allow batching dp_size requests so each
@@ -682,8 +685,6 @@ class DiffusionEngine:
                 task.future.set_exception(exc)
 
     def _remove_diffusion_kv_requests(self, request_ids: Iterable[str]) -> None:
-        """Clear terminal Worker rows while Scheduler owns the allocations."""
-
         od_config = getattr(self, "od_config", None)
         if od_config is None or not is_scheduler_paged_kv_mode(
             getattr(od_config, "diffusion_kv_mode", DiffusionKVCacheMode.DENSE_LEGACY)

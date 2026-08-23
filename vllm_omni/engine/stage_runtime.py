@@ -11,11 +11,12 @@ import os
 import threading
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from contextlib import contextmanager
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass, replace
 from typing import Any
 
 import janus
 from omegaconf import OmegaConf
+from vllm.config import KVTransferConfig
 from vllm.logger import init_logger
 
 from vllm_omni.distributed.omni_connectors.utils.initialization import (
@@ -67,6 +68,51 @@ from vllm_omni.outputs.output_metadata import FinalOutputModalityType
 from vllm_omni.platforms import current_omni_platform
 
 logger = init_logger(__name__)
+
+
+def _bind_replica_kv_transfer_config(
+    stage_cfg: Any,
+    *,
+    stage_id: int,
+    replica_id: int,
+    num_replicas: int,
+) -> None:
+    engine_args = getattr(stage_cfg, "engine_args", None)
+    if engine_args is None:
+        return
+    value = engine_args.get("kv_transfer_config") if hasattr(engine_args, "get") else None
+    if value is None:
+        return
+    if isinstance(value, KVTransferConfig):
+        config = value
+    else:
+        payload = OmegaConf.to_container(value, resolve=True) if OmegaConf.is_config(value) else dict(value)
+        config = KVTransferConfig(**payload)
+    if not isinstance(config.engine_id, str) or not config.engine_id.strip():
+        raise ValueError(f"Stage {stage_id} replica {replica_id} KV Connector requires a non-empty engine_id")
+    if num_replicas > 1:
+        config = replace(config, engine_id=f"{config.engine_id}-s{stage_id}-r{replica_id}")
+    if config.kv_connector == "MooncakeConnector" and config.kv_role == "kv_producer":
+        if type(config.kv_port) is not int or config.kv_port <= 0:
+            raise ValueError("Mooncake producer replicas require a positive kv_port")
+        port = config.kv_port + replica_id
+        host = config.kv_ip or "127.0.0.1"
+        extra = dict(config.kv_connector_extra_config or {})
+        extra["bootstrap_addr"] = f"http://{host}:{port}"
+        config = replace(config, kv_port=port, kv_connector_extra_config=extra)
+        if OmegaConf.is_config(stage_cfg):
+            OmegaConf.update(
+                stage_cfg,
+                "runtime.env.VLLM_MOONCAKE_BOOTSTRAP_PORT",
+                str(port),
+                force_add=True,
+            )
+        else:
+            stage_cfg.runtime.setdefault("env", {})["VLLM_MOONCAKE_BOOTSTRAP_PORT"] = str(port)
+    if hasattr(engine_args, "__setitem__"):
+        engine_args["kv_transfer_config"] = asdict(config)
+    else:
+        setattr(engine_args, "kv_transfer_config", config)
 
 
 @dataclass(frozen=True, slots=True)
@@ -367,40 +413,43 @@ class StageRuntime:
             launch_mode = self._get_launch_mode(stage_id)
 
             replicas: list[ReplicaInitPlan] = []
-            stage_vllm_config = None
-            executor_class = None
-            engine_args_dict = None
-            if base_metadata.stage_type != "diffusion":
-                # The stable adapter entry point still receives the same
-                # legacy stage object as replica planning. Its implementation
-                # switches only at the coordinated RFC #4021 cutover.
-                engine_args_dict = build_engine_args_dict(
-                    stage_cfg,
-                    self._model,
-                    stage_connector_spec=stage_connector_spec,
-                    cli_tokenizer=self._tokenizer,
-                )
-                inject_omni_kv_connector_config(
-                    engine_args_dict,
-                    omni_kv_connector,
-                    stage_id,
-                )
-                _inject_inferred_kv_tp_topology(
-                    engine_args_dict.get("omni_kv_config"),
-                    stage_id,
-                    self._stage_configs,
-                )
-                stage_vllm_config, executor_class = build_vllm_config(
-                    stage_cfg,
-                    self._model,
-                    stage_connector_spec=stage_connector_spec,
-                    engine_args_dict=engine_args_dict,
-                )
-
             for replica_id in range(num_replicas):
-                replica_cfg = copy.deepcopy(stage_cfg) if replica_id > 0 else stage_cfg
+                replica_cfg = copy.deepcopy(stage_cfg)
                 if stage_idx in replica_devices_map:
                     replica_cfg.runtime.devices = replica_devices_map[stage_idx][replica_id]
+                _bind_replica_kv_transfer_config(
+                    replica_cfg,
+                    stage_id=stage_id,
+                    replica_id=replica_id,
+                    num_replicas=num_replicas,
+                )
+
+                stage_vllm_config = None
+                executor_class = None
+                engine_args_dict = None
+                if base_metadata.stage_type != "diffusion":
+                    engine_args_dict = build_engine_args_dict(
+                        replica_cfg,
+                        self._model,
+                        stage_connector_spec=stage_connector_spec,
+                        cli_tokenizer=self._tokenizer,
+                    )
+                    inject_omni_kv_connector_config(
+                        engine_args_dict,
+                        omni_kv_connector,
+                        stage_id,
+                    )
+                    _inject_inferred_kv_tp_topology(
+                        engine_args_dict.get("omni_kv_config"),
+                        stage_id,
+                        self._stage_configs,
+                    )
+                    stage_vllm_config, executor_class = build_vllm_config(
+                        replica_cfg,
+                        self._model,
+                        stage_connector_spec=stage_connector_spec,
+                        engine_args_dict=engine_args_dict,
+                    )
 
                 replica_metadata = extract_legacy_stage_metadata(replica_cfg)
                 replica_metadata.replica_id = replica_id

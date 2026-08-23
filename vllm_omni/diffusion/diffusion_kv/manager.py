@@ -4,8 +4,9 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
+from enum import Enum
 
-from vllm.v1.core.kv_cache_manager import KVCacheManager
+from vllm.v1.core.kv_cache_manager import KVCacheBlocks, KVCacheManager
 from vllm.v1.kv_cache_interface import KVCacheConfig
 
 from vllm_omni.diffusion.diffusion_kv.metadata import (
@@ -17,6 +18,12 @@ from vllm_omni.diffusion.diffusion_kv.request import DiffusionKVRequest
 
 class DiffusionKVAdmissionError(ValueError):
     """A request-specific KV admission failure safe to return to the caller."""
+
+
+class DiffusionKVReservationState(str, Enum):
+    RESERVED = "reserved"
+    LOADING = "loading"
+    RESIDENT = "resident"
 
 
 class DiffusionKVCacheManager:
@@ -47,12 +54,15 @@ class DiffusionKVCacheManager:
             max_in_flight_tokens=max_in_flight_tokens,
             enable_caching=False,
         )
+        self.kv_cache_config = kv_cache_config
         self.max_model_len = max_model_len
         # Native vLLM may reserve a null block, so an idle BlockPool does not
         # necessarily report ``kv_cache_config.num_blocks`` free blocks.
         self._empty_pool_num_free_blocks = self.native_manager.block_pool.get_num_free_blocks()
         self._requests: dict[str, tuple[DiffusionKVRequest, ...]] = {}
         self._metadata: dict[str, DiffusionKVMetadata] = {}
+        self._states: dict[str, DiffusionKVReservationState] = {}
+        self._loading_sequence_ids: dict[str, frozenset[str]] = {}
         self._internal_request_ids: set[str] = set()
         self._next_allocation_generation = 1
 
@@ -85,10 +95,31 @@ class DiffusionKVCacheManager:
     def has_request(self, public_request_id: str) -> bool:
         return public_request_id in self._requests
 
+    def get_request_state(self, public_request_id: str) -> DiffusionKVReservationState:
+        try:
+            return self._states[public_request_id]
+        except KeyError as exc:
+            raise KeyError(f"Unknown Diffusion KV request {public_request_id!r}") from exc
+
+    def get_external_blocks(self, blocks: KVCacheBlocks, num_external_tokens: int) -> KVCacheBlocks:
+        if num_external_tokens < 0:
+            raise ValueError("num_external_tokens must be non-negative")
+        groups = self.kv_cache_config.kv_cache_groups
+        if len(blocks.blocks) != len(groups):
+            raise ValueError("KV block groups do not match the cache configuration")
+        external_groups = []
+        for group, cache_group in zip(blocks.blocks, groups, strict=True):
+            block_size = cache_group.kv_cache_spec.block_size
+            num_blocks = (num_external_tokens + block_size - 1) // block_size
+            external_groups.append(tuple(group[:num_blocks]))
+        return KVCacheBlocks(tuple(external_groups))
+
     def reserve_request(
         self,
         public_request_id: str,
         kv_requests: Sequence[DiffusionKVRequest],
+        *,
+        reservation_inputs: Sequence[tuple[KVCacheBlocks, int, int]] | None = None,
     ) -> DiffusionKVMetadata | None:
         """Reserve all CFG sequences or roll back the complete public request."""
 
@@ -96,9 +127,21 @@ class DiffusionKVCacheManager:
             raise ValueError("public_request_id must be non-empty")
         if public_request_id in self._requests:
             raise ValueError(f"Diffusion KV request {public_request_id!r} is already allocated")
+        self._states.pop(public_request_id, None)
         requests = tuple(kv_requests)
         if not requests:
             raise ValueError("Diffusion KV allocation requires at least one sequence")
+        if reservation_inputs is None:
+            native_inputs = tuple(
+                (self.native_manager.empty_kv_cache_blocks, 0, 0)
+                for _ in requests
+            )
+        else:
+            native_inputs = tuple(reservation_inputs)
+            if len(native_inputs) != len(requests):
+                raise ValueError(
+                    "Diffusion KV reservation input count must match execution sequences"
+                )
 
         sequence_ids = [request.sequence_id for request in requests]
         internal_ids = [request.request_id for request in requests]
@@ -114,8 +157,6 @@ class DiffusionKVCacheManager:
         if conflicts:
             raise ValueError(f"Diffusion KV internal request IDs are already allocated: {sorted(conflicts)}")
         for request in requests:
-            if request.kv_contexts:
-                raise DiffusionKVAdmissionError("independent DiffusionKVContext allocation is not implemented yet")
             if request.seq_len > self.max_model_len:
                 raise DiffusionKVAdmissionError(
                     f"Diffusion KV sequence {request.request_id!r} exceeds max_model_len: "
@@ -133,10 +174,21 @@ class DiffusionKVCacheManager:
         allocated: list[DiffusionKVRequest] = []
         sequence_metadata: list[DiffusionKVSequenceMetadata] = []
         try:
-            for request in requests:
+            for request, (computed_blocks, local_tokens, external_tokens) in zip(
+                requests, native_inputs, strict=True
+            ):
+                if local_tokens < 0 or external_tokens < 0:
+                    raise ValueError("Diffusion KV computed token counts must be non-negative")
+                if local_tokens + external_tokens > request.seq_len:
+                    raise DiffusionKVAdmissionError(
+                        f"Diffusion KV computed tokens exceed sequence length for {request.request_id!r}"
+                    )
                 blocks = self.native_manager.allocate_slots(
-                    request,
-                    num_new_tokens=request.seq_len,
+                    request,  # type: ignore[arg-type]
+                    num_new_tokens=request.seq_len - local_tokens - external_tokens,
+                    num_new_computed_tokens=local_tokens,
+                    new_computed_blocks=computed_blocks,
+                    num_external_computed_tokens=external_tokens,
                     delay_cache_blocks=True,
                     full_sequence_must_fit=True,
                 )
@@ -151,7 +203,11 @@ class DiffusionKVCacheManager:
                         prefix_len=request.prefix_len,
                         target_len=request.target_len,
                         seq_len=request.seq_len,
-                        block_ids=blocks.get_block_ids(),
+                        block_ids=self.native_manager.get_blocks(request.request_id).get_block_ids(),
+                        num_computed_tokens=min(
+                            local_tokens + external_tokens,
+                            request.prefix_len,
+                        ),
                     )
                 )
         except Exception:
@@ -166,8 +222,54 @@ class DiffusionKVCacheManager:
         self._next_allocation_generation += 1
         self._requests[public_request_id] = requests
         self._metadata[public_request_id] = metadata
+        self._states[public_request_id] = DiffusionKVReservationState.RESERVED
         self._internal_request_ids.update(internal_ids)
         return metadata
+
+    def mark_loading(
+        self,
+        public_request_id: str,
+        sequence_request_ids: frozenset[str],
+    ) -> None:
+        if self.get_request_state(public_request_id) is not DiffusionKVReservationState.RESERVED:
+            raise RuntimeError(f"Diffusion KV request {public_request_id!r} is not reserved")
+        expected = frozenset(request.request_id for request in self._requests[public_request_id])
+        if not sequence_request_ids or not sequence_request_ids.issubset(expected):
+            raise ValueError(
+                "Loading sequence IDs must be a non-empty subset of the public request sequences"
+            )
+        self._loading_sequence_ids[public_request_id] = sequence_request_ids
+        self._states[public_request_id] = DiffusionKVReservationState.LOADING
+
+    def mark_resident_without_load(self, public_request_id: str) -> None:
+        if self.get_request_state(public_request_id) is not DiffusionKVReservationState.RESERVED:
+            raise RuntimeError(f"Diffusion KV request {public_request_id!r} is not reserved")
+        self._states[public_request_id] = DiffusionKVReservationState.RESIDENT
+
+    def mark_resident(
+        self,
+        public_request_id: str,
+        finished_sequence_ids: set[str] | frozenset[str],
+    ) -> None:
+        state = self.get_request_state(public_request_id)
+        if state is DiffusionKVReservationState.RESIDENT:
+            return
+        if state is not DiffusionKVReservationState.LOADING:
+            raise RuntimeError(f"Diffusion KV request {public_request_id!r} is not loading")
+        expected = self._loading_sequence_ids[public_request_id]
+        if not expected.issubset(finished_sequence_ids):
+            raise RuntimeError(
+                f"Diffusion KV request {public_request_id!r} is missing receive completion for "
+                f"{sorted(expected - finished_sequence_ids)}"
+            )
+        self._states[public_request_id] = DiffusionKVReservationState.RESIDENT
+        self._loading_sequence_ids.pop(public_request_id, None)
+
+    def get_computed_blocks(self, request: DiffusionKVRequest):
+        return self.native_manager.get_computed_blocks(request)  # type: ignore[arg-type]
+
+    def get_blocks(self, request_id: str) -> KVCacheBlocks:
+        return self.native_manager.get_blocks(request_id)
 
     def get_metadata(self, public_request_id: str) -> DiffusionKVMetadata:
         try:
@@ -178,14 +280,17 @@ class DiffusionKVCacheManager:
     def free_request(self, public_request_id: str) -> None:
         requests = self._requests.pop(public_request_id, ())
         self._metadata.pop(public_request_id, None)
+        self._loading_sequence_ids.pop(public_request_id, None)
         for request in reversed(requests):
-            self.native_manager.free(request)
+            self.native_manager.free(request)  # type: ignore[arg-type]
             self._internal_request_ids.discard(request.request_id)
+        self._states.pop(public_request_id, None)
 
     def close(self) -> None:
         for public_request_id in tuple(self._requests):
             self.free_request(public_request_id)
+        self._states.clear()
 
     def _rollback(self, requests: Sequence[DiffusionKVRequest]) -> None:
         for request in reversed(requests):
-            self.native_manager.free(request)
+            self.native_manager.free(request)  # type: ignore[arg-type]

@@ -100,6 +100,7 @@ def get_attn_backend_for_role(
     attention_config: AttentionConfig | None = None,
     role_category: str | None = None,
     allow_trtllm_default: bool = True,
+    require_paged_kv: bool = False,
 ) -> tuple[type[AttentionBackend], AttentionSpec | None]:
     """
     Get attention backend for a specific attention role.
@@ -118,6 +119,8 @@ def get_attn_backend_for_role(
             If None, falls back to platform default behavior.
         role_category: Optional category for fallback (e.g. "cross" for
             "ltx2.audio_to_video")
+        require_paged_kv: Require a backend that supports Scheduler-managed
+            paged KV.
 
     Returns:
         Tuple of (backend_class, AttentionSpec or None).
@@ -134,6 +137,10 @@ def get_attn_backend_for_role(
 
     if spec is not None:
         backend_cls = _cached_get_backend_cls(spec.backend, head_size)
+        if require_paged_kv and not backend_cls.supports_paged_kv:
+            raise NotImplementedError(
+                f"Explicit attention backend {spec.backend!r} does not support paged KV for diffusion role {role!r}"
+            )
         _log_backend_resolution(
             role=role,
             role_category=role_category,
@@ -144,10 +151,19 @@ def get_attn_backend_for_role(
 
     # 2. Platform default
     backend_cls = _cached_get_backend_cls(None, head_size, allow_trtllm_default)
+    source = "platform default"
+    if require_paged_kv and not backend_cls.supports_paged_kv:
+        backend_cls = _cached_get_backend_cls("FLASH_ATTN", head_size, False)
+        if not backend_cls.supports_paged_kv:
+            raise NotImplementedError(
+                "Scheduler-managed Diffusion KV requires a paged attention backend, "
+                f"but the platform fallback resolved {backend_cls.get_name()!r}"
+            )
+        source = "paged KV platform fallback"
     _log_backend_resolution(
         role=role,
         role_category=role_category,
         backend_name=backend_cls.get_name(),
-        source="platform default",
+        source=source,
     )
     return backend_cls, None

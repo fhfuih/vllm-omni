@@ -1539,7 +1539,10 @@ class HunyuanImage3ForConditionalGeneration(nn.Module, SupportsMultiModal, Suppo
         # Used to embed timestep information into the input sequence.
         self.timestep_emb = TimestepEmbedder(hidden_size=config.hidden_size)
 
-        tokenizer = get_tokenizer(vllm_config.model_config.tokenizer)
+        tokenizer = get_tokenizer(
+            vllm_config.model_config.tokenizer,
+            trust_remote_code=vllm_config.model_config.trust_remote_code,
+        )
         self._mrope_img_token_id = tokenizer.convert_tokens_to_ids("<img>")
         self._mrope_boi_token_id = tokenizer.convert_tokens_to_ids("<boi>")
         self._mrope_eoi_token_id = tokenizer.convert_tokens_to_ids("<eoi>")
@@ -1560,6 +1563,8 @@ class HunyuanImage3ForConditionalGeneration(nn.Module, SupportsMultiModal, Suppo
         self._end_ratio_id = tokenizer.convert_tokens_to_ids("<img_ratio_32>")
         ratio_33 = tokenizer.convert_tokens_to_ids("<img_ratio_33>")
         ratio_36 = tokenizer.convert_tokens_to_ids("<img_ratio_36>")
+        ratio_33 = 130103 if ratio_33 is None else ratio_33
+        ratio_36 = 130106 if ratio_36 is None else ratio_36
         self._ratio_other_slices = [(ratio_33, ratio_36 + 1)]
         # Build the full set of ratio token IDs for use as stop tokens.
         self._all_ratio_ids = set(range(self._start_ratio_id, self._end_ratio_id + 1))

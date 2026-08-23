@@ -9,7 +9,10 @@ from typing import TYPE_CHECKING, Any
 import numpy as np
 import torch
 
-from vllm_omni.diffusion.diffusion_kv.request import DiffusionKVRequest
+from vllm_omni.diffusion.diffusion_kv.request import (
+    DiffusionKVRequest,
+    DiffusionPagedAttentionSequence,
+)
 from vllm_omni.diffusion.request import OmniDiffusionRequest
 
 from .hunyuan_image3_tokenizer import TokenizerEncodeOutput
@@ -334,8 +337,6 @@ def build_hunyuan_diffusion_kv_requests(
     request: OmniDiffusionRequest,
     prepared_layout: HunyuanPreparedLayout,
 ) -> tuple[DiffusionKVRequest, ...]:
-    """Build one persistent Scheduler KV request per Hunyuan execution row."""
-
     tokenizer_output = prepared_layout.tokenizer_output
     cfg_factor = 1 + int(resolve_hunyuan_guidance_scale(request.sampling_params) > 1.0)
     if prepared_layout.num_branches != cfg_factor:
@@ -352,18 +353,45 @@ def build_hunyuan_diffusion_kv_requests(
         DiffusionKVRequest(
             f"{request.request_id}/diffusion-kv/{sequence_id}",
             sequence_id=sequence_id,
-            # The generated-image timestep position terminates the reusable
-            # prompt/reference-image prefix for this execution row.
             prefix_len=int(prefix_row[-1].item()),
             target_len=target_len,
             seq_len=int(valid_row[-1].item()),
-            # Prompt and reference-image tokens are already embedded in this
-            # row's primary self-attention sequence. Hunyuan therefore has no
-            # independently projected cross/joint-attention KV context.
-            kv_contexts=(),
         )
         for sequence_id, (prefix_row, valid_row) in enumerate(zip(prefix_positions, real_pos))
     )
+
+
+def build_hunyuan_paged_attention_sequences(
+    *,
+    request_ids: list[str] | tuple[str, ...],
+    sequence_request_indexes: list[int] | tuple[int, ...],
+    sequence_ids: list[int] | tuple[int, ...],
+    query_lens: list[int] | tuple[int, ...],
+    seq_lens: list[int] | tuple[int, ...],
+) -> tuple[DiffusionPagedAttentionSequence, ...]:
+    sequences: list[DiffusionPagedAttentionSequence] = []
+    for request_index, sequence_id, query_len, seq_len in zip(
+        sequence_request_indexes,
+        sequence_ids,
+        query_lens,
+        seq_lens,
+        strict=True,
+    ):
+        request_index = int(request_index)
+        if not 0 <= request_index < len(request_ids):
+            raise ValueError(f"Hunyuan paged sequence has invalid request index {request_index}")
+        query_len = int(query_len)
+        seq_len = int(seq_len)
+        sequences.append(
+            DiffusionPagedAttentionSequence(
+                request_id=request_ids[request_index],
+                sequence_id=int(sequence_id),
+                query_len=query_len,
+                seq_len=seq_len,
+                kv_start_pos=seq_len - query_len,
+            )
+        )
+    return tuple(sequences)
 
 
 def get_hunyuan_prepared_layout(source: Any) -> HunyuanPreparedLayout | None:

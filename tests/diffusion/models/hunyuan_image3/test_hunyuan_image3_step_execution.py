@@ -316,6 +316,7 @@ def test_later_step_merge_shifts_spans_without_polluting_request_state():
         row_state_indexes,
         row_branches,
         first_step=False,
+        paged_kv_active=False,
     )
 
     assert merged["attention_mask"].shape == (2, 1, 3, 7)
@@ -348,6 +349,7 @@ def test_later_step_merge_allows_request_local_step_counts_and_guidance_values()
         row_state_indexes=[0, 1],
         row_branches=[0, 0],
         first_step=False,
+        paged_kv_active=False,
     )
 
     assert "guidance_scale" not in merged

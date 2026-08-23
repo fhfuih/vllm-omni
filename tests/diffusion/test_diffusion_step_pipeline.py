@@ -18,7 +18,6 @@ from tests.helpers.mark import hardware_test
 from vllm_omni.diffusion.data import DiffusionOutput
 from vllm_omni.diffusion.diffusion_engine import DiffusionEngine
 from vllm_omni.diffusion.diffusion_kv.config import DiffusionKVCacheMode
-from vllm_omni.diffusion.diffusion_kv.metadata import DiffusionKVMetadata
 from vllm_omni.diffusion.distributed.cfg_parallel import CFGParallelMixin
 from vllm_omni.diffusion.distributed.comm import RingComm, SeqAllToAll4D
 from vllm_omni.diffusion.distributed.parallel_state import (
@@ -327,6 +326,8 @@ def _make_runner(
     runner.kv_transfer_manager = SimpleNamespace(
         receive_multi_kv_cache_distributed=lambda req, cfg_kv_collect_func=None, target_device=None: None
     )
+    runner._kv_prefetch_enabled = False
+    runner.diffusion_kv_backend = SimpleNamespace(paged_attention_runtime=None)
     return runner
 
 
@@ -347,6 +348,8 @@ def _make_distributed_runner(mode: str, device: torch.device):
     runner.kv_transfer_manager = SimpleNamespace(
         receive_multi_kv_cache_distributed=lambda req, cfg_kv_collect_func=None, target_device=None: None
     )
+    runner._kv_prefetch_enabled = False
+    runner.diffusion_kv_backend = SimpleNamespace(paged_attention_runtime=None)
     return runner
 
 
@@ -507,81 +510,6 @@ def test_step_profiler_reports_denoise_step_as_diffuse():
 @pytest.mark.cpu
 class TestRunner:
     """DiffusionModelRunner.execute_stepwise"""
-
-    @pytest.mark.parametrize(
-        ("diffusion_kv_mode", "should_cleanup"),
-        [
-            (DiffusionKVCacheMode.DENSE_LEGACY, False),
-            (DiffusionKVCacheMode.PAGED_SCHEDULER, True),
-        ],
-    )
-    def test_scheduler_finished_cleanup_only_runs_for_paged_kv(
-        self,
-        mocker: MockerFixture,
-        diffusion_kv_mode: DiffusionKVCacheMode,
-        should_cleanup: bool,
-    ):
-        runner = _make_runner(diffusion_kv_mode)
-        cleanup = mocker.patch.object(runner, "remove_diffusion_kv_requests")
-        expected_output = object()
-        mocker.patch.object(runner, "_execute_stepwise_core", return_value=expected_output)
-        scheduler_output = DiffusionSchedulerOutput(
-            step_id=1,
-            scheduled_new_reqs=[],
-            scheduled_cached_reqs=CachedRequestData.make_empty(),
-            finished_req_ids={"finished-request"},
-            num_running_reqs=0,
-            num_waiting_reqs=0,
-        )
-
-        output = DiffusionModelRunner.execute_stepwise(runner, scheduler_output)
-
-        assert output is expected_output
-        if should_cleanup:
-            cleanup.assert_called_once_with(["finished-request"])
-        else:
-            cleanup.assert_not_called()
-
-    @pytest.mark.parametrize(
-        ("diffusion_kv_mode", "should_cleanup"),
-        [
-            (DiffusionKVCacheMode.DENSE_LEGACY, False),
-            (DiffusionKVCacheMode.PAGED_SCHEDULER, True),
-        ],
-    )
-    def test_terminal_cleanup_only_runs_for_paged_kv(
-        self,
-        monkeypatch: pytest.MonkeyPatch,
-        mocker: MockerFixture,
-        diffusion_kv_mode: DiffusionKVCacheMode,
-        should_cleanup: bool,
-    ):
-        runner = _make_runner(diffusion_kv_mode)
-        cleanup = mocker.patch.object(runner, "remove_diffusion_kv_requests")
-        install = mocker.patch.object(runner, "install_diffusion_kv_metadata")
-        req = _make_step_request()
-        scheduler_output = _make_scheduler_output(req, step_id=0)
-        if should_cleanup:
-            scheduler_output.scheduled_new_reqs[0].diffusion_kv_metadata = DiffusionKVMetadata(
-                request_id=req.request_id,
-                allocation_generation=1,
-                sequences=(),
-            )
-        monkeypatch.setattr(model_runner_module, "set_forward_context", _noop_forward_context)
-
-        first_output = DiffusionModelRunner.execute_stepwise(runner, scheduler_output)
-        assert first_output.get_request_output(req.request_id).finished is False
-        cleanup.assert_not_called()
-
-        output = DiffusionModelRunner.execute_stepwise(runner, _make_cached_scheduler_output(step_id=1))
-
-        assert output.get_request_output(req.request_id).finished is True
-        if should_cleanup:
-            install.assert_called_once_with(scheduler_output.scheduled_new_reqs[0].diffusion_kv_metadata)
-            cleanup.assert_called_once_with([req.request_id])
-        else:
-            install.assert_not_called()
-            cleanup.assert_not_called()
 
     def test_completes_request_and_clears_state(self, monkeypatch):
         runner = _make_runner()
@@ -792,7 +720,6 @@ class TestRunner:
         runner.cache_backend = None
         runner.offload_backend = None
         runner.state_cache = {}
-        runner.kv_transfer_manager = SimpleNamespace()
 
         monkeypatch.setattr(model_runner_module, "DiffusersPipelineLoader", _FakeLoader)
         monkeypatch.setattr(model_runner_module, "DeviceMemoryProfiler", _FakeProfiler)

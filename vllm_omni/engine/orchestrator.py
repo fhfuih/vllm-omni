@@ -33,6 +33,7 @@ from vllm_omni.config.stage_config import DuplexSessionRuntimeConfig
 from vllm_omni.distributed.omni_connectors.utils.config import stage_receives_chunks
 from vllm_omni.engine import OmniEngineCoreRequest
 from vllm_omni.engine.cfg_companion_tracker import CfgCompanionTracker
+from vllm_omni.engine.kv_transfer_backend import KVTransferBackendManager, KVTransferPlan
 from vllm_omni.engine.membership_controller import MembershipController
 from vllm_omni.engine.messages import (
     AbortRequestMessage,
@@ -196,11 +197,7 @@ class OrchestratorRequestState:
     duplex_stage_fences: dict[int, DuplexFence] = field(default_factory=dict)
     duplex_config_generation: int = -1
     running_counter_registered: bool = False
-
-    # fields for AR-DiT KV connection v1
-    native_kv_transfer_id: str | None = None
-    native_kv_source_params: dict[str, Any] | None = None
-    native_kv_target_params: dict[str, Any] | None = None
+    kv_transfer_plan: KVTransferPlan | None = None
 
 
 @dataclass
@@ -389,6 +386,7 @@ class Orchestrator:
         self.async_chunk = bool(async_chunk)
         self.num_stages = len(stage_pools)
         self.stage_pools: list[StagePool] = stage_pools
+        self._kv_transfer_backend = KVTransferBackendManager(stage_pools)
         self.log_stats = log_stats
         self._orch_monitor = create_orch_monitor(
             enabled=enable_orch_monitor,
@@ -700,7 +698,17 @@ class Orchestrator:
             mm_features=getattr(prompt, "mm_features", None),
         )
         self.request_states[request_id] = req_state
-        self._maybe_attach_native_kv_handshake(req_state)
+        req_state.kv_transfer_plan = self._kv_transfer_backend.create_plan(
+            request_id,
+            source_stage_id=0,
+            final_stage_id=final_stage_id,
+        )
+        if req_state.kv_transfer_plan is not None:
+            self._kv_transfer_backend.prepare_source(
+                req_state.kv_transfer_plan,
+                req_state.sampling_params_list[0],
+                source_request=prompt,
+            )
         self._register_running_request(req_state)
         req_state.streaming.enabled = bool(getattr(prompt, "resumable", False))
         req_state.stage_submit_ts[stage_id] = _time.time()
@@ -1909,7 +1917,7 @@ class Orchestrator:
             # request could be forwarded.
             await self._fail_request_dead_stage(req_id, next_logical)
             return
-        next_client = next_pool.stage_client
+        next_client = next_pool.get_bound_client(req_id) or next_pool.stage_client
         params = req_state.sampling_params_list[next_logical]
         source_outputs = [output]
         next_stage_resumable = is_streaming_session and not is_final_update
@@ -2051,11 +2059,10 @@ class Orchestrator:
                     req_id,
                     req_state,
                     diffusion_prompt,
-                    submit_kwargs=self._diffusion_submit_kwargs(
-                        req_id,
-                        src_stage_id,
-                        next_client,
-                        req_state,
+                    submit_kwargs=self._kv_transfer_backend.build_target_submit_kwargs(
+                        req_state.kv_transfer_plan,
+                        source_params=req_state.sampling_params_list[src_stage_id],
+                        source_output=output,
                     ),
                     params_override=self._maybe_clone_diffusion_params_for_cfg(req_id, params),
                 )
@@ -2307,11 +2314,9 @@ class Orchestrator:
             _t_submit_start = _time.perf_counter()
 
             if next_pool.stage_type == "diffusion":
-                submit_kwargs = self._diffusion_submit_kwargs(
-                    request_id,
-                    next_stage_id - 1,
-                    next_pool.stage_client,
-                    req_state,
+                submit_kwargs = self._kv_transfer_backend.build_target_submit_kwargs(
+                    req_state.kv_transfer_plan,
+                    source_params=req_state.sampling_params_list[next_stage_id - 1],
                 )
                 submitted = await self._dispatch_or_fail_request(
                     lambda: next_pool.submit_initial(
@@ -2394,116 +2399,6 @@ class Orchestrator:
             )
 
         return True
-
-    def _stage_kv_transfer_config(self, stage_id: int) -> Any:
-        pool = self.stage_pools[stage_id]
-        cfg = pool.stage_vllm_config
-        if cfg is not None:
-            kv_cfg = getattr(cfg, "kv_transfer_config", None)
-            if kv_cfg is not None:
-                return kv_cfg
-        for replica_id in pool.live_replica_ids():
-            client = pool.clients[replica_id]
-            if client is None:
-                continue
-            od_config = getattr(client, "od_config", None)
-            if od_config is not None and od_config.kv_transfer_config is not None:
-                return od_config.kv_transfer_config
-        return None
-
-    def _maybe_attach_native_kv_handshake(self, req_state: OrchestratorRequestState) -> None:
-        """Mint one transfer_id and matching source/target Mooncake params, if there is a subsequent DiT stage."""
-        from vllm_omni.diffusion.diffusion_kv.v1.connector import (
-            bootstrap_addr_from_kv_transfer_config,
-            build_source_kv_transfer_params,
-            build_target_kv_transfer_params,
-            mint_transfer_id,
-        )
-
-        if req_state.final_stage_id < 1:
-            return
-        dit_cfg = None
-        ar_cfg = self._stage_kv_transfer_config(0)
-        for stage_id in range(1, req_state.final_stage_id + 1):
-            if self.stage_pools[stage_id].stage_type == "diffusion":
-                dit_cfg = self._stage_kv_transfer_config(stage_id)
-                if dit_cfg is not None:
-                    break
-        if dit_cfg is None:
-            return
-
-        transfer_id = mint_transfer_id(req_state.request_id)
-        ar_engine_id = ar_cfg.engine_id if ar_cfg is not None else None
-        dit_engine_id = dit_cfg.engine_id
-        source_params = build_source_kv_transfer_params(
-            transfer_id=transfer_id,
-            remote_engine_id=dit_engine_id,
-            remote_bootstrap_addr=bootstrap_addr_from_kv_transfer_config(dit_cfg),
-        )
-        target_params = build_target_kv_transfer_params(
-            transfer_id=transfer_id,
-            remote_engine_id=ar_engine_id,
-            remote_bootstrap_addr=bootstrap_addr_from_kv_transfer_config(ar_cfg),
-        )
-        req_state.native_kv_transfer_id = transfer_id
-        req_state.native_kv_source_params = source_params
-        req_state.native_kv_target_params = target_params
-
-        ar_params = req_state.sampling_params_list[0]
-        extra_args = ar_params.extra_args
-        if extra_args is None:
-            extra_args = {}
-            ar_params.extra_args = extra_args
-        extra_args["kv_transfer_params"] = dict(source_params)
-
-    def _diffusion_submit_kwargs(
-        self,
-        request_id: str,
-        src_stage_id: int,
-        next_client: Any,
-        req_state: OrchestratorRequestState,
-    ) -> dict[str, Any]:
-        submit_kwargs: dict[str, Any] = {
-            "kv_sender_info": self._build_kv_sender_info(
-                list(getattr(next_client, "engine_input_source", None) or [src_stage_id]),
-                request_id=request_id,
-            )
-        }
-        if req_state.native_kv_target_params:
-            submit_kwargs["kv_transfer_params"] = req_state.native_kv_target_params
-        return submit_kwargs
-
-    def _build_kv_sender_info(
-        self,
-        sender_stage_ids: list[int],
-        *,
-        request_id: str | None = None,
-    ) -> dict[int, dict[str, Any]] | None:
-        """Build per-request sender info for diffusion KV-transfer receivers."""
-        sender_infos: dict[int, dict[str, Any]] = {}
-        for sender_stage_id in dict.fromkeys(sender_stage_ids):
-            if sender_stage_id < 0 or sender_stage_id >= len(self.stage_pools):
-                continue
-
-            sender_pool = self.stage_pools[sender_stage_id]
-            sender_stage = sender_pool.get_bound_client(request_id) if request_id is not None else None
-            if sender_stage is None:
-                sender_stage = sender_pool.stage_client
-            get_sender_info = getattr(sender_stage, "get_kv_sender_info", None)
-            if not callable(get_sender_info):
-                continue
-
-            sender_info = get_sender_info()
-            if not sender_info:
-                logger.warning(
-                    "[Orchestrator] Stage-%s has no KV sender info available",
-                    sender_stage_id,
-                )
-                continue
-
-            sender_infos[sender_stage_id] = sender_info
-
-        return sender_infos or None
 
     # ---- Shutdown / lifecycle ----
 

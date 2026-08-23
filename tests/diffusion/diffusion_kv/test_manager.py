@@ -7,7 +7,7 @@ import vllm.v1.core.single_type_kv_cache_manager as native_kv_managers
 from vllm.v1.kv_cache_interface import FullAttentionSpec, KVCacheConfig, KVCacheGroupSpec, KVCacheTensor
 
 from vllm_omni.diffusion.diffusion_kv.manager import DiffusionKVAdmissionError, DiffusionKVCacheManager
-from vllm_omni.diffusion.diffusion_kv.request import DiffusionKVContext, DiffusionKVRequest
+from vllm_omni.diffusion.diffusion_kv.request import DiffusionKVRequest
 
 pytestmark = [pytest.mark.core_model, pytest.mark.cpu, pytest.mark.diffusion]
 
@@ -29,14 +29,13 @@ def _config(num_blocks: int) -> KVCacheConfig:
     )
 
 
-def _request(public_id: str, sequence_id: int, *, seq_len: int = 8, kv_contexts=()) -> DiffusionKVRequest:
+def _request(public_id: str, sequence_id: int, *, seq_len: int = 8) -> DiffusionKVRequest:
     return DiffusionKVRequest(
         f"{public_id}/diffusion-kv/{sequence_id}",
         sequence_id=sequence_id,
         prefix_len=4,
         target_len=4,
         seq_len=seq_len,
-        kv_contexts=kv_contexts,
     )
 
 
@@ -64,8 +63,6 @@ def test_reserve_and_free_multi_cfg_request() -> None:
     assert [sequence.target_len for sequence in metadata.sequences] == [4, 4]
     assert [sequence.seq_len for sequence in metadata.sequences] == [8, 8]
     assert [len(sequence.block_ids[0]) for sequence in metadata.sequences] == [2, 2]
-    assert all(sequence.context_ids == () for sequence in metadata.sequences)
-    assert metadata.contexts == ()
     assert metadata == manager.get_metadata("public")
     assert manager.native_manager.block_pool.get_num_free_blocks() == free_before - 4
 
@@ -163,17 +160,6 @@ def test_cfg_allocation_exception_rolls_back(monkeypatch) -> None:
 
     assert manager.has_request("public") is False
     assert manager.native_manager.block_pool.get_num_free_blocks() == free_before
-
-
-def test_rejects_independent_context_until_role_routing_is_implemented() -> None:
-    manager = _manager(8)
-    context = DiffusionKVContext(context_id="text", cache_role="cross.text", num_tokens=8)
-
-    with pytest.raises(DiffusionKVAdmissionError, match="DiffusionKVContext"):
-        manager.reserve_request(
-            "public",
-            (_request("public", 0, kv_contexts=(context,)),),
-        )
 
 
 def test_rejects_sequence_longer_than_admission_bound() -> None:

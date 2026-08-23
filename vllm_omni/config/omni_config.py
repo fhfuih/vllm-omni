@@ -13,15 +13,17 @@ from __future__ import annotations
 import copy
 from collections.abc import Mapping
 from dataclasses import InitVar, dataclass, field, fields
+from enum import Enum
 from functools import wraps
 from inspect import Parameter, signature
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Literal, TypeAlias, TypedDict, cast
+from typing import Any, Literal, TypeAlias, TypedDict, cast
 
 from pydantic import ConfigDict, Field, model_validator
 from typing_extensions import Self
 from vllm.config import CacheConfig as VllmCacheConfig
 from vllm.config import CompilationConfig as VllmCompilationConfig
+from vllm.config import KVTransferConfig
 from vllm.config import LoadConfig as VllmLoadConfig
 from vllm.config import ParallelConfig as VllmParallelConfig
 from vllm.config import ProfilerConfig as VllmProfilerConfig
@@ -49,8 +51,35 @@ from vllm_omni.config.stage_config import (
 )
 from vllm_omni.diffusion.diffusion_kv.config import DiffusionKVCacheMode
 
-if TYPE_CHECKING:
-    from vllm.config import KVTransferConfig
+
+class KVTransferBackend(str, Enum):
+    KV_CONNECTOR = "kv_connector"
+    OMNI_KV_TRANSFER = "omni_kv_transfer"
+    DISABLED = "disabled"
+
+    @classmethod
+    def resolve(
+        cls,
+        *,
+        kv_transfer_config: KVTransferConfig | None,
+        omni_kv_config: dict[str, Any] | None,
+    ) -> KVTransferBackend:
+        has_kv_connector = kv_transfer_config is not None
+        omni_kv_config = omni_kv_config or {}
+        has_omni_kv = bool(omni_kv_config.get("need_send_cache") or omni_kv_config.get("need_recv_cache"))
+
+        if has_kv_connector and has_omni_kv:
+            raise ValueError(
+                "Both KVTransferConfig and omni_kv_config (send/recv) are enabled; "
+                "only one KV transfer backend is allowed"
+            )
+
+        if has_kv_connector:
+            return cls.KV_CONNECTOR
+        if has_omni_kv:
+            return cls.OMNI_KV_TRANSFER
+        return cls.DISABLED
+
 
 _EXECUTION_TYPE_TO_STAGE_WORKER: dict[StageExecutionType, tuple[StageType, str | None]] = {
     StageExecutionType.LLM_AR: (StageType.LLM, "ar"),
@@ -232,6 +261,7 @@ class _ParallelEngineOverrides(_ParallelConfigEngineOverrides, total=False):
 
 class _ConnectorEngineOverrides(TypedDict, total=False):
     omni_kv_config: dict[str, Any]
+    kv_transfer_config: KVTransferConfig
 
 
 @dataclass(frozen=True)
@@ -476,6 +506,7 @@ class OmniStageConnectorConfig:
 
     async_chunk: bool = False
     omni_kv_config: dict[str, Any] | None = None
+    kv_transfer_config: KVTransferConfig | None = None
     stage_connector: dict[str, Any] = field(
         default_factory=lambda: {
             "name": "SharedMemoryConnector",
@@ -484,6 +515,13 @@ class OmniStageConnectorConfig:
     )
     output_connectors: dict[str, Any] | None = None
     input_connectors: dict[str, Any] | None = None
+
+    @property
+    def kv_transfer_backend(self) -> KVTransferBackend:
+        return KVTransferBackend.resolve(
+            kv_transfer_config=self.kv_transfer_config,
+            omni_kv_config=self.omni_kv_config,
+        )
 
 
 @config
@@ -681,7 +719,7 @@ class _DiffusionConfigProjection:
     cache_config: Any = field(default_factory=dict)
     enable_cache_dit_summary: bool = False
     diffusion_kv_mode: DiffusionKVCacheMode = DiffusionKVCacheMode.DENSE_LEGACY
-    diffusion_kv_max_rows_per_request: int | None = Field(default=None, ge=1, strict=True)
+    diffusion_kv_max_sequences_per_request: int | None = Field(default=None, ge=1, strict=True)
     enable_prompt_embed_cache: bool = False
     prompt_embed_cache_size: int = Field(default=32, ge=1)
     enable_session_state_manager: bool = False
@@ -734,7 +772,7 @@ class _DiffusionConfigProjection:
     worker_extension_cls: str | None = None
     custom_pipeline_args: dict[str, Any] | None = None
     additional_config: dict[str, Any] = field(default_factory=dict)
-    kv_transfer_config: KVTransferConfig | dict[str, Any] | None = None
+    kv_transfer_config: KVTransferConfig | None = None
     enable_stage_verification: bool = True
     prompt_file_path: str | None = None
     quantization_config: _QuantizationConfigType = None
@@ -823,9 +861,9 @@ class _DiffusionConfigProjection:
         self.diffusion_kv_mode = parse_diffusion_kv_cache_mode(self.diffusion_kv_mode)
         if (
             self.diffusion_kv_mode is DiffusionKVCacheMode.PAGED_SCHEDULER
-            and self.diffusion_kv_max_rows_per_request is None
+            and self.diffusion_kv_max_sequences_per_request is None
         ):
-            raise ValueError("paged_scheduler requires diffusion_kv_max_rows_per_request to be set")
+            raise ValueError("paged_scheduler requires diffusion_kv_max_sequences_per_request to be set")
         self.diffusion_kv_cache_skip_step_indices = parse_kv_cache_skip_selector(self.diffusion_kv_cache_skip_steps)
         self.diffusion_kv_cache_skip_layer_indices = parse_kv_cache_skip_selector(self.diffusion_kv_cache_skip_layers)
 
@@ -1706,6 +1744,7 @@ def _build_connector_config(
     return OmniStageConnectorConfig(
         async_chunk=bool(deploy.async_chunk),
         omni_kv_config=_copy_value(engine.get("omni_kv_config")),
+        kv_transfer_config=_copy_value(engine.get("kv_transfer_config")),
         output_connectors=_copy_value(output_connectors) if output_connectors else None,
         input_connectors=_copy_value(input_connectors) if input_connectors else None,
     )

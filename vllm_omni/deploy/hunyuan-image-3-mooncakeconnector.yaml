@@ -1,0 +1,91 @@
+pipeline: hunyuan_image_3_moe
+async_chunk: false
+trust_remote_code: true
+
+stages:
+  - stage_id: 0
+    is_comprehension: true
+    final_output: true
+    final_output_type: text
+    num_replicas: 2
+    max_num_seqs: 1
+    gpu_memory_utilization: 0.92
+    enforce_eager: true
+    enable_prefix_caching: false
+    max_num_batched_tokens: 32768
+    devices: "0,1,2,3"
+    tensor_parallel_size: 2
+    moe_backend: triton
+    limit_mm_per_prompt: {image: 1}
+    hf_overrides:
+      rope_parameters: {mrope_section: [0, 32, 32], rope_type: default}
+    kv_transfer_config:
+      kv_connector: MooncakeConnector
+      kv_role: kv_producer
+      engine_id: hunyuan-image3-ar
+      kv_ip: 127.0.0.1
+      kv_port: 8998
+      kv_connector_extra_config:
+        mooncake_protocol: tcp
+        bootstrap_addr: http://127.0.0.1:8998
+    default_sampling_params:
+      temperature: 0.0
+      top_p: 1
+      top_k: -1
+      max_tokens: 8192
+      detokenize: true
+      skip_special_tokens: false
+      include_stop_str_in_output: true
+
+  - stage_id: 1
+    num_replicas: 2
+    max_num_seqs: 1
+    max_num_batched_tokens: 32768
+    max_model_len: 16384
+    gpu_memory_utilization: 0.98
+    enforce_eager: true
+    devices: "4,5,6,7"
+    distributed_executor_backend: mp
+    moe_backend: triton
+    quantization: fp8
+    additional_config:
+      diffusion_kv_profile_height: 512
+      diffusion_kv_profile_width: 512
+      diffusion_kv_profile_num_image_inputs: 1
+      diffusion_kv_profile_extra_args:
+        bot_task: think_recaption
+        use_system_prompt: en_unified
+      diffusion_kv_profile_prompt: >-
+        Preserve the source image composition and identity while applying a detailed edit.
+    diffusion_kv_mode: paged_scheduler
+    diffusion_kv_max_sequences_per_request: 2
+    kv_transfer_config:
+      kv_connector: MooncakeConnector
+      kv_role: kv_consumer
+      engine_id: hunyuan-image3-dit
+      kv_ip: 127.0.0.1
+      kv_port: 8998
+      kv_connector_extra_config:
+        mooncake_protocol: tcp
+        bootstrap_addr: http://127.0.0.1:8998
+    parallel_config:
+      tensor_parallel_size: 1
+      enable_expert_parallel: true
+      sequence_parallel_size: 2
+      ulysses_degree: 2
+      ring_degree: 1
+      allgather_degree: 1
+      cfg_parallel_size: 1
+      vae_patch_parallel_size: 2
+    vae_use_tiling: true
+    default_sampling_params:
+      height: 512
+      width: 512
+      num_inference_steps: 2
+      guidance_scale: 2.0
+
+edges:
+  - from: 0
+    to: 1
+    window_size: -1
+    max_inflight: 4

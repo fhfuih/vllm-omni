@@ -58,13 +58,15 @@ def create_diffusion_client(
         od_config=od_config,
         stage_init_timeout=stage_init_timeout,
     )
-    return StageDiffusionClient.from_addresses(
+    client = StageDiffusionClient.from_addresses(
         metadata,
         request_address=proc_manager.addresses.inputs[0],
         response_address=proc_manager.addresses.outputs[0],
         proc_manager=proc_manager,
         batch_size=batch_size,
     )
+    client.od_config = od_config
+    return client
 
 
 class StageDiffusionClient(StageClientBase):

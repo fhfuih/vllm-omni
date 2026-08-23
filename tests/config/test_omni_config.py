@@ -15,6 +15,7 @@ from pydantic.fields import FieldInfo
 from transformers import Qwen3OmniMoeConfig
 from vllm.config import CacheConfig as VllmCacheConfig
 from vllm.config import CompilationConfig as VllmCompilationConfig
+from vllm.config import KVTransferConfig
 from vllm.config import LoadConfig as VllmLoadConfig
 from vllm.config import ParallelConfig as VllmParallelConfig
 from vllm.config import ProfilerConfig as VllmProfilerConfig
@@ -24,6 +25,7 @@ from tests.helpers.stage_config import get_deploy_config_path
 from vllm_omni.config import omni_config as omni_config_module
 from vllm_omni.config.omni_config import (
     BaseVllmOmniStageConfig,
+    KVTransferBackend,
     OmniStageCacheConfig,
     OmniStageConnectorConfig,
     OmniStageDiffusionParallelConfig,
@@ -591,10 +593,19 @@ def test_sub_config_fields_match_structured_scopes():
     assert {f.name for f in fields(OmniStageConnectorConfig)} == {
         "async_chunk",
         "omni_kv_config",
+        "kv_transfer_config",
         "stage_connector",
         "output_connectors",
         "input_connectors",
     }
+    connector_config = OmniStageConnectorConfig(
+        kv_transfer_config={
+            "kv_connector": "MooncakeConnector",
+            "kv_role": "kv_producer",
+            "engine_id": "ar-engine",
+        }
+    )
+    assert isinstance(connector_config.kv_transfer_config, KVTransferConfig)
     vllm_parallel_fields = {f.name for f in fields(VllmParallelConfig)}
     assert issubclass(OmniStageParallelConfig, VllmParallelConfig)
     assert {f.name for f in fields(OmniStageParallelConfig)} == vllm_parallel_fields
@@ -1103,7 +1114,7 @@ def test_diffusion_config_from_kwargs_reuses_legacy_normalization(monkeypatch):
         kv_cache_skip_layers=[2],
         static_lora_scale=0.25,
         diffusion_kv_mode="paged_scheduler",
-        diffusion_kv_max_rows_per_request=2,
+        diffusion_kv_max_sequences_per_request=2,
         diffusers_load_kwargs=None,
         diffusers_call_kwargs=None,
     )
@@ -1135,7 +1146,7 @@ def test_from_pipeline_config_normalizes_diffusion_config_aliases_from_engine_ar
                 "    diffusion_attention_backend: flash_attn",
                 "    fa_deterministic: true",
                 "    diffusion_kv_mode: paged_scheduler",
-                "    diffusion_kv_max_rows_per_request: 2",
+                "    diffusion_kv_max_sequences_per_request: 2",
             ]
         )
     )
@@ -1149,28 +1160,7 @@ def test_from_pipeline_config_normalizes_diffusion_config_aliases_from_engine_ar
     assert stage.diffusion_config.diffusion_attention_config.default.backend == "flash_attn"
     assert stage.diffusion_config.fa_deterministic is True
     assert stage.diffusion_config.diffusion_kv_mode is DiffusionKVCacheMode.PAGED_SCHEDULER
-    assert stage.diffusion_config.diffusion_kv_max_rows_per_request == 2
-
-
-def test_from_pipeline_config_rejects_reserved_diffusion_kv_mode(tmp_path):
-    deploy_path = tmp_path / "dreamzero_reserved_diffusion_kv.yaml"
-    deploy_path.write_text(
-        "\n".join(
-            [
-                "pipeline: dreamzero",
-                "async_chunk: false",
-                "stages:",
-                "  - stage_id: 0",
-                "    diffusion_kv_mode: paged_worker_local",
-            ]
-        )
-    )
-
-    with pytest.raises(ValueError, match="reserved but not implemented"):
-        _from_pipeline_key(
-            "dreamzero",
-            deploy_config_path=str(deploy_path),
-        )
+    assert stage.diffusion_config.diffusion_kv_max_sequences_per_request == 2
 
 
 def test_diffusion_config_field_classification_covers_current_fields():
@@ -1192,7 +1182,7 @@ def test_diffusion_config_field_classification_covers_current_fields():
         "prompt_embed_cache_size",
         "diffusion_kv_cache_dtype",
         "diffusion_kv_mode",
-        "diffusion_kv_max_rows_per_request",
+        "diffusion_kv_max_sequences_per_request",
     } <= omni_config_module._DIFFUSION_ONLY_CONFIG_FIELDS
     assert {
         "revision",
@@ -1229,3 +1219,25 @@ def test_diffusion_quantization_mapping_reaches_terminal_config(monkeypatch):
 
     assert cfg.quantization_config is not None
     assert cfg.quantization_config.get_name() == "int8"
+
+
+@pytest.mark.parametrize(
+    ("kwargs", "expected"),
+    [
+        ({"kv_transfer_config": KVTransferConfig(kv_role="kv_producer")}, KVTransferBackend.KV_CONNECTOR),
+        ({"omni_kv_config": {"need_send_cache": True}}, KVTransferBackend.OMNI_KV_TRANSFER),
+        ({"omni_kv_config": {"need_recv_cache": True}}, KVTransferBackend.OMNI_KV_TRANSFER),
+        ({}, KVTransferBackend.DISABLED),
+    ],
+)
+def test_kv_transfer_backend(kwargs, expected):
+    assert OmniStageConnectorConfig(**kwargs).kv_transfer_backend is expected
+
+
+def test_kv_transfer_backend_rejects_both_enabled():
+    cfg = OmniStageConnectorConfig(
+        kv_transfer_config=KVTransferConfig(kv_role="kv_producer"),
+        omni_kv_config={"need_send_cache": True},
+    )
+    with pytest.raises(ValueError, match="only one KV transfer backend is allowed"):
+        cfg.kv_transfer_backend

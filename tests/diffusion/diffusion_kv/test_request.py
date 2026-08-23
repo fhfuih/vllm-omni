@@ -14,7 +14,7 @@ from vllm.v1.kv_cache_interface import (
 )
 from vllm.v1.request import RequestStatus
 
-from vllm_omni.diffusion.diffusion_kv.request import DiffusionKVContext, DiffusionKVRequest
+from vllm_omni.diffusion.diffusion_kv.request import DiffusionKVRequest
 
 pytestmark = [pytest.mark.core_model, pytest.mark.cpu, pytest.mark.diffusion]
 
@@ -43,7 +43,6 @@ def test_request_exposes_native_request_and_diffusion_semantics() -> None:
     assert request.num_prompt_tokens == 4
     assert request.num_computed_tokens == 0
     assert request.block_hashes == []
-    assert request.kv_contexts == ()
     assert request.skip_reading_prefix_cache is True
     assert request.shared_prefix_boundary == 0
     assert request.status is RequestStatus.WAITING
@@ -64,46 +63,6 @@ def test_request_exposes_native_request_and_diffusion_semantics() -> None:
 def test_request_rejects_invalid_lengths(overrides, message: str) -> None:
     with pytest.raises(ValueError, match=message):
         _request(**overrides)
-
-
-@pytest.mark.parametrize(
-    ("overrides", "message"),
-    [
-        ({"context_id": ""}, "context_id"),
-        ({"cache_role": ""}, "cache_role"),
-        ({"num_tokens": 0}, "num_tokens"),
-    ],
-)
-def test_context_rejects_invalid_identity_or_length(overrides, message: str) -> None:
-    values = dict(context_id="text", cache_role="cross.text", num_tokens=8)
-    values.update(overrides)
-
-    with pytest.raises(ValueError, match=message):
-        DiffusionKVContext(**values)
-
-
-def test_request_owns_independent_kv_contexts() -> None:
-    text = DiffusionKVContext(context_id="text", cache_role="cross.text", num_tokens=8)
-    image = DiffusionKVContext(context_id="image", cache_role="cross.image", num_tokens=4)
-
-    request = _request(kv_contexts=(text, image))
-
-    assert request.kv_contexts == (text, image)
-
-
-def test_request_rejects_duplicate_context_ids() -> None:
-    contexts = (
-        DiffusionKVContext(context_id="condition", cache_role="cross.text", num_tokens=8),
-        DiffusionKVContext(context_id="condition", cache_role="cross.image", num_tokens=4),
-    )
-
-    with pytest.raises(ValueError, match="unique context_id"):
-        _request(kv_contexts=contexts)
-
-
-def test_request_rejects_non_context_values() -> None:
-    with pytest.raises(TypeError, match="DiffusionKVContext"):
-        _request(kv_contexts=(object(),))
 
 
 def _manager(*, enable_caching: bool) -> KVCacheManager:

@@ -2,34 +2,11 @@
 # SPDX-FileCopyrightText: Copyright contributors to the vLLM project
 """GPU landing test for AR → DiT native Mooncake paged KV.
 
-This module checks that fake KV pages written on a Mooncake producer (AR) can
-land on DiT-side tensors after the PR-1 Omni control path:
-
-1. DiT Scheduler admission (reserve + ``update_state_after_alloc`` +
-   ``build_connector_meta``)
-2. Worker ``init_worker_kv_connector_v1`` + ``start_load_kv``
-
-It does **not** load Hunyuan/DiT weights and does **not** run prompt inference.
-The AR side injects a recognizable numeric pattern into GPU pages.
-
-#6102 stubs
------------
-#6102 owns ``DiffusionKVModelRunnerBackend`` (constructed on the model
-runner), physical ``initialize_kv_cache`` inside
-``DiffusionModelRunner.set_kv_cache_config``, and BlockTables. Page
-registration with Mooncake (``maybe_register_vllm_kv_caches``) remains this
-connector PR's responsibility and is not wired yet. This test therefore:
-
-- allocates GPU paged tensors from ``KVCacheConfig`` (stand-in for #6102
-  ``set_kv_cache_config`` → ``initialize_kv_cache``)
-- calls ``maybe_register_vllm_kv_caches`` directly (stand-in for the Worker
-  hook after backend init; #6102 does not expose ``kv_caches_by_layer``)
-- skips ``install_diffusion_kv_metadata`` / paged-attention forward and
-  asserts landing on the registered tensors
-
-After #6102 merges, replace ``_stub_6102_allocate_and_register_pages`` with
-real runner/backend init + Worker registration, and optionally assert
-through installed BlockTables rather than raw tensors.
+The AR side injects recognizable values into GPU pages without loading model
+weights.  The DiT side uses the production Scheduler, ModelRunner paged-cache
+backend, native BlockTables, ModelRunner-owned ActiveKVConnector, and pre-forward
+completion barrier.  A two-sequence request verifies CFG fan-out from one AR
+transfer ticket into distinct DiT allocations.
 
 Requires: CUDA GPU, ``mooncake`` TransferEngine, and a working local
 ``mooncake_protocol`` (defaults to ``tcp``). The test forces an eth-only
@@ -52,12 +29,12 @@ from types import SimpleNamespace
 
 import pytest
 import torch
-from vllm.config import set_current_vllm_config
+from torch import nn
+from vllm.config import KVTransferConfig, set_current_vllm_config
 from vllm.distributed.kv_transfer.kv_connector.factory import KVConnectorFactory
 from vllm.distributed.kv_transfer.kv_connector.v1.base import KVConnectorRole
 from vllm.distributed.kv_transfer.kv_transfer_state import (
     ensure_kv_transfer_shutdown,
-    get_kv_transfer_group,
     has_kv_transfer_group,
 )
 from vllm.distributed.parallel_state import (
@@ -67,23 +44,27 @@ from vllm.distributed.parallel_state import (
     init_distributed_environment,
 )
 from vllm.utils.network_utils import get_open_port
-from vllm.v1.kv_cache_interface import FullAttentionSpec
+from vllm.v1.core.sched.output import SchedulerOutput as NativeSchedulerOutput
+from vllm.v1.kv_cache_interface import (
+    FullAttentionSpec,
+    KVCacheConfig,
+    KVCacheGroupSpec,
+    KVCacheTensor,
+)
 from vllm.v1.request import RequestStatus
 
 from tests.diffusion.diffusion_kv.helper import ConcreteScheduler, make_kv_cache_config
 from tests.helpers.mark import hardware_marks
+from vllm_omni.diffusion.attention.layer import Attention
+from vllm_omni.diffusion.config import set_current_diffusion_config
 from vllm_omni.diffusion.data import OmniDiffusionConfig
+from vllm_omni.diffusion.diffusion_kv.kv_connector import shutdown_kv_connector_v1
 from vllm_omni.diffusion.diffusion_kv.request import DiffusionKVRequest
-from vllm_omni.diffusion.diffusion_kv.v1.connector import (
-    init_worker_kv_connector_v1,
-    maybe_register_vllm_kv_caches,
-    mint_transfer_id,
-    shutdown_kv_connector_v1,
-)
 from vllm_omni.diffusion.request import OmniDiffusionRequest
 from vllm_omni.diffusion.sched.base_scheduler import BaseScheduler
 from vllm_omni.diffusion.vllm_config import create_diffusion_vllm_config
 from vllm_omni.diffusion.worker.diffusion_model_runner import DiffusionModelRunner
+from vllm_omni.diffusion.worker.diffusion_worker import DiffusionWorker
 from vllm_omni.inputs.data import OmniDiffusionSamplingParams
 from vllm_omni.platforms import current_omni_platform
 
@@ -96,7 +77,7 @@ pytestmark = [
 LAYER_NAME = "model.layers.0.self_attn"
 BLOCK_SIZE = 16
 NUM_KV_HEADS = 2
-HEAD_SIZE = 8
+HEAD_SIZE = 64
 NUM_BLOCKS = 16
 SEQ_LEN = 32
 PREFIX_LEN = 16
@@ -225,11 +206,7 @@ def _make_kv_cache_config():
 
 
 def _alloc_paged_kv_tensor(device: torch.device) -> torch.Tensor:
-    """Blocks-first GPU tensor whose stride(0) matches one FullAttention page.
-
-    Stand-in for #6102 ``set_kv_cache_config`` → ``initialize_kv_cache``
-    physical allocation.
-    """
+    """Allocate source-model blocks with one FullAttention page per row."""
     spec = _make_kv_cache_config().kv_cache_groups[0].kv_cache_spec
     assert isinstance(spec, FullAttentionSpec)
     page_elems = spec.page_size_bytes // spec.dtype.itemsize
@@ -247,12 +224,60 @@ def _expected_page_value(source_block_id: int) -> float:
     return float(source_block_id + 1)
 
 
-def _patch_model_config_for_mooncake(model_config: object) -> None:
-    """Supply Mooncake worker lookups missing on Omni's diffusion ModelConfig stub."""
-    if not hasattr(model_config, "get_head_size"):
-        model_config.get_head_size = lambda: HEAD_SIZE  # type: ignore[attr-defined]
-    if not hasattr(model_config, "get_total_num_kv_heads"):
-        model_config.get_total_num_kv_heads = lambda: NUM_KV_HEADS  # type: ignore[attr-defined]
+def _configure_source_attention_geometry(vllm_config: object) -> None:
+    """Provide the fake source model's geometry through the production API."""
+
+    model_config = vllm_config.model_config  # type: ignore[attr-defined]
+    model_config.hf_config = SimpleNamespace(model_type="mooncake_landing_source")
+    model_config.set_attention_geometry(
+        num_heads=NUM_KV_HEADS,
+        num_kv_heads=NUM_KV_HEADS,
+        head_size=HEAD_SIZE,
+    )
+
+
+def _native_empty_scheduler_output() -> NativeSchedulerOutput:
+    return NativeSchedulerOutput.make_empty()
+
+
+class _LandingPipeline(nn.Module):
+    """Minimal model tree with one real cache-enabled Omni Attention layer."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.model = nn.Module()
+        self.model.layers = nn.ModuleList([nn.Module()])
+        self.model.layers[0].self_attn = Attention(
+            num_heads=NUM_KV_HEADS,
+            num_kv_heads=NUM_KV_HEADS,
+            head_size=HEAD_SIZE,
+            causal=False,
+            softmax_scale=HEAD_SIZE**-0.5,
+            prefix=LAYER_NAME,
+            paged_kv_cache_role="primary",
+            paged_kv_cache_dtype=DTYPE,
+        )
+
+
+def _make_runner_kv_cache_config(runner: DiffusionModelRunner) -> KVCacheConfig:
+    specs = runner.get_kv_cache_spec()
+    assert set(specs) == {LAYER_NAME}
+    spec = specs[LAYER_NAME]
+    return KVCacheConfig(
+        num_blocks=NUM_BLOCKS,
+        kv_cache_tensors=[
+            KVCacheTensor(
+                size=spec.page_size_bytes * NUM_BLOCKS,
+                shared_by=[LAYER_NAME],
+            )
+        ],
+        kv_cache_groups=[
+            KVCacheGroupSpec(
+                layer_names=[LAYER_NAME],
+                kv_cache_spec=spec,
+            )
+        ],
+    )
 
 
 def _init_single_gpu_parallel(master_port: int) -> None:
@@ -289,16 +314,8 @@ def _kv_transfer_config(*, engine_id: str, kv_role: str, extra: dict[str, object
     return payload
 
 
-def _stub_6102_allocate_and_register_pages(device: torch.device) -> torch.Tensor:
-    """Allocate and register DiT pages without #6102 backend init.
-
-    TODO(#6102): replace with ``ModelRunner.set_kv_cache_config`` (which
-    calls ``backend.initialize_kv_cache``), then the Worker
-    ``maybe_register_vllm_kv_caches(<layer_named_kv_caches>)`` hook.
-    """
-    kv_tensor = _alloc_paged_kv_tensor(device)
-    maybe_register_vllm_kv_caches({LAYER_NAME: kv_tensor})
-    return kv_tensor
+def _transfer_id() -> str:
+    return f"xfer-{REQUEST_ID}-s0-t1-a0"
 
 
 def _run_ar_producer(
@@ -314,13 +331,19 @@ def _run_ar_producer(
     try:
         od_config = OmniDiffusionConfig.from_kwargs(
             diffusion_kv_mode="paged_scheduler",
+            diffusion_kv_max_sequences_per_request=1,
             max_model_len=64,
-            kv_transfer_config=_kv_transfer_config(engine_id=AR_ENGINE_ID, kv_role="kv_producer"),
         )
         # Spawned producer has no pytest ``default_vllm_config`` fixture;
         # ``ensure_model_parallel_initialized`` requires a current config.
         vllm_config = create_diffusion_vllm_config(device, od_config)
-        _patch_model_config_for_mooncake(vllm_config.model_config)
+        vllm_config.kv_transfer_config = KVTransferConfig(
+            **_kv_transfer_config(
+                engine_id=AR_ENGINE_ID,
+                kv_role="kv_producer",
+            )
+        )
+        _configure_source_attention_geometry(vllm_config)
         with set_current_vllm_config(vllm_config):
             kv_cache_config = _make_kv_cache_config()
             _init_single_gpu_parallel(dist_port)
@@ -336,11 +359,12 @@ def _run_ar_producer(
             )
             ar_kv = _alloc_paged_kv_tensor(device)
             _fill_source_pages(ar_kv, SOURCE_BLOCK_IDS)
+            current_omni_platform.synchronize()
             worker.register_kv_caches({LAYER_NAME: ar_kv})
 
             bootstrap_addr = f"http://127.0.0.1:{bootstrap_port}"
             params: dict[str, object] = {
-                "transfer_id": mint_transfer_id(REQUEST_ID),
+                "transfer_id": _transfer_id(),
                 "do_remote_decode": True,
                 "do_remote_prefill": False,
                 "remote_engine_id": DIT_ENGINE_ID,
@@ -352,17 +376,17 @@ def _run_ar_producer(
             # async record_send_reqs — wait so the empty slot exists before the
             # finished path KeyErrors on a missing transfer_id.
             scheduler.update_state_after_alloc(request, SimpleNamespace(), 0)  # pyright: ignore[reportArgumentType]
-            meta = scheduler.build_connector_meta(object())  # pyright: ignore[reportArgumentType]
+            meta = scheduler.build_connector_meta(_native_empty_scheduler_output())
             worker.bind_connector_metadata(meta)
             worker.start_load_kv(None)  # pyright: ignore[reportArgumentType]
-            _wait_producer_send_slot(worker, mint_transfer_id(REQUEST_ID))
+            _wait_producer_send_slot(worker, _transfer_id())
 
             request.status = RequestStatus.FINISHED_LENGTH_CAPPED
             scheduler.request_finished(request, SOURCE_BLOCK_IDS)  # pyright: ignore[reportArgumentType]
-            meta = scheduler.build_connector_meta(object())  # pyright: ignore[reportArgumentType]
+            meta = scheduler.build_connector_meta(_native_empty_scheduler_output())
             worker.bind_connector_metadata(meta)
             worker.start_load_kv(None)  # pyright: ignore[reportArgumentType]
-            _wait_producer_send_ready(worker, mint_transfer_id(REQUEST_ID))
+            _wait_producer_send_ready(worker, _transfer_id())
 
             handshake.put({"ok": True, "bootstrap_addr": bootstrap_addr})
             stop_queue.get(timeout=RECV_TIMEOUT_S + 30)
@@ -410,19 +434,38 @@ def _run_dit_consumer_and_assert(dist_port: int, bootstrap_addr: str) -> None:
     current_omni_platform.set_device(device)
     od_config = OmniDiffusionConfig.from_kwargs(
         diffusion_kv_mode="paged_scheduler",
+        diffusion_kv_max_sequences_per_request=2,
         max_model_len=64,
+        max_num_seqs=1,
+        max_num_batched_tokens=64,
         kv_transfer_config=_kv_transfer_config(engine_id=DIT_ENGINE_ID, kv_role="kv_consumer"),
     )
     scheduler: BaseScheduler | None = None
-    dit_kv: torch.Tensor | None = None
+    dit_worker: DiffusionWorker | None = None
     try:
         vllm_config = create_diffusion_vllm_config(device, od_config)
-        _patch_model_config_for_mooncake(vllm_config.model_config)
         with set_current_vllm_config(vllm_config):
-            kv_cache_config = _make_kv_cache_config()
             _init_single_gpu_parallel(dist_port)
-            init_worker_kv_connector_v1(vllm_config, kv_cache_config=kv_cache_config)
-            dit_kv = _stub_6102_allocate_and_register_pages(device)
+            runner = DiffusionModelRunner(vllm_config, od_config, device)
+            with set_current_diffusion_config(od_config):
+                runner.pipeline = _LandingPipeline().to(device)
+            vllm_config.model_config.hf_config = SimpleNamespace(model_type="mooncake_landing_target")
+            kv_cache_config = _make_runner_kv_cache_config(runner)
+            source_spec = _make_kv_cache_config().kv_cache_groups[0].kv_cache_spec
+            target_spec = kv_cache_config.kv_cache_groups[0].kv_cache_spec
+            assert source_spec.page_size_bytes == target_spec.page_size_bytes
+
+            runner.set_kv_cache_config(kv_cache_config)
+            kv_caches_by_layer = runner.diffusion_kv_backend.get_kv_caches_by_layer()
+            dit_kv = kv_caches_by_layer[LAYER_NAME]
+            assert dit_kv.stride(0) * dit_kv.element_size() == target_spec.page_size_bytes
+
+            active_connector = runner.kv_connector
+            assert active_connector is not None
+            dit_worker = object.__new__(DiffusionWorker)
+            dit_worker.rank = 0
+            dit_worker.od_config = od_config
+            dit_worker.model_runner = runner
 
             scheduler = ConcreteScheduler()
             scheduler.initialize(
@@ -436,21 +479,23 @@ def _run_dit_consumer_and_assert(dist_port: int, bootstrap_addr: str) -> None:
                 prompt="landing-test",
                 sampling_params=OmniDiffusionSamplingParams(num_inference_steps=1),
                 request_id=REQUEST_ID,
-                diffusion_kv_requests=(
+                diffusion_kv_requests=tuple(
                     DiffusionKVRequest(
-                        f"{REQUEST_ID}/diffusion-kv/0",
-                        sequence_id=0,
+                        f"{REQUEST_ID}/diffusion-kv/{sequence_id}",
+                        sequence_id=sequence_id,
                         prefix_len=PREFIX_LEN,
                         target_len=TARGET_LEN,
                         seq_len=SEQ_LEN,
-                    ),
+                    )
+                    for sequence_id in range(2)
                 ),
                 kv_transfer_params={
-                    "transfer_id": mint_transfer_id(REQUEST_ID),
+                    "transfer_id": _transfer_id(),
                     "do_remote_prefill": True,
                     "do_remote_decode": False,
                     "remote_engine_id": AR_ENGINE_ID,
                     "remote_bootstrap_addr": bootstrap_addr,
+                    "num_transfer_tokens": SEQ_LEN,
                 },
             )
             scheduler.add_request(request)
@@ -459,38 +504,50 @@ def _run_dit_consumer_and_assert(dist_port: int, bootstrap_addr: str) -> None:
             assert sched_output.scheduled_new_reqs
             metadata = sched_output.scheduled_new_reqs[0].diffusion_kv_metadata
             assert metadata is not None
-            target_block_ids = metadata.sequences[0].block_ids[0]
-            assert len(target_block_ids) == len(SOURCE_BLOCK_IDS)
+            assert len(metadata.sequences) == 2
+            target_blocks_by_sequence = [sequence.block_ids[0] for sequence in metadata.sequences]
+            assert all(len(target_block_ids) == len(SOURCE_BLOCK_IDS) for target_block_ids in target_blocks_by_sequence)
+            assert set(target_blocks_by_sequence[0]).isdisjoint(target_blocks_by_sequence[1])
+            num_prefix_blocks = PREFIX_LEN // BLOCK_SIZE
+            target_prefix_blocks_by_sequence = [
+                target_block_ids[:num_prefix_blocks] for target_block_ids in target_blocks_by_sequence
+            ]
+            source_prefix_blocks = SOURCE_BLOCK_IDS[-num_prefix_blocks:]
 
-            runner = object.__new__(DiffusionModelRunner)
-            runner.od_config = od_config
-            runner._maybe_start_remote_kv_load(sched_output)
-
-            deadline = time.monotonic() + RECV_TIMEOUT_S
-            finished = False
-            while time.monotonic() < deadline:
-                if has_kv_transfer_group():
-                    # Upstream contract: (finished_sending, finished_recving).
-                    _finished_sending, finished_recving = get_kv_transfer_group().get_finished(set())
-                    if finished_recving and REQUEST_ID in finished_recving:
-                        finished = True
-                        break
-                    seq_id = f"{REQUEST_ID}/diffusion-kv/0"
-                    if finished_recving and seq_id in finished_recving:
-                        finished = True
-                        break
-                time.sleep(0.2)
-            assert finished, "DiT Mooncake consumer did not report finished_recving in time"
+            output = dit_worker.prepare_kv_for_forward(
+                sched_output,
+                timeout_s=RECV_TIMEOUT_S,
+            )
+            expected_sequence_ids = {f"{REQUEST_ID}/diffusion-kv/{sequence_id}" for sequence_id in range(2)}
+            assert output.kv_connector_output is not None
+            assert expected_sequence_ids.issubset(output.kv_connector_output.finished_recving or set())
+            assert (
+                runner.diffusion_kv_backend.resolve_sequence_binding(REQUEST_ID, 0).req_index
+                != runner.diffusion_kv_backend.resolve_sequence_binding(REQUEST_ID, 1).req_index
+            )
 
             current_omni_platform.synchronize()
-            for dest_block, source_block in zip(target_block_ids, SOURCE_BLOCK_IDS, strict=True):
-                got = dit_kv[dest_block].float().mean().item()
-                assert got == pytest.approx(_expected_page_value(source_block), abs=1e-2), (
-                    f"landed KV mismatch dest_block={dest_block} source_block={source_block} got={got}"
-                )
+            landed_page_means = [dit_kv[block_id].float().mean().item() for block_id in range(NUM_BLOCKS)]
+            for sequence_id, target_prefix_blocks in enumerate(target_prefix_blocks_by_sequence):
+                for dest_block, source_block in zip(
+                    target_prefix_blocks,
+                    source_prefix_blocks,
+                    strict=True,
+                ):
+                    got = dit_kv[dest_block].float().mean().item()
+                    assert got == pytest.approx(_expected_page_value(source_block), abs=1e-2), (
+                        "landed KV mismatch "
+                        f"sequence_id={sequence_id} dest_block={dest_block} "
+                        f"source_block={source_block} got={got}; "
+                        f"all_page_means={landed_page_means}"
+                    )
+                for target_block in target_blocks_by_sequence[sequence_id][num_prefix_blocks:]:
+                    assert landed_page_means[target_block] == 0.0
     finally:
+        if dit_worker is not None:
+            dit_worker.shutdown_kv_connector()
         if scheduler is not None:
-            shutdown_kv_connector_v1(scheduler_connector=scheduler._kv_connector_v1)
+            shutdown_kv_connector_v1(scheduler_connector=scheduler.connector)
         elif has_kv_transfer_group():
             ensure_kv_transfer_shutdown()
         _destroy_parallel()

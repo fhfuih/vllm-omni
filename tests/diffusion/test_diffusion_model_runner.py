@@ -524,7 +524,6 @@ def test_execute_model_accepts_bare_diffusion_output_from_single_request_pipelin
 def test_profile_run_executes_forward_without_scheduler_kv_validation(monkeypatch):
     runner = _make_runner(cache_backend=None, cache_backend_name="none")
     request = _make_request()
-    runner._validate_diffusion_kv_metadata = Mock(side_effect=AssertionError("profile must bypass admission"))
     record_names = []
     original_execute = runner._execute_request_list
 
@@ -549,7 +548,6 @@ def test_profile_run_executes_forward_without_scheduler_kv_validation(monkeypatc
 
     assert runner.pipeline.forward_calls == 1
     assert record_names == ["pipeline_memory_profile"]
-    runner._validate_diffusion_kv_metadata.assert_not_called()
     reset_peak_memory_stats.assert_not_called()
     synchronize.assert_called_once_with()
 
@@ -574,7 +572,6 @@ def test_profile_run_executes_maximum_step_batch_without_resetting_peak(monkeypa
         return original_denoise_step(input_batch, states)
 
     runner.pipeline.denoise_step = denoise_step
-    runner._validate_diffusion_kv_metadata = Mock(side_effect=AssertionError("profile must bypass admission"))
     monkeypatch.setattr(model_runner_module, "set_forward_context", _noop_forward_context)
     reset_peak_memory_stats = Mock()
     monkeypatch.setattr(
@@ -592,7 +589,6 @@ def test_profile_run_executes_maximum_step_batch_without_resetting_peak(monkeypa
     assert observed_batch_rows == [(2, 2)]
     assert runner.state_cache == {}
     assert runner.input_batch is None
-    runner._validate_diffusion_kv_metadata.assert_not_called()
     reset_peak_memory_stats.assert_not_called()
     synchronize.assert_called_once_with()
 
@@ -639,6 +635,8 @@ def _make_batch_runner(pipeline):
     runner.kv_transfer_manager = SimpleNamespace(
         receive_multi_kv_cache_distributed=lambda req, cfg_kv_collect_func=None, target_device=None: None,
     )
+    runner._kv_prefetch_enabled = False
+    runner.diffusion_kv_backend = SimpleNamespace(paged_attention_runtime=None)
     return runner
 
 

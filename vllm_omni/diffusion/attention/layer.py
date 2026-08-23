@@ -23,6 +23,10 @@ from vllm_omni.diffusion.attention.parallel.base import NoParallelAttention
 from vllm_omni.diffusion.attention.parallel.ring import RingParallelAttention
 from vllm_omni.diffusion.attention.selector import get_attn_backend_for_role
 from vllm_omni.diffusion.config import get_current_diffusion_config_or_none
+from vllm_omni.diffusion.diffusion_kv.config import (
+    DiffusionKVCacheMode,
+    is_scheduler_paged_kv_mode,
+)
 from vllm_omni.diffusion.distributed.parallel_state import get_sp_group
 from vllm_omni.diffusion.forward_context import (
     get_forward_context,
@@ -77,10 +81,7 @@ class Attention(nn.Module):
         self.role = role
         self.role_category = role_category
         self.qkv_layout = qkv_layout
-        # ``prefix`` is also the stable layer identity used by vLLM's native
-        # KV-cache metadata.  Keep it on the Omni layer so the active paged
-        # adapter can dispatch the already-resharded Q/K/V to the matching
-        # native cache tensor without replacing this Omni execution path.
+        # ``prefix`` is the stable layer identity used by native KV metadata.
         self.prefix = prefix
         if paged_kv_cache_role == "":
             raise ValueError("paged_kv_cache_role must be non-empty when provided")
@@ -103,6 +104,11 @@ class Attention(nn.Module):
 
         model_class_name = getattr(config, "model_class_name", None) if config is not None else None
         allow_trtllm_default = get_diffusion_model_metadata(model_class_name).attention_mask_free
+        require_paged_kv = (
+            paged_kv_cache_role is not None
+            and config is not None
+            and is_scheduler_paged_kv_mode(getattr(config, "diffusion_kv_mode", DiffusionKVCacheMode.DENSE_LEGACY))
+        )
 
         attn_backend_cls, spec = get_attn_backend_for_role(
             role=role,
@@ -110,6 +116,7 @@ class Attention(nn.Module):
             attention_config=attention_config,
             role_category=role_category,
             allow_trtllm_default=allow_trtllm_default,
+            require_paged_kv=require_paged_kv,
         )
         parallel_config = getattr(config, "parallel_config", None)
         allgather_degree = getattr(parallel_config, "allgather_degree", 1)
@@ -128,8 +135,7 @@ class Attention(nn.Module):
             logger.debug("Attention(role=%s) → platform default", role)
 
         self.attn_backend = attn_backend_cls
-        self.attn_impl_cls = self.attn_backend.get_impl_cls()
-        self.attention = self.attn_impl_cls(
+        self.attention = self.attn_backend.get_impl_cls()(
             num_heads=num_heads,
             head_size=head_size,
             softmax_scale=softmax_scale,
@@ -320,13 +326,8 @@ class Attention(nn.Module):
     ) -> torch.Tensor:
         # Get the appropriate parallel strategy based on SP active state
         strategy = self._get_active_parallel_strategy()
-        paged_adapter = self._active_paged_kv_adapter()
-        use_paged_attention = paged_adapter is not None and self.paged_kv_cache_role is not None
-        if use_paged_attention and not getattr(self.attn_backend, "supports_paged_kv", False):
-            raise NotImplementedError(
-                f"Diffusion paged KV requires an Omni backend with paged support; "
-                f"selected {self.attn_backend.get_name()}"
-            )
+        paged_runtime = self._active_paged_kv_runtime()
+        use_paged_attention = paged_runtime is not None and self.paged_kv_cache_role is not None
         if use_paged_attention and strategy is not self._no_parallel_strategy:
             strategy_name = strategy.name
             if self.use_ring or strategy_name == "ring":
@@ -343,12 +344,10 @@ class Attention(nn.Module):
         # For Ring: Concat joint_q
         query, key, value, attn_metadata, ctx = strategy.pre_attention(query, key, value, attn_metadata)
 
-        # 2. Kernel execution stays inside the selected Omni backend.  The
-        # Worker adapter only prepares the native page-table context after
-        # SP has produced rank-local Q/K/V tensors.
+        # The runtime prepares rank-local page context after SP; the selected backend executes it.
         if use_paged_attention:
-            assert paged_adapter is not None
-            paged_kv_context = paged_adapter.prepare_layer_context(
+            assert paged_runtime is not None
+            paged_kv_context = paged_runtime.prepare_layer_context(
                 self.prefix,
                 query,
                 key,
@@ -370,17 +369,17 @@ class Attention(nn.Module):
         return out
 
     @staticmethod
-    def _active_paged_kv_adapter():
-        """Return the opaque Worker adapter installed for this forward."""
+    def _active_paged_kv_runtime():
+        """Return the Worker paged-KV runtime installed for this forward."""
 
         if not is_forward_context_available():
             return None
-        return getattr(get_forward_context(), "paged_kv_adapter", None)
+        return getattr(get_forward_context(), "paged_kv_runtime", None)
 
     def is_paged_kv_active(self) -> bool:
         """Return whether this layer will use Scheduler-managed paged KV."""
 
-        return self.paged_kv_cache_role is not None and self._active_paged_kv_adapter() is not None
+        return self.paged_kv_cache_role is not None and self._active_paged_kv_runtime() is not None
 
     def _run_local_attention(self, query, key, value, attn_metadata):
         self._assert_piecewise_compatible(attn_metadata)

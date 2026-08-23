@@ -34,6 +34,8 @@ from vllm_omni.diffusion.executor.abstract import DiffusionExecutor
 from vllm_omni.platforms import current_omni_platform
 
 if TYPE_CHECKING:
+    from vllm.distributed.kv_transfer.kv_connector.utils import KVOutputAggregator
+
     from vllm_omni.diffusion.sched.interface import DiffusionSchedulerOutput
     from vllm_omni.diffusion.worker.utils import BaseRunnerOutput
 
@@ -91,6 +93,7 @@ class UniProcDiffusionExecutor(DiffusionExecutor):
         kwargs: dict | None = None,
         unique_reply_rank: int | None = None,
         exec_all_ranks: bool = False,
+        kv_output_aggregator: KVOutputAggregator | None = None,
     ) -> Any:
         """Invoke ``method`` on the single in-process worker.
 
@@ -112,20 +115,19 @@ class UniProcDiffusionExecutor(DiffusionExecutor):
             if not self._device_is_usable():
                 self._mark_failed()
             raise
+        if kv_output_aggregator is not None:
+            return kv_output_aggregator.aggregate([result], output_rank=unique_reply_rank or 0)
         return result if unique_reply_rank is not None else [result]
 
     def execute_request(self, scheduler_output: DiffusionSchedulerOutput) -> BaseRunnerOutput:
-        from vllm_omni.diffusion.sched.interface import validate_new_request_data_identity
         from vllm_omni.diffusion.worker.utils import BatchRunnerOutput, RunnerOutput
 
         self._ensure_open()
+        kv_connector_output = self._prepare_kv_for_forward(scheduler_output)
         runner_outputs: list[RunnerOutput] = []
         for new_req in scheduler_output.scheduled_new_reqs:
-            validate_new_request_data_identity(new_req)
             try:
                 args: tuple = (new_req.req, self.od_config, scheduler_output.kv_prefetch_job)
-                if new_req.diffusion_kv_metadata is not None:
-                    args += (new_req.diffusion_kv_metadata,)
                 result = self.collective_rpc(
                     "execute_model",
                     args=args,
@@ -151,7 +153,9 @@ class UniProcDiffusionExecutor(DiffusionExecutor):
                         result=DiffusionOutput(error=str(exc)),
                     )
                 )
-        return BatchRunnerOutput.from_list(runner_outputs)
+        output = BatchRunnerOutput.from_list(runner_outputs)
+        output.kv_connector_output = kv_connector_output
+        return output
 
     def execute_batch(self, scheduler_output: DiffusionSchedulerOutput) -> BaseRunnerOutput:
         from vllm_omni.diffusion.worker.utils import BatchRunnerOutput
@@ -159,6 +163,8 @@ class UniProcDiffusionExecutor(DiffusionExecutor):
         self._ensure_open()
         if len(scheduler_output.scheduled_new_reqs) <= 1:
             return self.execute_request(scheduler_output)
+
+        kv_connector_output = self._prepare_kv_for_forward(scheduler_output)
 
         result = self.collective_rpc(
             "execute_model_batch",
@@ -168,12 +174,14 @@ class UniProcDiffusionExecutor(DiffusionExecutor):
         )
         if not isinstance(result, BatchRunnerOutput):
             raise RuntimeError(f"Unexpected response type for execute_batch: {type(result)!r}")
+        result.kv_connector_output = kv_connector_output
         return result
 
     def execute_step(self, scheduler_output: DiffusionSchedulerOutput) -> BaseRunnerOutput:
         from vllm_omni.diffusion.worker.utils import BaseRunnerOutput
 
         self._ensure_open()
+        kv_connector_output = self._prepare_kv_for_forward(scheduler_output)
         result = self.collective_rpc(
             "execute_stepwise",
             args=(scheduler_output,),
@@ -181,6 +189,7 @@ class UniProcDiffusionExecutor(DiffusionExecutor):
             exec_all_ranks=True,
         )
         if isinstance(result, BaseRunnerOutput):
+            result.kv_connector_output = kv_connector_output
             return result
         raise RuntimeError(f"Unexpected response type for execute_step: {type(result)!r}")
 

@@ -15,6 +15,7 @@ import pytest
 # Request / RequestStatus are bound in this module. Ruff isort would reorder them.
 # isort: off
 import vllm_omni  # noqa: F401 - import for side effects (patch vLLM)
+from vllm_omni.config.omni_config import KVTransferBackend
 from vllm_omni.core.sched.omni_ar_scheduler import OmniARScheduler
 
 # isort: on
@@ -26,6 +27,7 @@ def _make_scheduler(*, chunk_transfer_adapter=None) -> OmniARScheduler:
     """Minimal OmniARScheduler exercising _free_request()'s no-KV-transfer
     happy path."""
     sched = OmniARScheduler.__new__(OmniARScheduler)
+    sched._kv_transfer_backend = KVTransferBackend.DISABLED
     sched._omits_kv_transfer_cache = {}
     sched._connector_finished = lambda request: (False, None)
     sched.encoder_cache_manager = MagicMock()

@@ -17,14 +17,14 @@ from vllm.v1.kv_cache_interface import FullAttentionSpec
 
 from vllm_omni.diffusion.attention.backends.flash_attn import FlashAttentionImpl
 from vllm_omni.diffusion.attention.layer import Attention
-from vllm_omni.diffusion.diffusion_kv import paged_attention_adapter as adapter_module
-from vllm_omni.diffusion.diffusion_kv.paged_attention_adapter import (
-    DiffusionPagedAttentionAdapter,
-    DiffusionPagedAttentionRow,
-    DiffusionPagedAttentionRowBinding,
+from vllm_omni.diffusion.diffusion_kv import paged_attention_runtime as runtime_module
+from vllm_omni.diffusion.diffusion_kv.paged_attention_runtime import (
+    DiffusionKVSequenceBinding,
+    DiffusionPagedAttentionRuntime,
 )
+from vllm_omni.diffusion.diffusion_kv.request import DiffusionPagedAttentionSequence
 from vllm_omni.diffusion.forward_context import (
-    override_paged_kv_adapter,
+    override_paged_kv_runtime,
     set_forward_context,
 )
 
@@ -145,7 +145,7 @@ class _FakeNativeImpl:
         return output.copy_(query.reshape_as(output))
 
 
-def _make_adapter(
+def _make_runtime(
     monkeypatch: pytest.MonkeyPatch,
     *,
     non_causal: bool = True,
@@ -153,7 +153,7 @@ def _make_adapter(
     num_heads: int = 2,
     num_kv_heads: int = 2,
     capacity: int = 16,
-) -> tuple[DiffusionPagedAttentionAdapter, _FakeBlockTables, _FakeLayer, list[tuple]]:
+) -> tuple[DiffusionPagedAttentionRuntime, _FakeBlockTables, _FakeLayer, list[tuple]]:
     events: list[tuple] = []
     block_tables = _FakeBlockTables()
     block_tables.max_num_batched_tokens = capacity
@@ -162,13 +162,12 @@ def _make_adapter(
     kv_cache_config = SimpleNamespace(
         kv_cache_groups=[SimpleNamespace(layer_names=["layer-0"], kv_cache_spec=layer.spec)],
     )
-    row_map = {
-        ("req-0", 0, None): DiffusionPagedAttentionRowBinding(2, capacity),
-        ("req-1", 1, None): DiffusionPagedAttentionRowBinding(3, capacity),
-        ("req-0", None, "text"): DiffusionPagedAttentionRowBinding(1, capacity),
+    binding_map = {
+        ("req-0", 0): DiffusionKVSequenceBinding(2, capacity),
+        ("req-1", 1): DiffusionKVSequenceBinding(3, capacity),
     }
 
-    monkeypatch.setattr(adapter_module, "set_current_vllm_config", lambda _config: nullcontext())
+    monkeypatch.setattr(runtime_module, "set_current_vllm_config", lambda _config: nullcontext())
 
     def build_metadata(**kwargs):
         metadata = _FakeNativeMetadata(
@@ -182,9 +181,9 @@ def _make_adapter(
         events.append(("build", kwargs, metadata))
         return {"layer-0": metadata}
 
-    monkeypatch.setattr(adapter_module.current_omni_platform, "build_diffusion_kv_attn_metadata", build_metadata)
+    monkeypatch.setattr(runtime_module.current_omni_platform, "build_diffusion_kv_attn_metadata", build_metadata)
     monkeypatch.setattr(
-        adapter_module,
+        runtime_module,
         "build_slot_mappings_by_layer",
         lambda slot_mappings, _config: {"layer-0": slot_mappings[0]},
     )
@@ -193,16 +192,16 @@ def _make_adapter(
         name="vllm-config",
         model_config=SimpleNamespace(dtype=torch.float32),
     )
-    adapter = DiffusionPagedAttentionAdapter(
+    runtime = DiffusionPagedAttentionRuntime(
         vllm_config=config,
         device=torch.device("cpu"),
         kv_cache_config=kv_cache_config,
         block_tables=block_tables,
         attn_groups=[[_FakeAttentionGroup(reorder_batch_threshold)]],
         layers={"layer-0": layer},
-        resolve_row=lambda request_id, sequence_id, context_id: row_map[(request_id, sequence_id, context_id)],
+        resolve_sequence=lambda request_id, sequence_id: binding_map[(request_id, sequence_id)],
     )
-    return adapter, block_tables, layer, events
+    return runtime, block_tables, layer, events
 
 
 def _run_omni_paged_backend(context):
@@ -216,16 +215,16 @@ def _run_omni_paged_backend(context):
 
 
 def test_prepare_batch_reuses_native_block_table_and_metadata_builders(monkeypatch: pytest.MonkeyPatch) -> None:
-    adapter, block_tables, _, events = _make_adapter(monkeypatch)
-    rows = (
-        DiffusionPagedAttentionRow(
+    runtime, block_tables, _, events = _make_runtime(monkeypatch)
+    sequences = (
+        DiffusionPagedAttentionSequence(
             request_id="req-0",
             sequence_id=0,
             query_len=3,
             seq_len=8,
             kv_start_pos=4,
         ),
-        DiffusionPagedAttentionRow(
+        DiffusionPagedAttentionSequence(
             request_id="req-1",
             sequence_id=1,
             query_len=2,
@@ -233,12 +232,9 @@ def test_prepare_batch_reuses_native_block_table_and_metadata_builders(monkeypat
         ),
     )
 
-    batch = adapter.prepare_batch(rows)
+    batch = runtime.prepare_batch(sequences)
 
     assert batch.num_tokens == 5
-    assert batch.row_indices.tolist() == [2, 3]
-    assert batch.query_start_loc.tolist() == [0, 3, 5]
-    assert batch.seq_lens.tolist() == [8, 2]
     assert batch.positions.tolist() == [4, 5, 6, 0, 1]
     assert block_tables.gather_calls[0][1] == 2
     assert block_tables.gather_calls[0][0].tolist() == [2, 3]
@@ -256,10 +252,10 @@ def test_prepare_batch_reuses_native_block_table_and_metadata_builders(monkeypat
 def test_omni_paged_backend_consumes_context_and_restores_diffusion_shape(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    adapter, _, layer, events = _make_adapter(monkeypatch)
-    batch = adapter.prepare_batch(
+    runtime, _, layer, events = _make_runtime(monkeypatch)
+    batch = runtime.prepare_batch(
         [
-            DiffusionPagedAttentionRow(
+            DiffusionPagedAttentionSequence(
                 request_id="req-0",
                 sequence_id=0,
                 query_len=5,
@@ -271,8 +267,8 @@ def test_omni_paged_backend_consumes_context_and_restores_diffusion_shape(
     key = torch.randn_like(query)
     value = torch.randn_like(query)
 
-    with adapter.activate(batch):
-        context = adapter.prepare_layer_context("layer-0", query, key, value)
+    with runtime.activate(batch):
+        context = runtime.prepare_layer_context("layer-0", query, key, value)
         output = _run_omni_paged_backend(context)
 
     assert output.shape == query.shape
@@ -283,16 +279,16 @@ def test_omni_paged_backend_consumes_context_and_restores_diffusion_shape(
 
 
 def test_paged_adapter_accepts_native_gqa_shapes(monkeypatch: pytest.MonkeyPatch) -> None:
-    adapter, _, layer, _ = _make_adapter(monkeypatch, num_heads=32, num_kv_heads=8)
-    batch = adapter.prepare_batch(
-        [DiffusionPagedAttentionRow(request_id="req-0", sequence_id=0, query_len=3, seq_len=3)]
+    runtime, _, layer, _ = _make_runtime(monkeypatch, num_heads=32, num_kv_heads=8)
+    batch = runtime.prepare_batch(
+        [DiffusionPagedAttentionSequence(request_id="req-0", sequence_id=0, query_len=3, seq_len=3)]
     )
     query = torch.randn(1, 3, 32, 4)
     key = torch.randn(1, 3, 8, 4)
     value = torch.randn_like(key)
 
-    with adapter.activate(batch):
-        context = adapter.prepare_layer_context("layer-0", query, key, value)
+    with runtime.activate(batch):
+        context = runtime.prepare_layer_context("layer-0", query, key, value)
 
     assert layer.num_heads == 32
     assert layer.num_kv_heads == 8
@@ -302,15 +298,15 @@ def test_paged_adapter_accepts_native_gqa_shapes(monkeypatch: pytest.MonkeyPatch
 
 
 def test_omni_paged_backend_defers_backend_owned_cache_update(monkeypatch: pytest.MonkeyPatch) -> None:
-    adapter, _, layer, _ = _make_adapter(monkeypatch)
+    runtime, _, layer, _ = _make_runtime(monkeypatch)
     layer.attn_backend.forward_includes_kv_cache_update = True
-    batch = adapter.prepare_batch(
-        [DiffusionPagedAttentionRow(request_id="req-0", sequence_id=0, query_len=3, seq_len=3)]
+    batch = runtime.prepare_batch(
+        [DiffusionPagedAttentionSequence(request_id="req-0", sequence_id=0, query_len=3, seq_len=3)]
     )
     qkv = torch.randn(1, 3, 2, 4)
 
-    with adapter.activate(batch):
-        context = adapter.prepare_layer_context("layer-0", qkv, qkv, qkv)
+    with runtime.activate(batch):
+        context = runtime.prepare_layer_context("layer-0", qkv, qkv, qkv)
         output = _run_omni_paged_backend(context)
 
     assert torch.equal(output, qkv)
@@ -319,16 +315,16 @@ def test_omni_paged_backend_defers_backend_owned_cache_update(monkeypatch: pytes
 
 
 def test_omni_piecewise_backend_defers_backend_owned_cache_update(monkeypatch: pytest.MonkeyPatch) -> None:
-    adapter, _, layer, events = _make_adapter(monkeypatch)
+    runtime, _, layer, events = _make_runtime(monkeypatch)
     layer.attn_backend.forward_includes_kv_cache_update = True
-    batch = adapter.prepare_batch(
-        [DiffusionPagedAttentionRow(request_id="req-0", sequence_id=0, query_len=4, seq_len=4)]
+    batch = runtime.prepare_batch(
+        [DiffusionPagedAttentionSequence(request_id="req-0", sequence_id=0, query_len=4, seq_len=4)]
     )
     qkv = torch.randn(1, 4, 2, 4)
     metadata = SimpleNamespace(full_attn_spans=[[(1, 3)]], extra={})
 
-    with adapter.activate(batch):
-        context = adapter.prepare_layer_context(
+    with runtime.activate(batch):
+        context = runtime.prepare_layer_context(
             "layer-0",
             qkv,
             qkv,
@@ -353,17 +349,17 @@ def test_omni_piecewise_backend_defers_backend_owned_cache_update(monkeypatch: p
 
 
 def test_omni_paged_backend_runs_hunyuan_piecewise_segments(monkeypatch: pytest.MonkeyPatch) -> None:
-    adapter, _, layer, events = _make_adapter(monkeypatch)
-    batch = adapter.prepare_batch(
+    runtime, _, layer, events = _make_runtime(monkeypatch)
+    batch = runtime.prepare_batch(
         [
-            DiffusionPagedAttentionRow(
+            DiffusionPagedAttentionSequence(
                 request_id="req-0",
                 sequence_id=0,
                 query_len=6,
                 seq_len=9,
                 kv_start_pos=3,
             ),
-            DiffusionPagedAttentionRow(
+            DiffusionPagedAttentionSequence(
                 request_id="req-1",
                 sequence_id=1,
                 query_len=6,
@@ -384,8 +380,8 @@ def test_omni_paged_backend_runs_hunyuan_piecewise_segments(monkeypatch: pytest.
         extra={},
     )
 
-    with adapter.activate(batch):
-        context = adapter.prepare_layer_context(
+    with runtime.activate(batch):
+        context = runtime.prepare_layer_context(
             "layer-0",
             query,
             key,
@@ -394,7 +390,7 @@ def test_omni_paged_backend_runs_hunyuan_piecewise_segments(monkeypatch: pytest.
         )
         # Every model layer sees the same spans, so the native segment metadata
         # is built once per active batch and then reused.
-        adapter.prepare_layer_context(
+        runtime.prepare_layer_context(
             "layer-0",
             query,
             key,
@@ -451,9 +447,9 @@ def test_omni_paged_backend_runs_hunyuan_piecewise_segments(monkeypatch: pytest.
 
 
 def test_omni_paged_backend_treats_empty_full_spans_as_causal(monkeypatch: pytest.MonkeyPatch) -> None:
-    adapter, _, layer, events = _make_adapter(monkeypatch)
-    batch = adapter.prepare_batch(
-        [DiffusionPagedAttentionRow(request_id="req-0", sequence_id=0, query_len=4, seq_len=4)]
+    runtime, _, layer, events = _make_runtime(monkeypatch)
+    batch = runtime.prepare_batch(
+        [DiffusionPagedAttentionSequence(request_id="req-0", sequence_id=0, query_len=4, seq_len=4)]
     )
     qkv = torch.randn(1, 4, 2, 4)
     metadata = SimpleNamespace(
@@ -463,8 +459,8 @@ def test_omni_paged_backend_treats_empty_full_spans_as_causal(monkeypatch: pytes
         extra={},
     )
 
-    with adapter.activate(batch):
-        context = adapter.prepare_layer_context(
+    with runtime.activate(batch):
+        context = runtime.prepare_layer_context(
             "layer-0",
             qkv,
             qkv,
@@ -483,17 +479,17 @@ def test_omni_paged_backend_treats_empty_full_spans_as_causal(monkeypatch: pytes
 def test_omni_paged_backend_runs_unequal_hunyuan_prefixes_without_padding(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    adapter, _, layer, events = _make_adapter(monkeypatch, capacity=64)
-    batch = adapter.prepare_batch(
+    runtime, _, layer, events = _make_runtime(monkeypatch, capacity=64)
+    batch = runtime.prepare_batch(
         [
-            DiffusionPagedAttentionRow(
+            DiffusionPagedAttentionSequence(
                 request_id="req-0",
                 sequence_id=0,
                 query_len=17,
                 seq_len=50,
                 kv_start_pos=33,
             ),
-            DiffusionPagedAttentionRow(
+            DiffusionPagedAttentionSequence(
                 request_id="req-1",
                 sequence_id=1,
                 query_len=17,
@@ -512,8 +508,8 @@ def test_omni_paged_backend_runs_unequal_hunyuan_prefixes_without_padding(
         extra={},
     )
 
-    with adapter.activate(batch):
-        context = adapter.prepare_layer_context(
+    with runtime.activate(batch):
+        context = runtime.prepare_layer_context(
             "layer-0",
             query,
             key,
@@ -523,8 +519,6 @@ def test_omni_paged_backend_runs_unequal_hunyuan_prefixes_without_padding(
         output = _run_omni_paged_backend(context)
 
     assert torch.equal(output, query)
-    assert batch.query_start_loc.tolist() == [0, 17, 34]
-    assert batch.seq_lens.tolist() == [50, 54]
     assert batch.positions.tolist() == [*range(33, 50), *range(37, 54)]
     assert torch.equal(context.key_write, key.reshape(34, 2, 4))
     assert torch.equal(context.value_write, value.reshape(34, 2, 4))
@@ -538,11 +532,11 @@ def test_omni_paged_backend_runs_unequal_hunyuan_prefixes_without_padding(
 def test_forward_rejects_unaligned_heterogeneous_piecewise_spans_before_cache_write(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    adapter, _, layer, _ = _make_adapter(monkeypatch)
-    batch = adapter.prepare_batch(
+    runtime, _, layer, _ = _make_runtime(monkeypatch)
+    batch = runtime.prepare_batch(
         [
-            DiffusionPagedAttentionRow(request_id="req-0", sequence_id=0, query_len=4, seq_len=4),
-            DiffusionPagedAttentionRow(request_id="req-1", sequence_id=1, query_len=4, seq_len=4),
+            DiffusionPagedAttentionSequence(request_id="req-0", sequence_id=0, query_len=4, seq_len=4),
+            DiffusionPagedAttentionSequence(request_id="req-1", sequence_id=1, query_len=4, seq_len=4),
         ]
     )
     qkv = torch.randn(2, 4, 2, 4)
@@ -553,8 +547,8 @@ def test_forward_rejects_unaligned_heterogeneous_piecewise_spans_before_cache_wr
         extra={},
     )
 
-    with adapter.activate(batch), pytest.raises(ValueError, match="produce aligned segments"):
-        adapter.prepare_layer_context(
+    with runtime.activate(batch), pytest.raises(ValueError, match="produce aligned segments"):
+        runtime.prepare_layer_context(
             "layer-0",
             qkv,
             qkv,
@@ -576,15 +570,15 @@ def test_forward_rejects_invalid_piecewise_spans_before_cache_write(
     monkeypatch: pytest.MonkeyPatch,
     spans: list[tuple[int, int]],
 ) -> None:
-    adapter, _, layer, _ = _make_adapter(monkeypatch)
-    batch = adapter.prepare_batch(
-        [DiffusionPagedAttentionRow(request_id="req-0", sequence_id=0, query_len=4, seq_len=4)]
+    runtime, _, layer, _ = _make_runtime(monkeypatch)
+    batch = runtime.prepare_batch(
+        [DiffusionPagedAttentionSequence(request_id="req-0", sequence_id=0, query_len=4, seq_len=4)]
     )
     qkv = torch.randn(1, 4, 2, 4)
     metadata = SimpleNamespace(full_attn_spans=[spans], extra={})
 
-    with adapter.activate(batch), pytest.raises(ValueError, match="sorted, non-overlapping, and within the sequence"):
-        adapter.prepare_layer_context(
+    with runtime.activate(batch), pytest.raises(ValueError, match="sorted, non-overlapping, and within the sequence"):
+        runtime.prepare_layer_context(
             "layer-0",
             qkv,
             qkv,
@@ -598,9 +592,9 @@ def test_forward_rejects_invalid_piecewise_spans_before_cache_write(
 def test_forward_rejects_non_4d_mask_with_piecewise_spans_before_cache_write(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    adapter, _, layer, _ = _make_adapter(monkeypatch)
-    batch = adapter.prepare_batch(
-        [DiffusionPagedAttentionRow(request_id="req-0", sequence_id=0, query_len=4, seq_len=4)]
+    runtime, _, layer, _ = _make_runtime(monkeypatch)
+    batch = runtime.prepare_batch(
+        [DiffusionPagedAttentionSequence(request_id="req-0", sequence_id=0, query_len=4, seq_len=4)]
     )
     qkv = torch.randn(1, 4, 2, 4)
     metadata = SimpleNamespace(
@@ -609,8 +603,8 @@ def test_forward_rejects_non_4d_mask_with_piecewise_spans_before_cache_write(
         extra={},
     )
 
-    with adapter.activate(batch), pytest.raises(NotImplementedError, match="requires a 4D tensor"):
-        adapter.prepare_layer_context(
+    with runtime.activate(batch), pytest.raises(NotImplementedError, match="requires a 4D tensor"):
+        runtime.prepare_layer_context(
             "layer-0",
             qkv,
             qkv,
@@ -622,9 +616,9 @@ def test_forward_rejects_non_4d_mask_with_piecewise_spans_before_cache_write(
 
 
 def test_forward_rejects_piecewise_query_ranges_before_cache_write(monkeypatch: pytest.MonkeyPatch) -> None:
-    adapter, _, layer, _ = _make_adapter(monkeypatch)
-    batch = adapter.prepare_batch(
-        [DiffusionPagedAttentionRow(request_id="req-0", sequence_id=0, query_len=4, seq_len=4)]
+    runtime, _, layer, _ = _make_runtime(monkeypatch)
+    batch = runtime.prepare_batch(
+        [DiffusionPagedAttentionSequence(request_id="req-0", sequence_id=0, query_len=4, seq_len=4)]
     )
     qkv = torch.randn(1, 4, 2, 4)
     metadata = SimpleNamespace(
@@ -634,8 +628,8 @@ def test_forward_rejects_piecewise_query_ranges_before_cache_write(monkeypatch: 
         extra={},
     )
 
-    with adapter.activate(batch), pytest.raises(NotImplementedError, match="query_ranges"):
-        adapter.prepare_layer_context(
+    with runtime.activate(batch), pytest.raises(NotImplementedError, match="query_ranges"):
+        runtime.prepare_layer_context(
             "layer-0",
             qkv,
             qkv,
@@ -647,10 +641,10 @@ def test_forward_rejects_piecewise_query_ranges_before_cache_write(monkeypatch: 
 
 
 def test_forward_rejects_piecewise_non_suffix_query_before_cache_write(monkeypatch: pytest.MonkeyPatch) -> None:
-    adapter, _, layer, _ = _make_adapter(monkeypatch)
-    batch = adapter.prepare_batch(
+    runtime, _, layer, _ = _make_runtime(monkeypatch)
+    batch = runtime.prepare_batch(
         [
-            DiffusionPagedAttentionRow(
+            DiffusionPagedAttentionSequence(
                 request_id="req-0",
                 sequence_id=0,
                 query_len=2,
@@ -662,8 +656,8 @@ def test_forward_rejects_piecewise_non_suffix_query_before_cache_write(monkeypat
     qkv = torch.randn(1, 2, 2, 4)
     metadata = SimpleNamespace(full_attn_spans=[[(2, 4)]], extra={})
 
-    with adapter.activate(batch), pytest.raises(ValueError, match="requires each query/write span to end"):
-        adapter.prepare_layer_context(
+    with runtime.activate(batch), pytest.raises(ValueError, match="requires each query/write span to end"):
+        runtime.prepare_layer_context(
             "layer-0",
             qkv,
             qkv,
@@ -675,10 +669,10 @@ def test_forward_rejects_piecewise_non_suffix_query_before_cache_write(monkeypat
 
 
 def test_forward_accepts_non_aligned_current_write(monkeypatch: pytest.MonkeyPatch) -> None:
-    adapter, _, layer, _ = _make_adapter(monkeypatch)
-    batch = adapter.prepare_batch(
+    runtime, _, layer, _ = _make_runtime(monkeypatch)
+    batch = runtime.prepare_batch(
         [
-            DiffusionPagedAttentionRow(
+            DiffusionPagedAttentionSequence(
                 request_id="req-0",
                 sequence_id=0,
                 query_len=2,
@@ -691,8 +685,8 @@ def test_forward_accepts_non_aligned_current_write(monkeypatch: pytest.MonkeyPat
     key = torch.arange(1 * 2 * 2 * 4, dtype=torch.float32).reshape(1, 2, 2, 4)
     value = key + 100
 
-    with adapter.activate(batch):
-        context = adapter.prepare_layer_context("layer-0", query, key, value)
+    with runtime.activate(batch):
+        context = runtime.prepare_layer_context("layer-0", query, key, value)
 
     assert context.query.shape == (2, 2, 4)
     assert torch.equal(context.key_write, key.reshape(2, 2, 4))
@@ -702,42 +696,42 @@ def test_forward_accepts_non_aligned_current_write(monkeypatch: pytest.MonkeyPat
 
 
 def test_forward_rejects_untranslated_omni_metadata_before_cache_write(monkeypatch: pytest.MonkeyPatch) -> None:
-    adapter, _, layer, _ = _make_adapter(monkeypatch)
-    batch = adapter.prepare_batch(
-        [DiffusionPagedAttentionRow(request_id="req-0", sequence_id=0, query_len=1, seq_len=1)]
+    runtime, _, layer, _ = _make_runtime(monkeypatch)
+    batch = runtime.prepare_batch(
+        [DiffusionPagedAttentionSequence(request_id="req-0", sequence_id=0, query_len=1, seq_len=1)]
     )
     qkv = torch.randn(1, 2, 4)
     metadata = SimpleNamespace(attn_mask=torch.ones(1, 1), extra={})
 
-    with adapter.activate(batch), pytest.raises(NotImplementedError, match="cannot translate"):
-        adapter.prepare_layer_context("layer-0", qkv, qkv, qkv, omni_attn_metadata=metadata)
+    with runtime.activate(batch), pytest.raises(NotImplementedError, match="cannot translate"):
+        runtime.prepare_layer_context("layer-0", qkv, qkv, qkv, omni_attn_metadata=metadata)
 
     assert layer.updates == []
 
 
 def test_forward_accepts_flattened_hidden_dimension(monkeypatch: pytest.MonkeyPatch) -> None:
-    adapter, _, _, _ = _make_adapter(monkeypatch)
-    batch = adapter.prepare_batch(
-        [DiffusionPagedAttentionRow(request_id="req-0", sequence_id=0, query_len=3, seq_len=3)]
+    runtime, _, _, _ = _make_runtime(monkeypatch)
+    batch = runtime.prepare_batch(
+        [DiffusionPagedAttentionSequence(request_id="req-0", sequence_id=0, query_len=3, seq_len=3)]
     )
     query = torch.randn(3, 8)
 
-    with adapter.activate(batch):
-        context = adapter.prepare_layer_context("layer-0", query, query, query)
+    with runtime.activate(batch):
+        context = runtime.prepare_layer_context("layer-0", query, query, query)
 
     assert context.query.shape == (3, 2, 4)
     assert context.restore_output(context.query).shape == query.shape
 
 
 def test_forward_accepts_one_flattened_token_for_single_head(monkeypatch: pytest.MonkeyPatch) -> None:
-    adapter, _, _, _ = _make_adapter(monkeypatch, num_heads=1, num_kv_heads=1)
-    batch = adapter.prepare_batch(
-        [DiffusionPagedAttentionRow(request_id="req-0", sequence_id=0, query_len=1, seq_len=1)]
+    runtime, _, _, _ = _make_runtime(monkeypatch, num_heads=1, num_kv_heads=1)
+    batch = runtime.prepare_batch(
+        [DiffusionPagedAttentionSequence(request_id="req-0", sequence_id=0, query_len=1, seq_len=1)]
     )
     qkv = torch.randn(1, 4)
 
-    with adapter.activate(batch):
-        context = adapter.prepare_layer_context("layer-0", qkv, qkv, qkv)
+    with runtime.activate(batch):
+        context = runtime.prepare_layer_context("layer-0", qkv, qkv, qkv)
         output = _run_omni_paged_backend(context)
 
     assert context.query.shape == (1, 1, 4)
@@ -747,122 +741,124 @@ def test_forward_accepts_one_flattened_token_for_single_head(monkeypatch: pytest
 
 
 def test_forward_requires_active_prepared_batch(monkeypatch: pytest.MonkeyPatch) -> None:
-    adapter, _, _, _ = _make_adapter(monkeypatch)
+    runtime, _, _, _ = _make_runtime(monkeypatch)
     qkv = torch.randn(1, 2, 4)
 
-    with pytest.raises(RuntimeError, match="adapter.activate"):
-        adapter.prepare_layer_context("layer-0", qkv, qkv, qkv)
+    with pytest.raises(RuntimeError, match="runtime.activate"):
+        runtime.prepare_layer_context("layer-0", qkv, qkv, qkv)
 
 
 def test_new_preparation_invalidates_native_buffer_views_in_older_batch(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    adapter, _, _, _ = _make_adapter(monkeypatch)
-    old_batch = adapter.prepare_batch(
-        [DiffusionPagedAttentionRow(request_id="req-0", sequence_id=0, query_len=1, seq_len=1)]
+    runtime, _, _, _ = _make_runtime(monkeypatch)
+    old_batch = runtime.prepare_batch(
+        [DiffusionPagedAttentionSequence(request_id="req-0", sequence_id=0, query_len=1, seq_len=1)]
     )
-    adapter.prepare_batch([DiffusionPagedAttentionRow(request_id="req-1", sequence_id=1, query_len=1, seq_len=1)])
+    runtime.prepare_batch([DiffusionPagedAttentionSequence(request_id="req-1", sequence_id=1, query_len=1, seq_len=1)])
 
     with pytest.raises(ValueError, match="stale"):
-        with adapter.activate(old_batch):
+        with runtime.activate(old_batch):
             pass
 
 
 def test_block_table_change_invalidates_prepared_native_buffer_views(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    adapter, _, _, _ = _make_adapter(monkeypatch)
-    batch = adapter.prepare_batch(
-        [DiffusionPagedAttentionRow(request_id="req-0", sequence_id=0, query_len=1, seq_len=1)]
+    runtime, _, _, _ = _make_runtime(monkeypatch)
+    batch = runtime.prepare_batch(
+        [DiffusionPagedAttentionSequence(request_id="req-0", sequence_id=0, query_len=1, seq_len=1)]
     )
 
-    adapter.invalidate_prepared_batches()
+    runtime.invalidate_prepared_batches()
 
     with pytest.raises(ValueError, match="stale"):
-        with adapter.activate(batch):
+        with runtime.activate(batch):
             pass
 
 
 def test_block_table_change_is_rejected_during_active_forward(monkeypatch: pytest.MonkeyPatch) -> None:
-    adapter, _, _, _ = _make_adapter(monkeypatch)
-    batch = adapter.prepare_batch(
-        [DiffusionPagedAttentionRow(request_id="req-0", sequence_id=0, query_len=1, seq_len=1)]
+    runtime, _, _, _ = _make_runtime(monkeypatch)
+    batch = runtime.prepare_batch(
+        [DiffusionPagedAttentionSequence(request_id="req-0", sequence_id=0, query_len=1, seq_len=1)]
     )
 
-    with adapter.activate(batch), pytest.raises(RuntimeError, match="during an active forward"):
-        adapter.invalidate_prepared_batches()
+    with runtime.activate(batch), pytest.raises(RuntimeError, match="during an active forward"):
+        runtime.invalidate_prepared_batches()
 
 
 def test_prepare_batch_rejects_active_native_buffers(monkeypatch: pytest.MonkeyPatch) -> None:
-    adapter, _, _, _ = _make_adapter(monkeypatch)
-    batch = adapter.prepare_batch(
-        [DiffusionPagedAttentionRow(request_id="req-0", sequence_id=0, query_len=1, seq_len=1)]
+    runtime, _, _, _ = _make_runtime(monkeypatch)
+    batch = runtime.prepare_batch(
+        [DiffusionPagedAttentionSequence(request_id="req-0", sequence_id=0, query_len=1, seq_len=1)]
     )
 
-    with adapter.activate(batch), pytest.raises(RuntimeError, match="during an active forward"):
-        adapter.prepare_batch([DiffusionPagedAttentionRow(request_id="req-1", sequence_id=1, query_len=1, seq_len=1)])
+    with runtime.activate(batch), pytest.raises(RuntimeError, match="during an active forward"):
+        runtime.prepare_batch(
+            [DiffusionPagedAttentionSequence(request_id="req-1", sequence_id=1, query_len=1, seq_len=1)]
+        )
 
 
 def test_forward_rejects_tensor_count_different_from_prepared_batch(monkeypatch: pytest.MonkeyPatch) -> None:
-    adapter, _, _, _ = _make_adapter(monkeypatch)
-    batch = adapter.prepare_batch(
-        [DiffusionPagedAttentionRow(request_id="req-0", sequence_id=0, query_len=3, seq_len=3)]
+    runtime, _, _, _ = _make_runtime(monkeypatch)
+    batch = runtime.prepare_batch(
+        [DiffusionPagedAttentionSequence(request_id="req-0", sequence_id=0, query_len=3, seq_len=3)]
     )
     qkv = torch.randn(2, 2, 4)
 
-    with adapter.activate(batch), pytest.raises(ValueError, match="token count"):
-        adapter.prepare_layer_context("layer-0", qkv, qkv, qkv)
+    with runtime.activate(batch), pytest.raises(ValueError, match="token count"):
+        runtime.prepare_layer_context("layer-0", qkv, qkv, qkv)
 
 
 def test_forward_rejects_dtype_different_from_model_activation_dtype(monkeypatch: pytest.MonkeyPatch) -> None:
-    adapter, _, _, _ = _make_adapter(monkeypatch)
-    batch = adapter.prepare_batch(
-        [DiffusionPagedAttentionRow(request_id="req-0", sequence_id=0, query_len=1, seq_len=1)]
+    runtime, _, _, _ = _make_runtime(monkeypatch)
+    batch = runtime.prepare_batch(
+        [DiffusionPagedAttentionSequence(request_id="req-0", sequence_id=0, query_len=1, seq_len=1)]
     )
     qkv = torch.randn(1, 2, 4, dtype=torch.float64)
 
-    with adapter.activate(batch), pytest.raises(ValueError, match="model activation dtype"):
-        adapter.prepare_layer_context("layer-0", qkv, qkv, qkv)
+    with runtime.activate(batch), pytest.raises(ValueError, match="model activation dtype"):
+        runtime.prepare_layer_context("layer-0", qkv, qkv, qkv)
 
 
 def test_forward_rejects_invalid_key_token_count(monkeypatch: pytest.MonkeyPatch) -> None:
-    adapter, _, _, _ = _make_adapter(monkeypatch)
-    batch = adapter.prepare_batch(
-        [DiffusionPagedAttentionRow(request_id="req-0", sequence_id=0, query_len=4, seq_len=4)]
+    runtime, _, _, _ = _make_runtime(monkeypatch)
+    batch = runtime.prepare_batch(
+        [DiffusionPagedAttentionSequence(request_id="req-0", sequence_id=0, query_len=4, seq_len=4)]
     )
     query = torch.randn(4, 2, 4)
     key = torch.randn(3, 2, 4)
 
-    with adapter.activate(batch), pytest.raises(ValueError, match="key token count"):
-        adapter.prepare_layer_context("layer-0", query, key, query)
+    with runtime.activate(batch), pytest.raises(ValueError, match="key token count"):
+        runtime.prepare_layer_context("layer-0", query, key, query)
 
 
-def test_forward_rejects_batched_layout_that_does_not_match_rows(monkeypatch: pytest.MonkeyPatch) -> None:
-    adapter, _, _, _ = _make_adapter(monkeypatch)
-    batch = adapter.prepare_batch(
+def test_forward_rejects_batched_layout_that_does_not_match_sequences(monkeypatch: pytest.MonkeyPatch) -> None:
+    runtime, _, _, _ = _make_runtime(monkeypatch)
+    batch = runtime.prepare_batch(
         [
-            DiffusionPagedAttentionRow(request_id="req-0", sequence_id=0, query_len=1, seq_len=1),
-            DiffusionPagedAttentionRow(request_id="req-1", sequence_id=1, query_len=3, seq_len=3),
+            DiffusionPagedAttentionSequence(request_id="req-0", sequence_id=0, query_len=1, seq_len=1),
+            DiffusionPagedAttentionSequence(request_id="req-1", sequence_id=1, query_len=3, seq_len=3),
         ]
     )
     qkv = torch.randn(2, 2, 2, 4)
 
-    with adapter.activate(batch), pytest.raises(ValueError, match="must match prepared rows"):
-        adapter.prepare_layer_context("layer-0", qkv, qkv, qkv)
+    with runtime.activate(batch), pytest.raises(ValueError, match="must match prepared sequences"):
+        runtime.prepare_layer_context("layer-0", qkv, qkv, qkv)
 
 
 def test_forward_rejects_padded_full_kv(monkeypatch: pytest.MonkeyPatch) -> None:
-    adapter, _, _, _ = _make_adapter(monkeypatch)
-    batch = adapter.prepare_batch(
+    runtime, _, _, _ = _make_runtime(monkeypatch)
+    batch = runtime.prepare_batch(
         [
-            DiffusionPagedAttentionRow(
+            DiffusionPagedAttentionSequence(
                 request_id="req-0",
                 sequence_id=0,
                 query_len=1,
                 seq_len=3,
                 kv_start_pos=2,
             ),
-            DiffusionPagedAttentionRow(
+            DiffusionPagedAttentionSequence(
                 request_id="req-1",
                 sequence_id=1,
                 query_len=1,
@@ -874,13 +870,13 @@ def test_forward_rejects_padded_full_kv(monkeypatch: pytest.MonkeyPatch) -> None
     query = torch.randn(2, 1, 2, 4)
     full_kv = torch.randn(2, 4, 2, 4)
 
-    with adapter.activate(batch), pytest.raises(ValueError, match="batched key layout must match prepared rows"):
-        adapter.prepare_layer_context("layer-0", query, full_kv, full_kv)
+    with runtime.activate(batch), pytest.raises(ValueError, match="batched key layout must match prepared sequences"):
+        runtime.prepare_layer_context("layer-0", query, full_kv, full_kv)
 
 
 def test_causal_batch_rejects_non_suffix_write(monkeypatch: pytest.MonkeyPatch) -> None:
-    adapter, _, _, _ = _make_adapter(monkeypatch, non_causal=False)
-    row = DiffusionPagedAttentionRow(
+    runtime, _, _, _ = _make_runtime(monkeypatch, non_causal=False)
+    sequence = DiffusionPagedAttentionSequence(
         request_id="req-0",
         sequence_id=0,
         query_len=2,
@@ -888,45 +884,45 @@ def test_causal_batch_rejects_non_suffix_write(monkeypatch: pytest.MonkeyPatch) 
         kv_start_pos=3,
     )
 
-    batch = adapter.prepare_batch([row])
+    batch = runtime.prepare_batch([sequence])
     qkv = torch.randn(2, 2, 4)
 
-    with adapter.activate(batch), pytest.raises(ValueError, match="requires each query/write span to end"):
-        adapter.prepare_layer_context("layer-0", qkv, qkv, qkv)
+    with runtime.activate(batch), pytest.raises(ValueError, match="requires each query/write span to end"):
+        runtime.prepare_layer_context("layer-0", qkv, qkv, qkv)
 
 
 def test_prepare_batch_rejects_native_decode_after_prefill_order(monkeypatch: pytest.MonkeyPatch) -> None:
-    adapter, block_tables, _, _ = _make_adapter(
+    runtime, block_tables, _, _ = _make_runtime(
         monkeypatch,
         non_causal=False,
         reorder_batch_threshold=1,
     )
-    rows = [
-        DiffusionPagedAttentionRow(request_id="req-0", sequence_id=0, query_len=2, seq_len=2),
-        DiffusionPagedAttentionRow(request_id="req-1", sequence_id=1, query_len=1, seq_len=1),
+    sequences = [
+        DiffusionPagedAttentionSequence(request_id="req-0", sequence_id=0, query_len=2, seq_len=2),
+        DiffusionPagedAttentionSequence(request_id="req-1", sequence_id=1, query_len=1, seq_len=1),
     ]
 
-    with pytest.raises(ValueError, match="decode/short-query rows before"):
-        adapter.prepare_batch(rows)
+    with pytest.raises(ValueError, match="decode/short-query sequences before"):
+        runtime.prepare_batch(sequences)
 
     assert block_tables.gather_calls == []
     assert block_tables.slot_calls == []
 
 
-def test_prepare_batch_rejects_seq_len_beyond_installed_row_capacity(
+def test_prepare_batch_rejects_seq_len_beyond_installed_binding_capacity(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    adapter, block_tables, _, _ = _make_adapter(monkeypatch)
+    runtime, block_tables, _, _ = _make_runtime(monkeypatch)
     block_tables.num_blocks.np[0, 2] = 1
-    row = DiffusionPagedAttentionRow(
+    sequence = DiffusionPagedAttentionSequence(
         request_id="req-0",
         sequence_id=0,
         query_len=5,
         seq_len=5,
     )
 
-    with pytest.raises(ValueError, match="installed Worker row contains only 1 blocks"):
-        adapter.prepare_batch([row])
+    with pytest.raises(ValueError, match="binding contains only 1 blocks"):
+        runtime.prepare_batch([sequence])
 
     assert block_tables.gather_calls == []
     assert block_tables.slot_calls == []
@@ -935,9 +931,9 @@ def test_prepare_batch_rejects_seq_len_beyond_installed_row_capacity(
 def test_prepare_batch_rejects_seq_len_beyond_installed_logical_length(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    adapter, block_tables, _, _ = _make_adapter(monkeypatch)
-    adapter.resolve_row = lambda *_args: DiffusionPagedAttentionRowBinding(2, 4)
-    row = DiffusionPagedAttentionRow(
+    runtime, block_tables, _, _ = _make_runtime(monkeypatch)
+    runtime.resolve_sequence = lambda *_args: DiffusionKVSequenceBinding(2, 4)
+    sequence = DiffusionPagedAttentionSequence(
         request_id="req-0",
         sequence_id=0,
         query_len=5,
@@ -945,7 +941,7 @@ def test_prepare_batch_rejects_seq_len_beyond_installed_logical_length(
     )
 
     with pytest.raises(ValueError, match="installed allocation has logical length 4"):
-        adapter.prepare_batch([row])
+        runtime.prepare_batch([sequence])
 
     assert block_tables.gather_calls == []
     assert block_tables.slot_calls == []
@@ -954,30 +950,28 @@ def test_prepare_batch_rejects_seq_len_beyond_installed_logical_length(
 def test_prepare_batch_passes_dcp_local_seq_lens_to_native_builder(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    adapter, block_tables, _, events = _make_adapter(monkeypatch)
+    runtime, block_tables, _, events = _make_runtime(monkeypatch)
     block_tables.cp_size = 2
     block_tables.cp_rank = 1
     block_tables.cp_interleave = 2
     block_tables.num_blocks.np[0, 2] = 1
 
-    batch = adapter.prepare_batch(
-        [DiffusionPagedAttentionRow(request_id="req-0", sequence_id=0, query_len=5, seq_len=5)]
+    runtime.prepare_batch(
+        [DiffusionPagedAttentionSequence(request_id="req-0", sequence_id=0, query_len=5, seq_len=5)]
     )
 
-    assert batch.row_indices.tolist() == [2]
     assert events[0][1]["dcp_local_seq_lens"].tolist() == [2]
 
 
 @pytest.mark.parametrize(
     ("kwargs", "message"),
     [
-        ({"sequence_id": 0, "context_id": "text"}, "exactly one"),
-        ({}, "exactly one"),
+        ({"sequence_id": -1}, "sequence_id"),
         ({"sequence_id": 0, "query_len": 0}, "query_len"),
         ({"sequence_id": 0, "kv_start_pos": 4, "query_len": 2, "seq_len": 5}, "exceeds seq_len"),
     ],
 )
-def test_row_contract_rejects_invalid_identity_or_span(kwargs: dict, message: str) -> None:
+def test_sequence_contract_rejects_invalid_identity_or_span(kwargs: dict, message: str) -> None:
     values = {
         "request_id": "req-0",
         "query_len": 1,
@@ -985,7 +979,7 @@ def test_row_contract_rejects_invalid_identity_or_span(kwargs: dict, message: st
         **kwargs,
     }
     with pytest.raises(ValueError, match=message):
-        DiffusionPagedAttentionRow(**values)
+        DiffusionPagedAttentionSequence(**values)
 
 
 def test_layer_adapter_accepts_platform_native_backend_and_uses_rank_local_heads(
@@ -1011,8 +1005,8 @@ def test_layer_adapter_accepts_platform_native_backend_and_uses_rank_local_heads
         selected_backends.append((config.attention_config.backend, config.attention_config.backend_per_kind))
         return native_backend
 
-    monkeypatch.setattr(adapter_module, "get_attn_backend", select_backend)
-    monkeypatch.setattr(adapter_module, "set_current_vllm_config", lambda _config: nullcontext())
+    monkeypatch.setattr(runtime_module, "get_attn_backend", select_backend)
+    monkeypatch.setattr(runtime_module, "set_current_vllm_config", lambda _config: nullcontext())
     layer = SimpleNamespace(num_heads=8, softmax_scale=0.125)
     spec = FullAttentionSpec(
         block_size=16,
@@ -1022,7 +1016,7 @@ def test_layer_adapter_accepts_platform_native_backend_and_uses_rank_local_heads
         non_causal=True,
     )
 
-    native_layer = adapter_module.DiffusionPagedAttentionLayerAdapter(
+    native_layer = runtime_module.DiffusionPagedAttentionLayerAdapter(
         layer_name="layer-0",
         layer=layer,
         spec=spec,
@@ -1031,7 +1025,7 @@ def test_layer_adapter_accepts_platform_native_backend_and_uses_rank_local_heads
         ulysses_degree=2,
     )
 
-    assert selected_backends == [(adapter_module.AttentionBackendEnum.FLASH_ATTN, {})]
+    assert selected_backends == [(runtime_module.AttentionBackendEnum.FLASH_ATTN, {})]
     assert config.attention_config.backend is None
     assert config.attention_config.backend_per_kind is original_backend_per_kind
     assert native_layer.num_heads == 4
@@ -1078,7 +1072,6 @@ def test_omni_attention_wraps_paged_kernel_with_sp_hooks() -> None:
     nn.Module.__init__(layer)
     layer.prefix = "layer-0"
     layer.paged_kv_cache_role = "primary"
-    layer.attn_backend = SimpleNamespace(supports_paged_kv=True, get_name=lambda: "FLASH_ATTN")
     layer.attention = Backend()
     layer.use_ring = False
     layer._no_parallel_strategy = object()
@@ -1086,34 +1079,12 @@ def test_omni_attention_wraps_paged_kernel_with_sp_hooks() -> None:
     layer._with_kv_cache_dtype = lambda metadata: metadata
     original = torch.zeros(1, 2, 2, 4)
 
-    with set_forward_context(), override_paged_kv_adapter(Adapter()):
+    with set_forward_context(), override_paged_kv_runtime(Adapter()):
         assert layer.is_paged_kv_active()
         output = layer._forward_impl(original, original, original)
 
     assert events == ["pre", "prepare", "kernel", "post"]
     assert torch.equal(output, torch.full_like(original, 6))
-
-
-def test_omni_attention_rejects_paged_request_for_backend_without_paged_support() -> None:
-    class Adapter:
-        def prepare_layer_context(self, *args, **kwargs):
-            raise AssertionError("an unsupported backend must fail before adapter preparation")
-
-    layer = Attention.__new__(Attention)
-    nn.Module.__init__(layer)
-    layer.prefix = "layer-0"
-    layer.paged_kv_cache_role = "primary"
-    layer.attn_backend = SimpleNamespace(supports_paged_kv=False, get_name=lambda: "SDPA")
-    layer.use_ring = False
-    layer._no_parallel_strategy = object()
-    layer._get_active_parallel_strategy = lambda: layer._no_parallel_strategy
-
-    with (
-        set_forward_context(),
-        override_paged_kv_adapter(Adapter()),
-        pytest.raises(NotImplementedError, match="backend with paged support"),
-    ):
-        layer._forward_impl(torch.zeros(1, 2, 2, 4), torch.zeros(1, 2, 2, 4), torch.zeros(1, 2, 2, 4))
 
 
 def test_omni_attention_keeps_dense_kernel_without_active_adapter() -> None:

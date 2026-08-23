@@ -23,22 +23,25 @@ from vllm.v1.worker.gpu.block_table import BlockTables
 from vllm_omni.diffusion.attention.backends.utils.piecewise_attn import (
     PagedPiecewisePlan,
     build_paged_piecewise_plan,
+    run_paged_piecewise_plan,
 )
-from vllm_omni.diffusion.forward_context import override_paged_kv_adapter
+from vllm_omni.diffusion.diffusion_kv.request import DiffusionPagedAttentionSequence
+from vllm_omni.diffusion.forward_context import override_paged_kv_runtime
 from vllm_omni.platforms import current_omni_platform
 
 
 @dataclass(frozen=True)
-class DiffusionPagedAttentionRowBinding:
-    """Worker row and logical length installed for one allocation identity."""
+class DiffusionKVSequenceBinding:
+    """Worker sequence and logical length installed for one allocation identity."""
 
-    row_index: int
+    req_index: int
     max_seq_len: int
+    num_computed_tokens: int = 0
 
 
-DiffusionKVRowResolver = Callable[
-    [str, int | None, str | None],
-    DiffusionPagedAttentionRowBinding,
+DiffusionKVSequenceResolver = Callable[
+    [str, int],
+    DiffusionKVSequenceBinding,
 ]
 
 
@@ -50,7 +53,7 @@ class DiffusionPagedAttentionLayerAdapter(AttentionLayerBase):
     parallel pre/post hooks.  The wrapper only supplies the small
     ``AttentionLayerBase`` contract needed by ``init_attn_backend`` and keeps
     the platform-native attention implementation/cache view available to the
-    diffusion adapter.
+    diffusion runtime.
     """
 
     def __init__(
@@ -81,14 +84,19 @@ class DiffusionPagedAttentionLayerAdapter(AttentionLayerBase):
         num_kv_heads //= ulysses_degree
 
         attention_config = vllm_config.attention_config
+        parallel_config = getattr(vllm_config, "parallel_config", None)
         previous_backend = attention_config.backend
         previous_backend_per_kind = attention_config.backend_per_kind
+        previous_pcp_size = getattr(parallel_config, "prefill_context_parallel_size", None)
         try:
             # This is a portable vLLM backend request. The active platform
             # resolves it to its native implementation, such as FlashAttention
             # on CUDA or AscendAttentionBackend on NPU.
             attention_config.backend = AttentionBackendEnum.FLASH_ATTN
             attention_config.backend_per_kind = {}
+            # Omni already applies SP sharding; advertising PCP here would double-count it.
+            if parallel_config is not None:
+                parallel_config.prefill_context_parallel_size = 1
             with set_current_vllm_config(vllm_config):
                 attn_backend = get_attn_backend(
                     head_size=spec.head_size,
@@ -100,6 +108,8 @@ class DiffusionPagedAttentionLayerAdapter(AttentionLayerBase):
         finally:
             attention_config.backend = previous_backend
             attention_config.backend_per_kind = previous_backend_per_kind
+            if parallel_config is not None:
+                parallel_config.prefill_context_parallel_size = previous_pcp_size
         canonical_spec = replace(
             spec,
             num_kv_heads=num_kv_heads,
@@ -168,50 +178,10 @@ class DiffusionPagedAttentionLayerAdapter(AttentionLayerBase):
 
 
 @dataclass(frozen=True)
-class DiffusionPagedAttentionRow:
-    """One logical BlockTable row participating in a paged attention call."""
-
-    request_id: str
-    query_len: int
-    seq_len: int
-    kv_start_pos: int = 0
-    sequence_id: int | None = None
-    context_id: str | None = None
-
-    def __post_init__(self) -> None:
-        if type(self.request_id) is not str or not self.request_id:
-            raise ValueError("Paged attention request_id must be a non-empty string")
-        if (self.sequence_id is None) == (self.context_id is None):
-            raise ValueError("Paged attention row requires exactly one of sequence_id or context_id")
-        if self.sequence_id is not None and (type(self.sequence_id) is not int or self.sequence_id < 0):
-            raise ValueError("Paged attention sequence_id must be a non-negative integer")
-        if self.context_id is not None and (type(self.context_id) is not str or not self.context_id):
-            raise ValueError("Paged attention context_id must be a non-empty string")
-        if type(self.query_len) is not int or self.query_len <= 0:
-            raise ValueError("Paged attention query_len must be a positive integer")
-        if type(self.seq_len) is not int or self.seq_len <= 0:
-            raise ValueError("Paged attention seq_len must be a positive integer")
-        if type(self.kv_start_pos) is not int or self.kv_start_pos < 0:
-            raise ValueError("Paged attention kv_start_pos must be a non-negative integer")
-        if self.kv_start_pos + self.query_len > self.seq_len:
-            raise ValueError(
-                "Paged attention write span exceeds seq_len: "
-                f"start={self.kv_start_pos}, query_len={self.query_len}, seq_len={self.seq_len}"
-            )
-
-    @property
-    def identity(self) -> tuple[str, int | None, str | None]:
-        return (self.request_id, self.sequence_id, self.context_id)
-
-
-@dataclass(frozen=True)
 class PreparedDiffusionPagedAttentionBatch:
     """Native metadata shared by all paged attention layers in one forward."""
 
-    rows: tuple[DiffusionPagedAttentionRow, ...]
-    row_indices: torch.Tensor
-    query_start_loc: torch.Tensor
-    seq_lens: torch.Tensor
+    sequences: tuple[DiffusionPagedAttentionSequence, ...]
     positions: torch.Tensor
     block_tables: tuple[torch.Tensor, ...]
     slot_mappings: torch.Tensor
@@ -236,15 +206,85 @@ class DiffusionPagedAttentionContext:
     piecewise_native_metadata: tuple[Any, ...]
     query_token_shape: tuple[int, ...]
     query_has_head_dims: bool
+    sequence_query_lens: tuple[int, ...]
+    tail_padding: int = 0
+
+    def run(self) -> torch.Tensor:
+        layer = self.layer
+        kv_cache = layer.kv_cache
+        if kv_cache is None:
+            raise RuntimeError(f"Native KV cache is not bound for diffusion layer {layer.layer_name!r}")
+        if not layer.attn_backend.forward_includes_kv_cache_update:
+            layer.impl.do_kv_cache_update(
+                layer,
+                self.key_write,
+                self.value_write,
+                kv_cache,
+                self.slot_mapping,
+            )
+
+        def run_native_attention(
+            query: torch.Tensor,
+            key: torch.Tensor,
+            value: torch.Tensor,
+            native_metadata: Any,
+        ) -> torch.Tensor:
+            output = torch.empty(
+                (query.shape[0], layer.num_heads, layer.head_size_v),
+                dtype=query.dtype,
+                device=query.device,
+            )
+            return layer.impl.forward(
+                layer,
+                query,
+                key,
+                value,
+                kv_cache,
+                native_metadata,
+                output,
+            )
+
+        if self.piecewise_plan is not None:
+            output = run_paged_piecewise_plan(
+                self.query,
+                self.key_write,
+                self.value_write,
+                self.piecewise_plan,
+                self.piecewise_native_metadata,
+                run_native_attention,
+            )
+        else:
+            output = run_native_attention(
+                self.query,
+                self.key_write,
+                self.value_write,
+                self.native_metadata,
+            )
+        return self.restore_output(output)
 
     def restore_output(self, output: torch.Tensor) -> torch.Tensor:
+        if self.tail_padding:
+            batch_size, padded_query_len = self.query_token_shape
+            sequences = []
+            offset = 0
+            for query_len in self.sequence_query_lens:
+                sequence = output[offset : offset + query_len]
+                padding = sequence.new_zeros((padded_query_len - query_len, *sequence.shape[1:]))
+                sequences.append(torch.cat((sequence, padding), dim=0))
+                offset += query_len
+            if offset != output.shape[0]:
+                raise ValueError(
+                    "Paged attention output token count does not match the logical query sequences: "
+                    f"output={output.shape[0]}, sequences={self.sequence_query_lens}"
+                )
+            output = torch.stack(sequences, dim=0)
         if self.query_has_head_dims:
             return output.reshape(*self.query_token_shape, self.layer.num_heads, self.layer.head_size_v)
         return output.reshape(*self.query_token_shape, self.layer.num_heads * self.layer.head_size_v)
 
 
-class DiffusionPagedAttentionAdapter:
-    """Translate diffusion rows into vLLM metadata for an Omni paged backend."""
+class DiffusionPagedAttentionRuntime:
+    """Translate diffusion sequences into vLLM metadata for an Omni paged backend."""
 
     def __init__(
         self,
@@ -255,7 +295,7 @@ class DiffusionPagedAttentionAdapter:
         block_tables: BlockTables,
         attn_groups: list[list[Any]],
         layers: Mapping[str, DiffusionPagedAttentionLayerAdapter],
-        resolve_row: DiffusionKVRowResolver,
+        resolve_sequence: DiffusionKVSequenceResolver,
     ) -> None:
         if not layers:
             raise ValueError("Paged attention requires at least one native attention layer")
@@ -270,7 +310,7 @@ class DiffusionPagedAttentionAdapter:
         self.block_tables = block_tables
         self.attn_groups = attn_groups
         self.layers = dict(layers)
-        self.resolve_row = resolve_row
+        self.resolve_sequence = resolve_sequence
         self._owner = object()
         self._prepare_generation = 0
         self._active_batch: PreparedDiffusionPagedAttentionBatch | None = None
@@ -301,31 +341,33 @@ class DiffusionPagedAttentionAdapter:
         concrete_thresholds = [threshold for threshold in thresholds if threshold is not None]
         return min(concrete_thresholds, default=None)
 
-    def _validate_native_batch_order(self, rows: tuple[DiffusionPagedAttentionRow, ...]) -> None:
+    def _validate_sequence_order(self, sequences: tuple[DiffusionPagedAttentionSequence, ...]) -> None:
         threshold = self._reorder_batch_threshold
         if threshold is None or not any(self._causal_by_group.values()):
             return
 
         found_long_query = False
-        for row in rows:
-            if row.query_len > threshold:
+        for sequence in sequences:
+            if sequence.query_len > threshold:
                 found_long_query = True
             elif found_long_query:
                 raise ValueError(
-                    "Causal paged attention rows must place native decode/short-query rows before "
-                    f"prefill/long-query rows (decode threshold={threshold})"
+                    "Causal paged attention sequences must place native decode/short-query sequences before "
+                    f"prefill/long-query sequences (decode threshold={threshold})"
                 )
 
-    def _validate_row_capacity(
+    def _validate_sequence_capacity(
         self,
-        rows: tuple[DiffusionPagedAttentionRow, ...],
-        row_indices: list[int],
+        sequences: tuple[DiffusionPagedAttentionSequence, ...],
+        req_indices: list[int],
     ) -> None:
         native_num_blocks = self.block_tables.num_blocks.np
         blocks_per_kv_block = self.block_tables.blocks_per_kv_block
-        for row, row_index in zip(rows, row_indices, strict=True):
-            if type(row_index) is not int or not 0 <= row_index < self.block_tables.max_num_reqs:
-                raise ValueError(f"Paged attention row {row.identity!r} resolved to invalid Worker row {row_index!r}")
+        for sequence, req_index in zip(sequences, req_indices, strict=True):
+            if type(req_index) is not int or not 0 <= req_index < self.block_tables.max_num_reqs:
+                raise ValueError(
+                    f"Paged attention sequence {sequence.identity!r} resolved to invalid req_index {req_index!r}"
+                )
             for group_index, (block_size, block_multiplier) in enumerate(
                 zip(
                     self.block_tables.block_sizes,
@@ -334,16 +376,16 @@ class DiffusionPagedAttentionAdapter:
                 )
             ):
                 required_blocks = cdiv(
-                    row.seq_len,
+                    sequence.seq_len,
                     block_size * self.block_tables.cp_size,
                 )
                 required_kernel_blocks = required_blocks * block_multiplier
-                installed_kernel_blocks = int(native_num_blocks[group_index, row_index])
+                installed_kernel_blocks = int(native_num_blocks[group_index, req_index])
                 if required_kernel_blocks > installed_kernel_blocks:
                     raise ValueError(
-                        f"Paged attention row {row.identity!r} requires {required_blocks} blocks in "
-                        f"cache group {group_index} for seq_len={row.seq_len}, but its installed Worker "
-                        f"row contains only {installed_kernel_blocks // block_multiplier} blocks"
+                        f"Paged attention sequence {sequence.identity!r} requires {required_blocks} blocks in "
+                        f"cache group {group_index} for seq_len={sequence.seq_len}, but its installed Worker "
+                        f"binding contains only {installed_kernel_blocks // block_multiplier} blocks"
                     )
 
     def _build_native_metadata(
@@ -389,39 +431,42 @@ class DiffusionPagedAttentionAdapter:
 
     def prepare_batch(
         self,
-        rows: Sequence[DiffusionPagedAttentionRow],
+        sequences: Sequence[DiffusionPagedAttentionSequence],
     ) -> PreparedDiffusionPagedAttentionBatch:
-        rows = tuple(rows)
-        if not rows:
-            raise ValueError("Paged attention batch must contain at least one row")
+        sequences = tuple(sequences)
+        if not sequences:
+            raise ValueError("Paged attention batch must contain at least one sequence")
         if self._active_batch is not None:
             raise RuntimeError("Cannot prepare paged attention metadata during an active forward")
-        if len(rows) > self.block_tables.max_num_reqs:
+        if len(sequences) > self.block_tables.max_num_reqs:
             raise ValueError(
-                f"Paged attention batch has {len(rows)} rows; Worker capacity is {self.block_tables.max_num_reqs}"
+                f"Paged attention batch has {len(sequences)} sequences; "
+                f"Worker capacity is {self.block_tables.max_num_reqs}"
             )
 
-        identities = [row.identity for row in rows]
+        identities = [sequence.identity for sequence in sequences]
         if len(set(identities)) != len(identities):
-            raise ValueError("Paged attention batch contains duplicate row identities")
-        row_bindings = [self.resolve_row(row.request_id, row.sequence_id, row.context_id) for row in rows]
-        row_indices_list = [binding.row_index for binding in row_bindings]
-        if len(set(row_indices_list)) != len(row_indices_list):
-            raise ValueError("Paged attention batch resolves multiple inputs to the same Worker row")
-        for row, binding in zip(rows, row_bindings, strict=True):
+            raise ValueError("Paged attention batch contains duplicate sequence identities")
+        bindings = [self.resolve_sequence(sequence.request_id, sequence.sequence_id) for sequence in sequences]
+        req_indices_list = [binding.req_index for binding in bindings]
+        if len(set(req_indices_list)) != len(req_indices_list):
+            raise ValueError("Paged attention batch resolves multiple sequences to the same req_index")
+        for sequence, binding in zip(sequences, bindings, strict=True):
             if type(binding.max_seq_len) is not int or binding.max_seq_len < 0:
                 raise ValueError(
-                    f"Paged attention row {row.identity!r} resolved to invalid logical capacity {binding.max_seq_len!r}"
+                    f"Paged attention sequence {sequence.identity!r} resolved to invalid logical capacity "
+                    f"{binding.max_seq_len!r}"
                 )
-            if row.seq_len > binding.max_seq_len:
+            if sequence.seq_len > binding.max_seq_len:
                 raise ValueError(
-                    f"Paged attention row {row.identity!r} uses seq_len={row.seq_len}, but its installed "
+                    f"Paged attention sequence {sequence.identity!r} uses seq_len={sequence.seq_len}, but its "
+                    "installed "
                     f"allocation has logical length {binding.max_seq_len}"
                 )
-        self._validate_native_batch_order(rows)
-        self._validate_row_capacity(rows, row_indices_list)
+        self._validate_sequence_order(sequences)
+        self._validate_sequence_capacity(sequences, req_indices_list)
 
-        query_lens = [row.query_len for row in rows]
+        query_lens = [sequence.query_len for sequence in sequences]
         num_tokens = sum(query_lens)
         if num_tokens > self.block_tables.max_num_batched_tokens:
             raise ValueError(
@@ -437,29 +482,29 @@ class DiffusionPagedAttentionAdapter:
         # later metadata builder raises.
         self._prepare_generation += 1
         generation = self._prepare_generation
-        row_indices = torch.tensor(row_indices_list, dtype=torch.int32, device=self.device)
+        req_indices = torch.tensor(req_indices_list, dtype=torch.int32, device=self.device)
         query_start_loc_cpu = torch.tensor(query_offsets, dtype=torch.int32)
         query_start_loc = query_start_loc_cpu.to(self.device)
-        seq_lens_cpu = torch.tensor([row.seq_len for row in rows], dtype=torch.int32)
+        seq_lens_cpu = torch.tensor([sequence.seq_len for sequence in sequences], dtype=torch.int32)
         seq_lens = seq_lens_cpu.to(self.device)
         positions = torch.cat(
             [
                 torch.arange(
-                    row.kv_start_pos,
-                    row.kv_start_pos + row.query_len,
+                    sequence.kv_start_pos,
+                    sequence.kv_start_pos + sequence.query_len,
                     dtype=torch.int64,
                     device=self.device,
                 )
-                for row in rows
+                for sequence in sequences
             ]
         )
 
         block_tables = self.block_tables.gather_block_tables(
-            row_indices,
-            num_reqs_padded=len(rows),
+            req_indices,
+            num_reqs_padded=len(sequences),
         )
         slot_mappings = self.block_tables.compute_slot_mappings(
-            row_indices,
+            req_indices,
             query_start_loc,
             positions,
             num_tokens_padded=num_tokens,
@@ -483,10 +528,7 @@ class DiffusionPagedAttentionAdapter:
             self.kv_cache_config,
         )
         return PreparedDiffusionPagedAttentionBatch(
-            rows=rows,
-            row_indices=row_indices,
-            query_start_loc=query_start_loc,
-            seq_lens=seq_lens,
+            sequences=sequences,
             positions=positions,
             block_tables=tuple(block_tables),
             slot_mappings=slot_mappings,
@@ -508,18 +550,18 @@ class DiffusionPagedAttentionAdapter:
     def activate(
         self,
         batch: PreparedDiffusionPagedAttentionBatch,
-    ) -> Iterator[DiffusionPagedAttentionAdapter]:
+    ) -> Iterator[DiffusionPagedAttentionRuntime]:
         if batch._owner is not self._owner:
-            raise ValueError("Prepared paged attention batch belongs to a different adapter")
+            raise ValueError("Prepared paged attention batch belongs to a different runtime")
         if batch._generation != self._prepare_generation:
             raise ValueError("Prepared paged attention batch is stale after a newer batch preparation")
         if self._active_batch is not None:
-            raise RuntimeError("Paged attention adapter already has an active forward")
+            raise RuntimeError("Paged attention runtime already has an active forward")
         self._active_batch = batch
         self._active_piecewise_plan = None
         self._active_piecewise_native_metadata = None
         try:
-            with override_paged_kv_adapter(self), set_current_vllm_config(self.vllm_config):
+            with override_paged_kv_runtime(self), set_current_vllm_config(self.vllm_config):
                 yield self
         finally:
             self._active_piecewise_plan = None
@@ -550,6 +592,7 @@ class DiffusionPagedAttentionAdapter:
         batch: PreparedDiffusionPagedAttentionBatch,
         *,
         name: str,
+        tail_padding: int = 0,
     ) -> None:
         if len(token_shape) == 1:
             if token_shape[0] == batch.num_tokens:
@@ -560,16 +603,35 @@ class DiffusionPagedAttentionAdapter:
             )
         if len(token_shape) == 2:
             batch_size, tokens_per_row = token_shape
-            query_lens = tuple(row.query_len for row in batch.rows)
-            if batch_size == len(batch.rows) and all(query_len == tokens_per_row for query_len in query_lens):
+            query_lens = tuple(sequence.query_len for sequence in batch.sequences)
+            if batch_size == len(batch.sequences) and all(
+                query_len + tail_padding == tokens_per_row for query_len in query_lens
+            ):
                 return
             raise ValueError(
-                f"Paged attention batched {name} layout must match prepared rows for the current write: "
-                f"shape={token_shape}, row_query_lens={query_lens}"
+                f"Paged attention batched {name} layout must match prepared sequences for the current write: "
+                f"shape={token_shape}, sequence_query_lens={query_lens}"
             )
         raise ValueError(
             f"Paged attention {name} supports packed [T, ...] or uniform batched [B, T, ...] token layouts; "
             f"got token shape={token_shape}"
+        )
+
+    @staticmethod
+    def _strip_uniform_tail_padding(
+        tensor: torch.Tensor,
+        token_shape: tuple[int, ...],
+        batch: PreparedDiffusionPagedAttentionBatch,
+        *,
+        tail_padding: int,
+    ) -> torch.Tensor:
+        if not tail_padding:
+            return tensor
+        batch_size, padded_query_len = token_shape
+        shaped = tensor.reshape(batch_size, padded_query_len, *tensor.shape[1:])
+        return torch.cat(
+            tuple(shaped[req_index, : sequence.query_len] for req_index, sequence in enumerate(batch.sequences)),
+            dim=0,
         )
 
     def _get_piecewise_plan(
@@ -579,11 +641,15 @@ class DiffusionPagedAttentionAdapter:
         batch = self._active_batch
         if batch is None:
             raise RuntimeError("Piecewise paged attention requires an active prepared batch")
-        if any(row.kv_start_pos + row.query_len != row.seq_len for row in batch.rows):
-            invalid_rows = [row.identity for row in batch.rows if row.kv_start_pos + row.query_len != row.seq_len]
+        if any(sequence.kv_start_pos + sequence.query_len != sequence.seq_len for sequence in batch.sequences):
+            invalid_sequences = [
+                sequence.identity
+                for sequence in batch.sequences
+                if sequence.kv_start_pos + sequence.query_len != sequence.seq_len
+            ]
             raise ValueError(
                 "Paged piecewise attention requires each query/write span to end at seq_len; "
-                f"invalid rows={invalid_rows!r}"
+                f"invalid sequences={invalid_sequences!r}"
             )
 
         cached_plan = self._active_piecewise_plan
@@ -595,9 +661,9 @@ class DiffusionPagedAttentionAdapter:
 
         plan = build_paged_piecewise_plan(
             full_attn_spans,
-            query_offsets=[row.kv_start_pos for row in batch.rows],
-            query_lens=[row.query_len for row in batch.rows],
-            seq_lens=[row.seq_len for row in batch.rows],
+            query_offsets=[sequence.kv_start_pos for sequence in batch.sequences],
+            query_lens=[sequence.query_len for sequence in batch.sequences],
+            seq_lens=[sequence.seq_len for sequence in batch.sequences],
             device=self.device,
         )
         self._active_piecewise_plan = plan
@@ -652,13 +718,13 @@ class DiffusionPagedAttentionAdapter:
         omni_attn_metadata: Any | None = None,
     ) -> DiffusionPagedAttentionContext:
         if self._active_batch is None:
-            raise RuntimeError("Paged attention forward must run inside adapter.activate(batch)")
+            raise RuntimeError("Paged attention forward must run inside runtime.activate(batch)")
         try:
             layer = self.layers[layer_name]
         except KeyError as exc:
             raise KeyError(f"Unknown diffusion paged attention layer {layer_name!r}") from exc
         batch = self._active_batch
-        full_attn_spans = self._validate_omni_attn_metadata(omni_attn_metadata)
+        full_attn_spans, tail_padding = self._validate_omni_attn_metadata(omni_attn_metadata)
 
         query_flat, query_token_shape, query_has_head_dims = self._flatten_tensor(
             query,
@@ -678,9 +744,27 @@ class DiffusionPagedAttentionAdapter:
             head_size=layer.head_size_v,
             name="value",
         )
-        self._validate_token_layout(query_token_shape, batch, name="query")
-        self._validate_token_layout(key_token_shape, batch, name="key")
-        self._validate_token_layout(value_token_shape, batch, name="value")
+        self._validate_token_layout(query_token_shape, batch, name="query", tail_padding=tail_padding)
+        self._validate_token_layout(key_token_shape, batch, name="key", tail_padding=tail_padding)
+        self._validate_token_layout(value_token_shape, batch, name="value", tail_padding=tail_padding)
+        query_flat = self._strip_uniform_tail_padding(
+            query_flat,
+            query_token_shape,
+            batch,
+            tail_padding=tail_padding,
+        )
+        key_flat = self._strip_uniform_tail_padding(
+            key_flat,
+            key_token_shape,
+            batch,
+            tail_padding=tail_padding,
+        )
+        value_flat = self._strip_uniform_tail_padding(
+            value_flat,
+            value_token_shape,
+            batch,
+            tail_padding=tail_padding,
+        )
         if query.device != self.device or key.device != self.device or value.device != self.device:
             raise ValueError(
                 f"Paged attention Q/K/V must be on {self.device}; "
@@ -694,11 +778,15 @@ class DiffusionPagedAttentionAdapter:
                 f"Paged attention Q/K/V dtype must match model activation dtype {expected_dtype}; got {query.dtype}"
             )
         if not bool(getattr(layer.spec, "non_causal", False)):
-            non_suffix_rows = [row.identity for row in batch.rows if row.kv_start_pos + row.query_len != row.seq_len]
-            if non_suffix_rows:
+            non_suffix_sequences = [
+                sequence.identity
+                for sequence in batch.sequences
+                if sequence.kv_start_pos + sequence.query_len != sequence.seq_len
+            ]
+            if non_suffix_sequences:
                 raise ValueError(
                     "Causal paged attention requires each query/write span to end at seq_len; "
-                    f"invalid rows={non_suffix_rows!r}"
+                    f"invalid sequences={non_suffix_sequences!r}"
                 )
 
         slot_mapping = batch.slot_mappings_by_layer.get(layer_name)
@@ -743,14 +831,16 @@ class DiffusionPagedAttentionAdapter:
             piecewise_native_metadata=piecewise_native_metadata,
             query_token_shape=query_token_shape,
             query_has_head_dims=query_has_head_dims,
+            sequence_query_lens=tuple(sequence.query_len for sequence in batch.sequences),
+            tail_padding=tail_padding,
         )
 
     @staticmethod
     def _validate_omni_attn_metadata(
         metadata: Any | None,
-    ) -> list[list[tuple[int, int]]] | None:
+    ) -> tuple[list[list[tuple[int, int]]] | None, int]:
         if metadata is None:
-            return None
+            return None, 0
         full_attn_spans = getattr(metadata, "full_attn_spans", None)
         attn_mask = getattr(metadata, "attn_mask", None)
         unsupported_fields = [
@@ -768,11 +858,17 @@ class DiffusionPagedAttentionAdapter:
             elif not isinstance(attn_mask, torch.Tensor) or attn_mask.ndim != 4:
                 unsupported_fields.append("attn_mask (piecewise paging requires a 4D tensor)")
         extra = getattr(metadata, "extra", None)
+        tail_padding = 0
         if extra:
-            unsupported_fields.append(f"extra={sorted(extra)}")
+            extra = dict(extra)
+            tail_padding = extra.pop("paged_kv_tail_padding", 0)
+            if type(tail_padding) is not int or tail_padding < 0:
+                raise ValueError(f"paged_kv_tail_padding must be a non-negative integer, got {tail_padding!r}")
+            if extra:
+                unsupported_fields.append(f"extra={sorted(extra)}")
         if unsupported_fields:
             raise NotImplementedError(
                 "Diffusion paged attention cannot translate Omni attention metadata fields "
                 f"{unsupported_fields!r} to native FlashAttention metadata"
             )
-        return full_attn_spans
+        return full_attn_spans, tail_padding

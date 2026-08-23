@@ -7,7 +7,14 @@ from types import SimpleNamespace
 from unittest.mock import Mock
 
 import pytest
+from vllm.v1.outputs import KVConnectorOutput
 
+import vllm_omni.diffusion.diffusion_kv.kv_connector as connector_module
+from vllm_omni.diffusion.diffusion_kv.config import DiffusionKVCacheMode
+from vllm_omni.diffusion.diffusion_kv.kv_connector import (
+    KVConnectorFatalError,
+    wait_for_remote_kv_before_forward,
+)
 from vllm_omni.diffusion.diffusion_kv.metadata import DiffusionKVMetadata, DiffusionKVSequenceMetadata
 from vllm_omni.diffusion.sched.interface import CachedRequestData, DiffusionSchedulerOutput, NewRequestData
 from vllm_omni.diffusion.worker.diffusion_model_runner import DiffusionModelRunner
@@ -50,15 +57,64 @@ def _scheduler_output(*, metadata=None, request_id: str = "req-0") -> DiffusionS
         num_running_reqs=1,
         num_waiting_reqs=0,
         kv_connector_metadata=metadata,
+        kv_connector_request_ids=frozenset({f"{request_id}/diffusion-kv/0"}),
     )
 
 
-def test_start_remote_kv_load_binds_metadata(monkeypatch) -> None:
+def test_model_runner_prepare_kv_for_forward_installs_bindings_and_waits(monkeypatch) -> None:
     runner = object.__new__(DiffusionModelRunner)
-    runner.od_config = SimpleNamespace()
-    start = Mock()
-    monkeypatch.setattr("vllm_omni.diffusion.worker.diffusion_model_runner.start_load_kv", start)
+    runner.od_config = SimpleNamespace(diffusion_kv_mode=DiffusionKVCacheMode.PAGED_SCHEDULER)
+    runner.kv_connector = Mock()
+    runtime = SimpleNamespace(
+        install_allocations=Mock(return_value=True),
+        remove_diffusion_kv_requests=Mock(return_value=0),
+    )
+    runner.diffusion_kv_backend = runtime
+    wait = Mock(
+        return_value=KVConnectorOutput(
+            finished_recving={"req-0/diffusion-kv/0"},
+        )
+    )
+    monkeypatch.setattr(
+        "vllm_omni.diffusion.worker.diffusion_model_runner.wait_for_remote_kv_before_forward",
+        wait,
+    )
     sched = _scheduler_output(metadata=object())
-    runner._maybe_start_remote_kv_load(sched)
+    result = runner.prepare_kv_for_forward(sched, 9.0, rank=3)
 
-    start.assert_called_once()
+    runtime.install_allocations.assert_called_once_with(sched.scheduled_new_reqs[0].diffusion_kv_metadata)
+    wait.assert_called_once_with(
+        runner.kv_connector,
+        sched,
+        timeout_s=9.0,
+        rank=3,
+    )
+    assert result.kv_connector_output.finished_recving == {"req-0/diffusion-kv/0"}
+
+
+def test_wait_for_remote_kv_rejects_invalid_blocks() -> None:
+    connector = Mock()
+    connector.post_forward.return_value = KVConnectorOutput(invalid_block_ids={7})
+
+    with pytest.raises(KVConnectorFatalError, match="invalid target blocks"):
+        wait_for_remote_kv_before_forward(
+            connector,
+            _scheduler_output(metadata=object()),
+            timeout_s=1.0,
+            rank=1,
+        )
+
+
+def test_wait_for_remote_kv_times_out(monkeypatch) -> None:
+    connector = Mock()
+    connector.post_forward.return_value = KVConnectorOutput()
+    monotonic = iter((0.0, 1.0))
+    monkeypatch.setattr(connector_module.time, "monotonic", lambda: next(monotonic))
+
+    with pytest.raises(KVConnectorFatalError, match="timed out.*rank 4"):
+        wait_for_remote_kv_before_forward(
+            connector,
+            _scheduler_output(metadata=object()),
+            timeout_s=0.5,
+            rank=4,
+        )

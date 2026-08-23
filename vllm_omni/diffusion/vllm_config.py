@@ -147,6 +147,14 @@ class _DiffusionVllmModelConfig:
         del parallel_config
         return self._require_attention_geometry()[1]
 
+    def get_total_num_kv_heads(self) -> int:
+        num_kv_heads = getattr(self.hf_config, "num_key_value_heads", None)
+        if num_kv_heads is None:
+            num_kv_heads = getattr(self.hf_config, "num_attention_heads", None)
+        if type(num_kv_heads) is int and num_kv_heads > 0:
+            return num_kv_heads
+        return self._require_attention_geometry()[1]
+
     def get_head_size(self) -> int:
         return self._require_attention_geometry()[2]
 

@@ -4,14 +4,19 @@ from abc import ABC, abstractmethod
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
 
+from vllm.distributed.kv_transfer.kv_connector.utils import KVOutputAggregator
 from vllm.utils.import_utils import resolve_obj_by_qualname
 from vllm.v1.kv_cache_interface import KVCacheConfig, KVCacheSpec
+from vllm.v1.outputs import ModelRunnerOutput
 
 from vllm_omni.diffusion.data import OmniDiffusionConfig
+from vllm_omni.diffusion.diffusion_kv.config import DiffusionKVCacheMode, is_scheduler_paged_kv_mode
+from vllm_omni.diffusion.sched.interface import DiffusionSchedulerOutput
 
 if TYPE_CHECKING:
+    from vllm.distributed.kv_transfer.kv_connector.v1.base import KVConnectorBase_V1, KVConnectorOutput
+
     from vllm_omni.diffusion.request import OmniDiffusionRequest
-    from vllm_omni.diffusion.sched.interface import DiffusionSchedulerOutput
     from vllm_omni.diffusion.worker.utils import BaseRunnerOutput
 
 
@@ -72,7 +77,78 @@ class DiffusionExecutor(ABC):
 
     def __init__(self, od_config: OmniDiffusionConfig) -> None:
         self.od_config = od_config
+        self._kv_output_aggregator: KVOutputAggregator | None = None
         self._init_executor()
+
+    def init_kv_output_aggregator(self, connector: KVConnectorBase_V1) -> None:
+        self._kv_output_aggregator = KVOutputAggregator.from_connector(
+            connector,
+            int(self.od_config.num_gpus or 1),
+        )
+
+    def _prepare_kv_for_forward(self, scheduler_output: DiffusionSchedulerOutput) -> KVConnectorOutput | None:
+        connector_metadata = scheduler_output.kv_connector_metadata
+        expected_ids = scheduler_output.kv_connector_request_ids
+        if connector_metadata is None and expected_ids:
+            raise RuntimeError("KV Connector sequence IDs were emitted without metadata")
+        if connector_metadata is not None and not expected_ids:
+            raise RuntimeError("KV Connector metadata was emitted without expected sequence IDs")
+        paged_mode = is_scheduler_paged_kv_mode(
+            getattr(self.od_config, "diffusion_kv_mode", DiffusionKVCacheMode.DENSE_LEGACY)
+        )
+        has_paged_work = paged_mode and bool(scheduler_output.scheduled_new_reqs)
+        has_paged_work = has_paged_work or any(
+            new_req.diffusion_kv_metadata is not None for new_req in scheduler_output.scheduled_new_reqs
+        )
+        if not has_paged_work and connector_metadata is None:
+            return None
+
+        timeout_s = float(getattr(self.od_config, "dist_timeout", None) or 300)
+        try:
+            aggregator = self._kv_output_aggregator if connector_metadata is not None else None
+            if connector_metadata is not None and aggregator is None:
+                raise RuntimeError("KV Connector receive was scheduled without KVOutputAggregator")
+            output = self.collective_rpc(
+                "prepare_kv_for_forward",
+                timeout=timeout_s + 5.0,
+                args=(scheduler_output, timeout_s),
+                kv_output_aggregator=aggregator,
+            )
+            if connector_metadata is None:
+                return None
+            if not isinstance(output, ModelRunnerOutput) or output.kv_connector_output is None:
+                raise RuntimeError("KV Connector completion aggregation produced no output")
+            kv_output = output.kv_connector_output
+            if kv_output.invalid_block_ids:
+                raise RuntimeError(
+                    f"KV Connector completion contains invalid blocks: {sorted(kv_output.invalid_block_ids)}"
+                )
+            finished = kv_output.finished_recving or set()
+            if not expected_ids.issubset(finished):
+                raise RuntimeError(
+                    "KV Connector all-rank completion is incomplete; missing sequence IDs: "
+                    f"{sorted(expected_ids - finished)}"
+                )
+            return kv_output
+        except Exception as exc:
+            if connector_metadata is None:
+                raise
+            # Quiesce every Worker before target pages can be recycled.
+            try:
+                self.collective_rpc(
+                    "shutdown_kv_connector",
+                    timeout=10.0,
+                    unique_reply_rank=0,
+                    exec_all_ranks=True,
+                )
+            except Exception:
+                pass
+            self.shutdown()
+            from vllm_omni.diffusion.diffusion_kv.kv_connector import KVConnectorFatalError
+
+            if isinstance(exc, KVConnectorFatalError):
+                raise
+            raise KVConnectorFatalError(f"KV Connector prepare failed closed: {exc}") from exc
 
     @abstractmethod
     def _init_executor(self) -> None:
@@ -109,6 +185,7 @@ class DiffusionExecutor(ABC):
         kwargs: dict | None = None,
         unique_reply_rank: int | None = None,
         exec_all_ranks: bool = False,
+        kv_output_aggregator: KVOutputAggregator | None = None,
     ) -> Any:
         """Execute a method on workers."""
         pass

@@ -4,7 +4,7 @@
 from __future__ import annotations
 
 import copy
-from collections.abc import Mapping, Sequence
+from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any
 
@@ -18,29 +18,29 @@ from vllm.v1.worker.gpu.block_table import BlockTables
 
 from vllm_omni.diffusion.data import OmniDiffusionConfig
 from vllm_omni.diffusion.diffusion_kv.config import DiffusionKVCacheMode, is_scheduler_paged_kv_mode
-from vllm_omni.diffusion.diffusion_kv.metadata import DiffusionKVMetadata
-from vllm_omni.diffusion.diffusion_kv.paged_attention_adapter import (
-    DiffusionPagedAttentionAdapter,
+from vllm_omni.diffusion.diffusion_kv.metadata import (
+    DiffusionKVMetadata,
+    DiffusionKVSequenceMetadata,
+)
+from vllm_omni.diffusion.diffusion_kv.paged_attention_runtime import (
+    DiffusionKVSequenceBinding,
     DiffusionPagedAttentionLayerAdapter,
-    DiffusionPagedAttentionRow,
-    DiffusionPagedAttentionRowBinding,
-    PreparedDiffusionPagedAttentionBatch,
+    DiffusionPagedAttentionRuntime,
 )
 from vllm_omni.platforms import current_omni_platform
 
-DiffusionKVIdentity = tuple[str, int | None, str | None]
-DiffusionKVSnapshot = tuple[object, ...]
+DiffusionKVIdentity = tuple[str, int]
 
 
 @dataclass(frozen=True)
 class _DiffusionKVRequestState:
     generation: int
-    snapshot: DiffusionKVSnapshot
-    row_token_lens: tuple[tuple[DiffusionKVIdentity, int], ...]
+    sequences: tuple[DiffusionKVSequenceMetadata, ...]
+    identities: tuple[DiffusionKVIdentity, ...]
 
 
 @dataclass(frozen=True)
-class _DiffusionKVRowInstall:
+class _DiffusionKVSequenceInstall:
     identity: DiffusionKVIdentity
     token_len: int
     block_ids: tuple[tuple[int, ...], ...]
@@ -62,10 +62,10 @@ class DiffusionKVModelRunnerBackend:
         self.kv_cache_config: KVCacheConfig | None = None
         self.kv_caches: list[torch.Tensor | list[torch.Tensor]] = []
         self.block_tables: BlockTables | None = None
-        self.paged_attention_adapter: DiffusionPagedAttentionAdapter | None = None
+        self.paged_attention_runtime: DiffusionPagedAttentionRuntime | None = None
         self._kv_cache_layer_adapters: dict[str, DiffusionPagedAttentionLayerAdapter] = {}
-        self._diffusion_kv_identity_to_row: dict[DiffusionKVIdentity, int] = {}
-        self._diffusion_kv_free_rows: list[int] = []
+        self._sequence_bindings: dict[DiffusionKVIdentity, DiffusionKVSequenceBinding] = {}
+        self._free_req_indices: list[int] = []
         self._diffusion_kv_request_states: dict[str, _DiffusionKVRequestState] = {}
 
     def register_kv_cache_layers(
@@ -91,11 +91,6 @@ class DiffusionKVModelRunnerBackend:
                 raise TypeError(
                     f"Diffusion KV layer {layer_name!r} produced unsupported spec {type(spec).__name__}; "
                     "only native attention specs are supported"
-                )
-            if not layer.attn_backend.supports_paged_kv:
-                raise NotImplementedError(
-                    f"Diffusion paged KV layer {layer_name!r} requires an Omni backend with paged support; "
-                    f"selected {layer.attn_backend.get_name()}"
                 )
             existing = forward_context.get(layer_name)
             if existing is not None and existing is not layer and existing is not previous_adapters.get(layer_name):
@@ -186,13 +181,11 @@ class DiffusionKVModelRunnerBackend:
             )
         return ulysses_degree
 
-    def _get_max_rows_per_request(self) -> int:
-        max_rows = getattr(self.od_config, "diffusion_kv_max_rows_per_request", None)
-        if type(max_rows) is not int or max_rows <= 0:
-            raise ValueError(
-                "paged_scheduler requires a positive integer diffusion_kv_max_rows_per_request adapter limit"
-            )
-        return max_rows
+    def _get_max_sequences_per_request(self) -> int:
+        max_sequences = getattr(self.od_config, "diffusion_kv_max_sequences_per_request", None)
+        if type(max_sequences) is not int or max_sequences <= 0:
+            raise ValueError("paged_scheduler requires a positive integer diffusion_kv_max_sequences_per_request")
+        return max_sequences
 
     def _get_max_model_len(self) -> int:
         max_len = getattr(self.vllm_config.model_config, "max_model_len", None)
@@ -219,7 +212,7 @@ class DiffusionKVModelRunnerBackend:
 
         kv_cache_config = copy.deepcopy(kv_cache_config)
         max_len = self._get_max_model_len()
-        max_rows_per_request = self._get_max_rows_per_request()
+        max_sequences_per_request = self._get_max_sequences_per_request()
         scheduler_config = self.vllm_config.scheduler_config
         max_num_seqs = getattr(scheduler_config, "max_num_seqs", None)
         if type(max_num_seqs) is not int or max_num_seqs <= 0:
@@ -235,13 +228,13 @@ class DiffusionKVModelRunnerBackend:
             group.kv_cache_spec.max_num_blocks_per_req(self.vllm_config, max_len) for group in kv_cache_groups
         ]
         if any(type(capacity) is not int or capacity <= 0 for capacity in unaligned_max_num_blocks_per_group):
-            raise ValueError("native diffusion KV cache groups must have positive row capacities")
+            raise ValueError("native diffusion KV cache groups must have positive sequence capacities")
         max_num_blocks_per_group = [
             native_block_table.get_block_table_width(capacity, block_size)
             for capacity, block_size in zip(unaligned_max_num_blocks_per_group, block_sizes, strict=True)
         ]
 
-        max_num_reqs = max_num_seqs * max_rows_per_request
+        max_num_reqs = max_num_seqs * max_sequences_per_request
         max_num_batched_tokens = getattr(scheduler_config, "max_num_batched_tokens", None)
         if type(max_num_batched_tokens) is not int or max_num_batched_tokens <= 0:
             raise ValueError("scheduler_config.max_num_batched_tokens must be a positive integer")
@@ -250,8 +243,6 @@ class DiffusionKVModelRunnerBackend:
         cp_rank = get_dcp_group().rank_in_group if cp_size > 1 else 0
         cp_interleave = parallel_config.cp_kv_cache_interleave_size
 
-        # Native metadata builders size per-row buffers from max_num_seqs.
-        # A diffusion public request can occupy several sequence/context rows.
         scheduler_config.max_num_seqs = max_num_reqs
         kv_caches: list[torch.Tensor | list[torch.Tensor]] = []
         previous_adapter_caches = {
@@ -276,14 +267,14 @@ class DiffusionKVModelRunnerBackend:
                     cp_rank=cp_rank,
                     cp_interleave=cp_interleave,
                 )
-                paged_attention_adapter = DiffusionPagedAttentionAdapter(
+                paged_attention_runtime = DiffusionPagedAttentionRuntime(
                     vllm_config=self.vllm_config,
                     device=self.device,
                     kv_cache_config=kv_cache_config,
                     block_tables=block_tables,
                     attn_groups=attn_groups,
                     layers=self._kv_cache_layer_adapters,
-                    resolve_row=self._resolve_paged_attention_row,
+                    resolve_sequence=self.resolve_sequence_binding,
                 )
                 init_kv_cache(
                     kv_caches,
@@ -303,73 +294,73 @@ class DiffusionKVModelRunnerBackend:
 
         self.kv_caches = kv_caches
         self.block_tables = block_tables
-        self.paged_attention_adapter = paged_attention_adapter
-        self._diffusion_kv_identity_to_row.clear()
-        self._diffusion_kv_free_rows = list(range(max_num_reqs - 1, -1, -1))
+        self.paged_attention_runtime = paged_attention_runtime
+        self._sequence_bindings.clear()
+        self._free_req_indices = list(range(max_num_reqs - 1, -1, -1))
         self._diffusion_kv_request_states.clear()
         self.kv_cache_config = kv_cache_config
 
-    def _validate_row(
+    def _validate_sequence_allocation(
         self,
         *,
         identity: DiffusionKVIdentity,
         token_len: int,
-        block_ids: tuple[list[int], ...],
+        block_ids: tuple[tuple[int, ...], ...],
         seen_identities: set[DiffusionKVIdentity],
-    ) -> _DiffusionKVRowInstall:
+    ) -> _DiffusionKVSequenceInstall:
         if identity in seen_identities:
-            raise ValueError(f"Duplicate diffusion KV row identity: {identity!r}")
+            raise ValueError(f"Duplicate diffusion KV sequence identity: {identity!r}")
         seen_identities.add(identity)
         if type(token_len) is not int or token_len < 0:
-            raise ValueError(f"Diffusion KV row {identity!r} has invalid token length {token_len!r}")
+            raise ValueError(f"Diffusion KV sequence {identity!r} has invalid token length {token_len!r}")
 
         assert self.kv_cache_config is not None
         groups = self.kv_cache_config.kv_cache_groups
         if not isinstance(block_ids, tuple) or len(block_ids) != len(groups):
             actual_groups = len(block_ids) if isinstance(block_ids, (tuple, list)) else "invalid"
-            raise ValueError(f"Diffusion KV row {identity!r} has {actual_groups} block groups; expected {len(groups)}")
+            raise ValueError(
+                f"Diffusion KV sequence {identity!r} has {actual_groups} block groups; expected {len(groups)}"
+            )
 
         max_len = self._get_max_model_len()
         normalized_groups: list[tuple[int, ...]] = []
         for group_index, (group_block_ids, kv_cache_group) in enumerate(zip(block_ids, groups, strict=True)):
-            if not isinstance(group_block_ids, list):
-                raise ValueError(f"Diffusion KV row {identity!r} group {group_index} block IDs must be a list")
+            if not isinstance(group_block_ids, tuple):
+                raise ValueError(f"Diffusion KV sequence {identity!r} group {group_index} block IDs must be a tuple")
             spec = kv_cache_group.kv_cache_spec
             expected_count = spec.max_num_blocks_per_req(self.vllm_config, token_len)
             if len(group_block_ids) != expected_count:
                 raise ValueError(
-                    f"Diffusion KV row {identity!r} group {group_index} has {len(group_block_ids)} blocks; "
+                    f"Diffusion KV sequence {identity!r} group {group_index} has {len(group_block_ids)} blocks; "
                     f"expected {expected_count} for {token_len} tokens"
                 )
-            row_capacity = spec.max_num_blocks_per_req(self.vllm_config, max_len)
-            if len(group_block_ids) > row_capacity:
+            sequence_capacity = spec.max_num_blocks_per_req(self.vllm_config, max_len)
+            if len(group_block_ids) > sequence_capacity:
                 raise ValueError(
-                    f"Diffusion KV row {identity!r} group {group_index} exceeds row capacity {row_capacity}"
+                    f"Diffusion KV sequence {identity!r} group {group_index} exceeds capacity {sequence_capacity}"
                 )
-            normalized_ids: list[int] = []
             for block_id in group_block_ids:
                 if type(block_id) is not int:
                     raise ValueError(
-                        f"Diffusion KV row {identity!r} group {group_index} has non-integer block ID {block_id!r}"
+                        f"Diffusion KV sequence {identity!r} group {group_index} has non-integer block ID {block_id!r}"
                     )
                 if not 0 <= block_id < self.kv_cache_config.num_blocks:
                     raise ValueError(
-                        f"Diffusion KV row {identity!r} group {group_index} block ID {block_id} is outside "
+                        f"Diffusion KV sequence {identity!r} group {group_index} block ID {block_id} is outside "
                         f"[0, {self.kv_cache_config.num_blocks})"
                     )
-                normalized_ids.append(block_id)
-            normalized_groups.append(tuple(normalized_ids))
+            normalized_groups.append(group_block_ids)
 
-        return _DiffusionKVRowInstall(
+        return _DiffusionKVSequenceInstall(
             identity=identity,
             token_len=token_len,
             block_ids=tuple(normalized_groups),
         )
 
-    def _prepare_install(
+    def _prepare_allocations(
         self,
         metadata: DiffusionKVMetadata,
-    ) -> tuple[list[_DiffusionKVRowInstall], DiffusionKVSnapshot]:
+    ) -> list[_DiffusionKVSequenceInstall]:
         if self.block_tables is None or self.kv_cache_config is None:
             raise RuntimeError("paged_scheduler native KV cache is not initialized")
         if type(metadata.request_id) is not str or not metadata.request_id:
@@ -382,65 +373,36 @@ class DiffusionKVModelRunnerBackend:
             raise ValueError(f"Diffusion KV request {metadata.request_id!r} must contain at least one sequence")
 
         seen_identities: set[DiffusionKVIdentity] = set()
-        installs: list[_DiffusionKVRowInstall] = []
-        sequence_snapshots: list[object] = []
+        allocations: list[_DiffusionKVSequenceInstall] = []
         for sequence in metadata.sequences:
             if type(sequence.sequence_id) is not int or sequence.sequence_id < 0:
                 raise ValueError(f"Diffusion KV sequence_id must be a non-negative integer: {sequence.sequence_id!r}")
-            sequence_identity = (metadata.request_id, sequence.sequence_id, None)
-            sequence_install = self._validate_row(
+            if (
+                type(sequence.num_computed_tokens) is not int
+                or not 0 <= sequence.num_computed_tokens <= sequence.prefix_len
+            ):
+                raise ValueError(
+                    "Diffusion KV sequence num_computed_tokens must be an integer inside the reusable prefix: "
+                    f"computed={sequence.num_computed_tokens!r}, prefix_len={sequence.prefix_len!r}"
+                )
+            sequence_identity = (metadata.request_id, sequence.sequence_id)
+            sequence_install = self._validate_sequence_allocation(
                 identity=sequence_identity,
                 token_len=sequence.seq_len,
                 block_ids=sequence.block_ids,
                 seen_identities=seen_identities,
             )
-            installs.append(sequence_install)
-            sequence_snapshots.append(
-                (
-                    sequence.sequence_id,
-                    sequence.prefix_len,
-                    sequence.target_len,
-                    sequence.seq_len,
-                    sequence_install.block_ids,
-                    sequence.context_ids,
-                )
-            )
+            allocations.append(sequence_install)
 
-        context_snapshots: list[object] = []
-        for context in metadata.contexts:
-            if type(context.context_id) is not str or not context.context_id:
-                raise ValueError("Diffusion KV context_id must be a non-empty string")
-            context_identity = (metadata.request_id, None, context.context_id)
-            context_install = self._validate_row(
-                identity=context_identity,
-                token_len=context.num_tokens,
-                block_ids=context.block_ids,
-                seen_identities=seen_identities,
-            )
-            installs.append(context_install)
-            context_snapshots.append(
-                (
-                    context.context_id,
-                    context.cache_role,
-                    context.num_tokens,
-                    context_install.block_ids,
-                )
-            )
-
-        max_rows_per_request = self._get_max_rows_per_request()
-        if len(installs) > max_rows_per_request:
+        max_sequences_per_request = self._get_max_sequences_per_request()
+        if len(allocations) > max_sequences_per_request:
             raise ValueError(
-                f"Diffusion KV request {metadata.request_id!r} requires {len(installs)} rows; "
-                f"adapter limit is {max_rows_per_request}"
+                f"Diffusion KV request {metadata.request_id!r} requires {len(allocations)} sequences; "
+                f"configured limit is {max_sequences_per_request}"
             )
-        snapshot: DiffusionKVSnapshot = (
-            metadata.request_id,
-            tuple(sequence_snapshots),
-            tuple(context_snapshots),
-        )
-        return installs, snapshot
+        return allocations
 
-    def _rollback_staged_writes(self, rows: list[int], previous_num_blocks: object | None) -> None:
+    def _rollback_staged_writes(self, req_indices: list[int], previous_num_blocks: object | None) -> None:
         block_tables = self.block_tables
         if block_tables is None:
             return
@@ -453,39 +415,42 @@ class DiffusionKVModelRunnerBackend:
         native_num_blocks = getattr(block_tables, "num_blocks", None)
         if native_num_blocks is None or not hasattr(native_num_blocks, "np"):
             return
-        native_num_blocks.np[:, rows] = previous_num_blocks
+        native_num_blocks.np[:, req_indices] = previous_num_blocks
         copy_to_uva = getattr(native_num_blocks, "copy_to_uva", None)
         if copy_to_uva is not None:
             copy_to_uva()
 
-    def _apply_rows(self, rows: list[int], installs: list[_DiffusionKVRowInstall]) -> None:
+    def _apply_block_table_updates(
+        self,
+        req_indices: list[int],
+        allocations: list[_DiffusionKVSequenceInstall],
+    ) -> None:
         assert self.block_tables is not None
-        if self.paged_attention_adapter is not None:
-            self.paged_attention_adapter.invalidate_prepared_batches()
+        if self.paged_attention_runtime is not None:
+            self.paged_attention_runtime.invalidate_prepared_batches()
         native_num_blocks = getattr(self.block_tables, "num_blocks", None)
         previous_num_blocks = None
         if native_num_blocks is not None and hasattr(native_num_blocks, "np"):
-            previous_num_blocks = native_num_blocks.np[:, rows].copy()
+            previous_num_blocks = native_num_blocks.np[:, req_indices].copy()
         try:
-            for row, install in zip(rows, installs, strict=True):
+            for req_index, allocation in zip(req_indices, allocations, strict=True):
                 self.block_tables.append_block_ids(
-                    row,
-                    tuple(list(group_ids) for group_ids in install.block_ids),
+                    req_index,
+                    tuple(list(group_ids) for group_ids in allocation.block_ids),
                     overwrite=True,
                 )
             self.block_tables.apply_staged_writes()
         except Exception:
-            self._rollback_staged_writes(rows, previous_num_blocks)
+            self._rollback_staged_writes(req_indices, previous_num_blocks)
             raise
 
-    def install_diffusion_kv_metadata(self, metadata: DiffusionKVMetadata) -> bool:
-        """Install one Scheduler allocation snapshot into native Worker rows."""
+    def install_allocations(self, metadata: DiffusionKVMetadata) -> bool:
         if not is_scheduler_paged_kv_mode(
             getattr(self.od_config, "diffusion_kv_mode", DiffusionKVCacheMode.DENSE_LEGACY)
         ):
             raise ValueError("Dense diffusion execution must not install Diffusion KV metadata")
 
-        installs, snapshot = self._prepare_install(metadata)
+        allocations = self._prepare_allocations(metadata)
         current_state = self._diffusion_kv_request_states.get(metadata.request_id)
         if current_state is not None:
             if metadata.allocation_generation < current_state.generation:
@@ -493,111 +458,98 @@ class DiffusionKVModelRunnerBackend:
                     f"Stale Diffusion KV allocation generation {metadata.allocation_generation} for request "
                     f"{metadata.request_id!r}; installed generation is {current_state.generation}"
                 )
-            if snapshot != current_state.snapshot:
+            if metadata.sequences != current_state.sequences:
                 raise ValueError(
                     f"Conflicting Diffusion KV allocation snapshot for active request {metadata.request_id!r}; "
-                    "remove the request before replacing its rows"
+                    "release the request bindings before replacing its allocation"
                 )
             if metadata.allocation_generation == current_state.generation:
                 return False
             self._diffusion_kv_request_states[metadata.request_id] = _DiffusionKVRequestState(
                 generation=metadata.allocation_generation,
-                snapshot=snapshot,
-                row_token_lens=current_state.row_token_lens,
+                sequences=metadata.sequences,
+                identities=current_state.identities,
             )
             return False
 
         existing_identities = [
-            install.identity for install in installs if install.identity in self._diffusion_kv_identity_to_row
+            allocation.identity for allocation in allocations if allocation.identity in self._sequence_bindings
         ]
         if existing_identities:
-            raise RuntimeError(f"Diffusion KV row registry contains orphaned identities: {existing_identities!r}")
-        if len(installs) > len(self._diffusion_kv_free_rows):
+            raise RuntimeError(f"Diffusion KV binding registry contains orphaned identities: {existing_identities!r}")
+        if len(allocations) > len(self._free_req_indices):
             raise ValueError(
-                f"Diffusion KV request {metadata.request_id!r} requires {len(installs)} rows, but only "
-                f"{len(self._diffusion_kv_free_rows)} rows are free"
+                f"Diffusion KV request {metadata.request_id!r} requires {len(allocations)} bindings, but only "
+                f"{len(self._free_req_indices)} req_index slots are free"
             )
 
-        rows = list(reversed(self._diffusion_kv_free_rows[-len(installs) :])) if installs else []
-        if rows:
-            self._apply_rows(rows, installs)
+        req_indices = list(reversed(self._free_req_indices[-len(allocations) :])) if allocations else []
+        if req_indices:
+            self._apply_block_table_updates(req_indices, allocations)
 
-        if installs:
-            del self._diffusion_kv_free_rows[-len(installs) :]
-        self._diffusion_kv_identity_to_row.update(
-            (install.identity, row) for install, row in zip(installs, rows, strict=True)
+        if allocations:
+            del self._free_req_indices[-len(allocations) :]
+        computed_tokens = {
+            (metadata.request_id, sequence.sequence_id): sequence.num_computed_tokens for sequence in metadata.sequences
+        }
+        self._sequence_bindings.update(
+            (
+                allocation.identity,
+                DiffusionKVSequenceBinding(
+                    req_index=req_index,
+                    max_seq_len=allocation.token_len,
+                    num_computed_tokens=computed_tokens[allocation.identity],
+                ),
+            )
+            for allocation, req_index in zip(allocations, req_indices, strict=True)
         )
         self._diffusion_kv_request_states[metadata.request_id] = _DiffusionKVRequestState(
             generation=metadata.allocation_generation,
-            snapshot=snapshot,
-            row_token_lens=tuple((install.identity, install.token_len) for install in installs),
+            sequences=metadata.sequences,
+            identities=tuple(allocation.identity for allocation in allocations),
         )
         return True
 
-    def get_diffusion_kv_row(
-        self,
-        request_id: str,
-        sequence_id: int | None,
-        context_id: str | None = None,
-    ) -> int:
-        """Resolve a Scheduler allocation identity to its native table row."""
-        if (
-            not is_scheduler_paged_kv_mode(
-                getattr(self.od_config, "diffusion_kv_mode", DiffusionKVCacheMode.DENSE_LEGACY)
+    def get_kv_caches_by_layer(self) -> dict[str, torch.Tensor]:
+        if self.kv_cache_config is None or not self.kv_caches:
+            raise RuntimeError("Diffusion native KV pages are not initialized")
+
+        configured_layers = {
+            layer_name for group in self.kv_cache_config.kv_cache_groups for layer_name in group.layer_names
+        }
+        if configured_layers != set(self._kv_cache_layer_adapters):
+            raise RuntimeError(
+                "Diffusion KV layer registry does not match the initialized cache config: "
+                f"configured={sorted(configured_layers)}, "
+                f"registered={sorted(self._kv_cache_layer_adapters)}"
             )
-            or self.block_tables is None
-        ):
-            raise RuntimeError("paged_scheduler native BlockTables are not initialized")
-        identity = (request_id, None, context_id) if context_id is not None else (request_id, sequence_id, None)
-        try:
-            return self._diffusion_kv_identity_to_row[identity]
-        except KeyError as exc:
-            raise KeyError(f"No native diffusion KV row is installed for {identity!r}") from exc
 
-    def get_paged_attention_adapter(self) -> DiffusionPagedAttentionAdapter:
-        if self.paged_attention_adapter is None:
-            raise RuntimeError("paged_scheduler native attention adapter is not initialized")
-        return self.paged_attention_adapter
+        result: dict[str, torch.Tensor] = {}
+        for layer_name in sorted(configured_layers):
+            cache = self._kv_cache_layer_adapters[layer_name].kv_cache
+            if not isinstance(cache, torch.Tensor):
+                raise TypeError(
+                    f"Diffusion KV layer {layer_name!r} has no connector-registerable tensor; "
+                    f"got {type(cache).__name__}"
+                )
+            result[layer_name] = cache
+        if not result:
+            raise RuntimeError("Diffusion native KV cache mapping is empty")
+        return result
 
-    def prepare_paged_attention_batch(
-        self,
-        rows: Sequence[DiffusionPagedAttentionRow],
-    ) -> PreparedDiffusionPagedAttentionBatch:
-        """Build native page-table metadata for one Diffusion forward.
-
-        The scheduler allocation payload describes capacity, while the model
-        integration supplies the current ``query_len``/``kv_start_pos`` span
-        for each row.  Keeping this boundary explicit prevents the Worker from
-        guessing model-specific text/image layout.
-        """
-
-        return self.get_paged_attention_adapter().prepare_batch(rows)
-
-    def activate_paged_attention(self, batch: PreparedDiffusionPagedAttentionBatch):
-        """Return the context manager that exposes a prepared batch to Omni Attention."""
-
-        return self.get_paged_attention_adapter().activate(batch)
-
-    def _resolve_paged_attention_row(
+    def resolve_sequence_binding(
         self,
         request_id: str,
-        sequence_id: int | None,
-        context_id: str | None,
-    ) -> DiffusionPagedAttentionRowBinding:
-        row_index = self.get_diffusion_kv_row(request_id, sequence_id, context_id)
-        identity = (request_id, None, context_id) if context_id is not None else (request_id, sequence_id, None)
-        request_state = self._diffusion_kv_request_states.get(request_id)
-        if request_state is not None:
-            for installed_identity, token_len in request_state.row_token_lens:
-                if installed_identity == identity:
-                    return DiffusionPagedAttentionRowBinding(
-                        row_index=row_index,
-                        max_seq_len=token_len,
-                    )
-        raise RuntimeError(f"Diffusion KV request state is missing logical length for {identity!r}")
+        sequence_id: int,
+    ) -> DiffusionKVSequenceBinding:
+        identity = (request_id, sequence_id)
+        try:
+            binding = self._sequence_bindings[identity]
+        except KeyError as exc:
+            raise KeyError(f"No native diffusion KV sequence binding is installed for {identity!r}") from exc
+        return binding
 
     def remove_diffusion_kv_requests(self, request_ids: list[str]) -> int:
-        """Retire Worker rows without logically freeing Scheduler-owned blocks."""
         if (
             not is_scheduler_paged_kv_mode(
                 getattr(self.od_config, "diffusion_kv_mode", DiffusionKVCacheMode.DENSE_LEGACY)
@@ -606,32 +558,32 @@ class DiffusionKVModelRunnerBackend:
         ):
             return 0
         request_id_set = set(request_ids)
-        identities_and_rows = [
-            (identity, row)
-            for identity, row in self._diffusion_kv_identity_to_row.items()
+        bindings_to_release = [
+            (identity, state.req_index)
+            for identity, state in self._sequence_bindings.items()
             if identity[0] in request_id_set
         ]
-        rows = [row for _, row in identities_and_rows]
-        if rows:
+        req_indices = [req_index for _, req_index in bindings_to_release]
+        if req_indices:
             assert self.kv_cache_config is not None
             num_groups = len(self.kv_cache_config.kv_cache_groups)
-            installs = [
-                _DiffusionKVRowInstall(
+            allocations = [
+                _DiffusionKVSequenceInstall(
                     identity=identity,
                     token_len=0,
                     block_ids=tuple(tuple() for _ in range(num_groups)),
                 )
-                for identity, _ in identities_and_rows
+                for identity, _ in bindings_to_release
             ]
-            self._apply_rows(rows, installs)
+            self._apply_block_table_updates(req_indices, allocations)
 
-        for identity, _ in identities_and_rows:
-            del self._diffusion_kv_identity_to_row[identity]
+        for identity, _ in bindings_to_release:
+            del self._sequence_bindings[identity]
         for request_id in request_id_set:
             self._diffusion_kv_request_states.pop(request_id, None)
-        self._diffusion_kv_free_rows.extend(rows)
-        self._diffusion_kv_free_rows.sort(reverse=True)
-        return len(rows)
+        self._free_req_indices.extend(req_indices)
+        self._free_req_indices.sort(reverse=True)
+        return len(req_indices)
 
     def refresh_block_table_layout(self) -> None:
         """Refresh native pointer tensors after a CuMem KV-cache wake-up."""
@@ -642,6 +594,6 @@ class DiffusionKVModelRunnerBackend:
             or self.block_tables is None
         ):
             return
-        if self.paged_attention_adapter is not None:
-            self.paged_attention_adapter.invalidate_prepared_batches()
+        if self.paged_attention_runtime is not None:
+            self.paged_attention_runtime.invalidate_prepared_batches()
         self.block_tables.init_block_table_layout_tensors()

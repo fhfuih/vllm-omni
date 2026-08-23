@@ -42,7 +42,7 @@ class _RunnerKVBackend:
         self.kv_cache_config = config
 
 
-def _attention(*, enabled: bool) -> Attention:
+def _attention(*, enabled: bool, prefix: str = "") -> Attention:
     attention = Attention.__new__(Attention)
     nn.Module.__init__(attention)
     attention.paged_kv_cache_role = "primary" if enabled else None
@@ -51,6 +51,7 @@ def _attention(*, enabled: bool) -> Attention:
     attention.head_size = 8
     attention.causal = False
     attention.attn_backend = _Backend
+    attention.prefix = prefix
     return attention
 
 
@@ -82,6 +83,14 @@ def test_runner_discovers_native_spec_from_loaded_attention() -> None:
     assert spec.non_causal is True
 
 
+def test_runner_uses_attention_prefix_as_native_cache_identity() -> None:
+    prefix = "model.layers.0.self_attn"
+
+    specs = _runner(_attention(enabled=True, prefix=prefix)).get_kv_cache_spec()
+
+    assert set(specs) == {prefix}
+
+
 def test_runner_rejects_paged_mode_without_cache_enabled_attention() -> None:
     runner = _runner(_attention(enabled=False))
 
@@ -100,7 +109,7 @@ def test_runner_retains_matching_rank_local_config() -> None:
 
     runner.set_kv_cache_config(config)
 
-    assert runner.kv_cache_config is config
+    assert runner.diffusion_kv_backend.kv_cache_config is config
 
 
 def test_runner_rejects_rank_local_config_for_different_layers() -> None:

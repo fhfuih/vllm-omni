@@ -5,6 +5,7 @@ import pytest
 from vllm import SamplingParams
 
 from vllm_omni.engine.cfg_companion_tracker import CfgCompanionTracker
+from vllm_omni.engine.kv_transfer_backend import KVTransferBackendManager
 from vllm_omni.engine.messages import OutputMessage
 from vllm_omni.engine.orchestrator import Orchestrator, OrchestratorRequestState
 from vllm_omni.engine.stage_engine_core_client import StageEngineCoreClient
@@ -20,6 +21,7 @@ class _DummySenderStage:
 
     def __init__(self, sender_info):
         self._sender_info = sender_info
+        self._omni_kv_config = {"need_send_cache": True}
 
     def get_kv_sender_info(self):
         return self._sender_info
@@ -32,6 +34,10 @@ class _DummyDiffusionStage:
 
     def __init__(self, engine_input_source=None):
         self.engine_input_source = engine_input_source or [0]
+        self.od_config = SimpleNamespace(
+            kv_transfer_config=None,
+            omni_kv_config={"need_recv_cache": True},
+        )
         self.calls = []
 
     async def add_request_async(self, request_id, prompt, sampling_params, kv_sender_info=None):
@@ -52,6 +58,17 @@ def _build_sender_pool(stage_id: int, sender_info: dict[str, object]) -> StagePo
         output_processor=object(),
         stage_vllm_config=SimpleNamespace(model_config=SimpleNamespace(max_model_len=64)),
     )
+
+
+def _prepare_transfer(orchestrator: Orchestrator, req_state: OrchestratorRequestState) -> None:
+    orchestrator._kv_transfer_backend = KVTransferBackendManager(orchestrator.stage_pools)
+    req_state.kv_transfer_plan = orchestrator._kv_transfer_backend.create_plan(
+        req_state.request_id,
+        source_stage_id=0,
+        final_stage_id=req_state.final_stage_id,
+    )
+    assert req_state.kv_transfer_plan is not None
+    orchestrator.stage_pools[0].select_replica_id(req_state.request_id)
 
 
 def test_stage_engine_core_client_builds_kv_sender_info_from_tcp_address():
@@ -152,6 +169,7 @@ def test_forward_to_diffusion_attaches_kv_sender_info():
         sampling_params_list=[SamplingParams(max_tokens=4), params],
         final_stage_id=1,
     )
+    _prepare_transfer(orchestrator, req_state)
 
     output = SimpleNamespace(request_id="req-1", finished=True)
     asyncio.run(Orchestrator._forward_to_next_stage(orchestrator, "req-1", sender_pool.stage_id, output, req_state))
@@ -181,6 +199,7 @@ def test_forward_to_diffusion_uses_engine_input_source_for_kv_sender_info():
         sampling_params_list=[SamplingParams(max_tokens=4), SamplingParams(max_tokens=4), params],
         final_stage_id=2,
     )
+    _prepare_transfer(orchestrator, req_state)
 
     output = SimpleNamespace(request_id="req-3", finished=True)
     asyncio.run(Orchestrator._forward_to_next_stage(orchestrator, "req-3", previous_pool.stage_id, output, req_state))
@@ -250,6 +269,7 @@ def test_prewarm_diffusion_attaches_kv_sender_info():
         sampling_params_list=[SamplingParams(max_tokens=4), OmniDiffusionSamplingParams()],
         final_stage_id=1,
     )
+    _prepare_transfer(orchestrator, req_state)
 
     stage0_request = SimpleNamespace(prompt_token_ids=[1, 2, 3])
     asyncio.run(Orchestrator._prewarm_async_chunk_stages(orchestrator, "req-2", stage0_request, req_state))

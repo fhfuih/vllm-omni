@@ -18,13 +18,10 @@ from vllm.v1.worker import block_table as native_block_table
 from vllm_omni.diffusion.diffusion_kv import model_runner_backend as model_runner_backend_module
 from vllm_omni.diffusion.diffusion_kv.config import DiffusionKVCacheMode
 from vllm_omni.diffusion.diffusion_kv.metadata import (
-    DiffusionKVContextMetadata,
     DiffusionKVMetadata,
     DiffusionKVSequenceMetadata,
 )
 from vllm_omni.diffusion.diffusion_kv.model_runner_backend import DiffusionKVModelRunnerBackend
-from vllm_omni.diffusion.sched.interface import CachedRequestData, DiffusionSchedulerOutput
-from vllm_omni.diffusion.worker.diffusion_model_runner import DiffusionModelRunner
 
 pytestmark = [pytest.mark.core_model, pytest.mark.cpu, pytest.mark.diffusion]
 
@@ -58,7 +55,6 @@ def test_cache_layer_registration_installs_adapters_with_ulysses_local_geometry(
         num_heads=8,
         softmax_scale=0.125,
         skip_sequence_parallel=False,
-        attn_backend=SimpleNamespace(supports_paged_kv=True, get_name=lambda: "FLASH_ATTN"),
     )
     unrelated = object()
     vllm_config.compilation_config.static_forward_context.update({"layer-0": layer, "unrelated": unrelated})
@@ -95,22 +91,6 @@ def test_cache_layer_registration_installs_adapters_with_ulysses_local_geometry(
         head_size=8,
     )
     assert vllm_config.attention_config.use_non_causal is True
-
-
-def test_cache_layer_registration_rejects_backend_without_paged_support() -> None:
-    backend, _, _ = _registration_backend(_parallel_config())
-    layer = SimpleNamespace(
-        attn_backend=SimpleNamespace(supports_paged_kv=False, get_name=lambda: "SDPA"),
-    )
-    spec = FullAttentionSpec(
-        block_size=16,
-        num_kv_heads=4,
-        head_size=8,
-        dtype=torch.float16,
-    )
-
-    with pytest.raises(NotImplementedError, match="layer-0.*paged support.*SDPA"):
-        backend.register_kv_cache_layers({"layer-0": (layer, spec)})
 
 
 def test_cache_layer_registration_resolves_platform_paged_hooks(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -239,17 +219,7 @@ def _metadata(
     *,
     seq_len: int = 9,
     sequence_block_ids: tuple[list[int], ...] = ([1, 2, 3], [4, 5]),
-    contexts: tuple[DiffusionKVContextMetadata, ...] | None = None,
 ) -> DiffusionKVMetadata:
-    if contexts is None:
-        contexts = (
-            DiffusionKVContextMetadata(
-                context_id="text",
-                cache_role="cross_attention",
-                num_tokens=5,
-                block_ids=([6, 7], [8]),
-            ),
-        )
     return DiffusionKVMetadata(
         request_id=request_id,
         allocation_generation=generation,
@@ -260,10 +230,8 @@ def _metadata(
                 target_len=5,
                 seq_len=seq_len,
                 block_ids=sequence_block_ids,
-                context_ids=tuple(context.context_id for context in contexts),
             ),
         ),
-        contexts=contexts,
     )
 
 
@@ -306,7 +274,7 @@ def _install_native_modules(monkeypatch: pytest.MonkeyPatch, events: list[tuple]
 def _runner(
     monkeypatch: pytest.MonkeyPatch,
     *,
-    max_rows_per_request: int = 3,
+    max_sequences_per_request: int = 3,
     max_num_seqs: int = 2,
     max_len: int = 16,
     max_num_batched_tokens: int = 32,
@@ -318,7 +286,7 @@ def _runner(
     _install_native_modules(monkeypatch, events)
     od_config = SimpleNamespace(
         diffusion_kv_mode=DiffusionKVCacheMode.PAGED_SCHEDULER,
-        diffusion_kv_max_rows_per_request=max_rows_per_request,
+        diffusion_kv_max_sequences_per_request=max_sequences_per_request,
         max_num_seqs=max_num_seqs,
     )
     vllm_config = SimpleNamespace(
@@ -377,7 +345,6 @@ def test_initialize_builds_native_block_tables_from_rank_local_config(monkeypatc
         "cp_interleave": 1,
     }
     assert runner.block_tables is block_tables
-    assert runner._diffusion_kv_free_rows == [5, 4, 3, 2, 1, 0]
     assert runner.kv_caches == ["cache-0", "cache-1"]
     assert runner.vllm_config.scheduler_config.max_num_seqs == 6
 
@@ -415,7 +382,7 @@ def test_initialize_failure_does_not_publish_partial_cache_state(
         vllm_config=vllm_config,
         od_config=SimpleNamespace(
             diffusion_kv_mode=DiffusionKVCacheMode.PAGED_SCHEDULER,
-            diffusion_kv_max_rows_per_request=2,
+            diffusion_kv_max_sequences_per_request=2,
         ),
         device="cuda:1",
     )
@@ -443,7 +410,7 @@ def test_initialize_failure_does_not_publish_partial_cache_state(
     assert backend.kv_cache_config is None
     assert backend.kv_caches == []
     assert backend.block_tables is None
-    assert backend.paged_attention_adapter is None
+    assert backend.paged_attention_runtime is None
     assert backend._kv_cache_layer_adapters["layer-0"].kv_cache == "placeholder-0"
     assert backend.vllm_config.scheduler_config.max_num_seqs == 1
 
@@ -471,39 +438,34 @@ def test_initialize_rejects_config_for_different_registered_layers() -> None:
         backend.initialize_kv_cache(config)
 
 
-def test_valid_sequence_and_context_install_into_native_rows(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_valid_sequence_installs_one_binding(monkeypatch: pytest.MonkeyPatch) -> None:
     runner, block_tables, _ = _runner(monkeypatch)
 
-    assert runner.install_diffusion_kv_metadata(_metadata()) is True
+    assert runner.install_allocations(_metadata()) is True
 
     assert block_tables.append_calls == [
         (0, ([1, 2, 3], [4, 5]), True),
-        (1, ([6, 7], [8]), True),
     ]
     assert block_tables.apply_calls == 1
-    assert runner.get_diffusion_kv_row("req-0", 0) == 0
-    assert runner.get_diffusion_kv_row("req-0", 0, "text") == 1
-    sequence_binding = runner._resolve_paged_attention_row("req-0", 0, None)
-    context_binding = runner._resolve_paged_attention_row("req-0", None, "text")
-    assert (sequence_binding.row_index, sequence_binding.max_seq_len) == (0, 9)
-    assert (context_binding.row_index, context_binding.max_seq_len) == (1, 5)
+    sequence_binding = runner.resolve_sequence_binding("req-0", 0)
+    assert (sequence_binding.req_index, sequence_binding.max_seq_len) == (0, 9)
 
 
 def test_block_table_mutations_invalidate_prepared_attention_batches(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     runner, _, _ = _runner(monkeypatch)
-    assert runner.paged_attention_adapter is not None
-    runner.paged_attention_adapter.invalidate_prepared_batches = Mock()
+    assert runner.paged_attention_runtime is not None
+    runner.paged_attention_runtime.invalidate_prepared_batches = Mock()
 
-    runner.install_diffusion_kv_metadata(_metadata())
-    runner.paged_attention_adapter.invalidate_prepared_batches.assert_called_once_with()
+    runner.install_allocations(_metadata())
+    runner.paged_attention_runtime.invalidate_prepared_batches.assert_called_once_with()
 
     runner.remove_diffusion_kv_requests(["req-0"])
-    assert runner.paged_attention_adapter.invalidate_prepared_batches.call_count == 2
+    assert runner.paged_attention_runtime.invalidate_prepared_batches.call_count == 2
 
     runner.refresh_block_table_layout()
-    assert runner.paged_attention_adapter.invalidate_prepared_batches.call_count == 3
+    assert runner.paged_attention_runtime.invalidate_prepared_batches.call_count == 3
 
 
 def test_cache_layer_registration_is_frozen_after_physical_initialization(
@@ -515,7 +477,7 @@ def test_cache_layer_registration_is_frozen_after_physical_initialization(
         runner.register_kv_cache_layers({})
 
 
-def test_request_scoped_context_uses_one_row_across_sequences(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_cfg_sequences_use_distinct_bindings(monkeypatch: pytest.MonkeyPatch) -> None:
     runner, block_tables, _ = _runner(monkeypatch)
     first_sequence = _metadata().sequences[0]
     metadata = replace(
@@ -530,28 +492,26 @@ def test_request_scoped_context_uses_one_row_across_sequences(monkeypatch: pytes
         ),
     )
 
-    assert runner.install_diffusion_kv_metadata(metadata) is True
+    assert runner.install_allocations(metadata) is True
 
     assert block_tables.append_calls == [
         (0, ([1, 2, 3], [4, 5]), True),
         (1, ([9, 10, 11], [12, 13]), True),
-        (2, ([6, 7], [8]), True),
     ]
-    assert runner.get_diffusion_kv_row("req-0", 0, "text") == 2
-    assert runner.get_diffusion_kv_row("req-0", 1, "text") == 2
+    assert runner.resolve_sequence_binding("req-0", 0).req_index == 0
+    assert runner.resolve_sequence_binding("req-0", 1).req_index == 1
 
 
-def test_row_block_count_uses_native_spec_semantics(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_sequence_block_count_uses_native_spec_semantics(monkeypatch: pytest.MonkeyPatch) -> None:
     runner, block_tables, _ = _runner(monkeypatch)
     spec = runner.kv_cache_config.kv_cache_groups[0].kv_cache_spec
     spec.max_num_blocks_per_req = lambda _config, token_len: math.ceil(token_len / 8)
 
     metadata = _metadata(
         sequence_block_ids=([1, 2], [4, 5]),
-        contexts=(),
     )
 
-    assert runner.install_diffusion_kv_metadata(metadata) is True
+    assert runner.install_allocations(metadata) is True
     assert block_tables.append_calls == [(0, ([1, 2], [4, 5]), True)]
 
 
@@ -559,26 +519,25 @@ def test_repeated_native_block_ids_are_allowed(monkeypatch: pytest.MonkeyPatch) 
     runner, block_tables, _ = _runner(monkeypatch)
     metadata = _metadata(
         sequence_block_ids=([1, 1, 3], [4, 4]),
-        contexts=(),
     )
 
-    assert runner.install_diffusion_kv_metadata(metadata) is True
+    assert runner.install_allocations(metadata) is True
     assert block_tables.append_calls == [(0, ([1, 1, 3], [4, 4]), True)]
 
 
 def test_generation_is_idempotent_stale_safe_and_conflict_safe(monkeypatch: pytest.MonkeyPatch) -> None:
     runner, block_tables, _ = _runner(monkeypatch)
     metadata = _metadata()
-    runner.install_diffusion_kv_metadata(metadata)
+    runner.install_allocations(metadata)
 
-    assert runner.install_diffusion_kv_metadata(metadata) is False
-    assert runner.install_diffusion_kv_metadata(replace(metadata, allocation_generation=2)) is False
+    assert runner.install_allocations(metadata) is False
+    assert runner.install_allocations(replace(metadata, allocation_generation=2)) is False
     assert block_tables.apply_calls == 1
 
     with pytest.raises(ValueError, match="Stale Diffusion KV allocation generation"):
-        runner.install_diffusion_kv_metadata(metadata)
+        runner.install_allocations(metadata)
     with pytest.raises(ValueError, match="Conflicting Diffusion KV allocation snapshot"):
-        runner.install_diffusion_kv_metadata(_metadata(generation=3, sequence_block_ids=([9, 2, 3], [4, 5])))
+        runner.install_allocations(_metadata(generation=3, sequence_block_ids=([9, 2, 3], [4, 5])))
     assert block_tables.apply_calls == 1
 
 
@@ -592,13 +551,12 @@ def test_generation_is_idempotent_stale_safe_and_conflict_safe(monkeypatch: pyte
             _metadata(
                 seq_len=17,
                 sequence_block_ids=([1, 2, 3, 4, 5], [6, 7, 8]),
-                contexts=(),
             ),
-            "exceeds row capacity",
+            "exceeds capacity",
         ),
     ],
 )
-def test_invalid_group_count_block_count_range_and_row_capacity_are_atomic(
+def test_invalid_group_count_block_count_range_and_sequence_capacity_are_atomic(
     monkeypatch: pytest.MonkeyPatch,
     metadata: DiffusionKVMetadata,
     message: str,
@@ -606,41 +564,24 @@ def test_invalid_group_count_block_count_range_and_row_capacity_are_atomic(
     runner, block_tables, _ = _runner(monkeypatch)
 
     with pytest.raises(ValueError, match=message):
-        runner.install_diffusion_kv_metadata(metadata)
+        runner.install_allocations(metadata)
 
     assert block_tables.append_calls == []
     assert block_tables.apply_calls == 0
-    assert runner._diffusion_kv_identity_to_row == {}
-    assert runner._diffusion_kv_free_rows == [5, 4, 3, 2, 1, 0]
-
-
-def test_invalid_later_context_does_not_stage_earlier_valid_row(monkeypatch: pytest.MonkeyPatch) -> None:
-    runner, block_tables, _ = _runner(monkeypatch)
-    bad_context = DiffusionKVContextMetadata(
-        context_id="text",
-        cache_role="cross_attention",
-        num_tokens=5,
-        block_ids=([6, 32], [8]),
-    )
-
-    with pytest.raises(ValueError, match="outside"):
-        runner.install_diffusion_kv_metadata(_metadata(contexts=(bad_context,)))
-
-    assert block_tables.append_calls == []
-    assert all(not group_table.staged for group_table in block_tables.block_tables)
+    assert runner.install_allocations(_metadata()) is True
 
 
 def test_native_append_failure_rolls_back_staged_state_and_registry(monkeypatch: pytest.MonkeyPatch) -> None:
     runner, block_tables, _ = _runner(monkeypatch)
-    block_tables.fail_on_append_call = 2
+    block_tables.fail_on_append_call = 1
 
     with pytest.raises(RuntimeError, match="fake append failure"):
-        runner.install_diffusion_kv_metadata(_metadata())
+        runner.install_allocations(_metadata())
 
     assert np.count_nonzero(block_tables.num_blocks.np) == 0
     assert all(not group_table.staged for group_table in block_tables.block_tables)
-    assert runner._diffusion_kv_identity_to_row == {}
-    assert runner._diffusion_kv_free_rows == [5, 4, 3, 2, 1, 0]
+    block_tables.fail_on_append_call = None
+    assert runner.install_allocations(_metadata()) is True
 
 
 def test_native_apply_failure_rolls_back_staged_state_and_registry(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -648,33 +589,32 @@ def test_native_apply_failure_rolls_back_staged_state_and_registry(monkeypatch: 
     block_tables.fail_apply = True
 
     with pytest.raises(RuntimeError, match="fake apply failure"):
-        runner.install_diffusion_kv_metadata(_metadata())
+        runner.install_allocations(_metadata())
 
     assert block_tables.apply_calls == 1
     assert np.count_nonzero(block_tables.num_blocks.np) == 0
     assert all(not group_table.staged for group_table in block_tables.block_tables)
     assert all(group_table.clear_calls == 1 for group_table in block_tables.block_tables)
-    assert runner._diffusion_kv_identity_to_row == {}
-    assert runner._diffusion_kv_free_rows == [5, 4, 3, 2, 1, 0]
+    block_tables.fail_apply = False
+    assert runner.install_allocations(_metadata()) is True
 
 
-def test_adapter_and_global_row_capacity_are_enforced(monkeypatch: pytest.MonkeyPatch) -> None:
-    runner, block_tables, _ = _runner(monkeypatch, max_rows_per_request=2, max_num_seqs=1)
-    second_context = DiffusionKVContextMetadata(
-        context_id="image",
-        cache_role="cross_attention",
-        num_tokens=1,
-        block_ids=([9], [10]),
+def test_configured_and_global_binding_capacity_are_enforced(monkeypatch: pytest.MonkeyPatch) -> None:
+    runner, block_tables, _ = _runner(monkeypatch, max_sequences_per_request=1, max_num_seqs=1)
+    first_sequence = _metadata().sequences[0]
+    cfg_metadata = replace(
+        _metadata(),
+        sequences=(first_sequence, replace(first_sequence, sequence_id=1)),
     )
 
-    with pytest.raises(ValueError, match="adapter limit is 2"):
-        runner.install_diffusion_kv_metadata(_metadata(contexts=(_metadata().contexts[0], second_context)))
+    with pytest.raises(ValueError, match="configured limit is 1"):
+        runner.install_allocations(cfg_metadata)
     assert block_tables.append_calls == []
 
-    runner.install_diffusion_kv_metadata(_metadata())
+    runner.install_allocations(_metadata())
     append_count = len(block_tables.append_calls)
-    with pytest.raises(ValueError, match="only 0 rows are free"):
-        runner.install_diffusion_kv_metadata(_metadata("req-1"))
+    with pytest.raises(ValueError, match="only 0 req_index slots are free"):
+        runner.install_allocations(_metadata("req-1"))
     assert len(block_tables.append_calls) == append_count
 
 
@@ -689,9 +629,9 @@ def test_empty_and_duplicate_sequence_metadata_are_rejected(monkeypatch: pytest.
     )
 
     with pytest.raises(ValueError, match="at least one sequence"):
-        runner.install_diffusion_kv_metadata(empty)
-    with pytest.raises(ValueError, match="Duplicate diffusion KV row identity"):
-        runner.install_diffusion_kv_metadata(duplicate)
+        runner.install_allocations(empty)
+    with pytest.raises(ValueError, match="Duplicate diffusion KV sequence identity"):
+        runner.install_allocations(duplicate)
     assert block_tables.append_calls == []
 
 
@@ -711,47 +651,26 @@ def test_request_generation_and_block_id_types_are_validated(
     runner, block_tables, _ = _runner(monkeypatch)
 
     with pytest.raises(ValueError, match=message):
-        runner.install_diffusion_kv_metadata(metadata)
+        runner.install_allocations(metadata)
 
     assert block_tables.append_calls == []
-    assert runner._diffusion_kv_request_states == {}
+    assert runner.install_allocations(_metadata()) is True
 
 
-def test_cleanup_is_idempotent_and_reuses_native_rows(monkeypatch: pytest.MonkeyPatch) -> None:
-    runner, block_tables, _ = _runner(monkeypatch, max_rows_per_request=2, max_num_seqs=1)
-    runner.install_diffusion_kv_metadata(_metadata())
+def test_cleanup_is_idempotent_and_reuses_req_indices(monkeypatch: pytest.MonkeyPatch) -> None:
+    runner, block_tables, _ = _runner(monkeypatch, max_sequences_per_request=1, max_num_seqs=1)
+    runner.install_allocations(_metadata())
 
     assert runner.remove_diffusion_kv_requests(["missing"]) == 0
-    assert runner.remove_diffusion_kv_requests(["req-0", "req-0"]) == 2
-    assert block_tables.append_calls[-2:] == [(0, ([], []), True), (1, ([], []), True)]
-    assert block_tables.num_blocks.np[:, :2].tolist() == [[0, 0], [0, 0]]
+    assert runner.remove_diffusion_kv_requests(["req-0", "req-0"]) == 1
+    assert block_tables.append_calls[-1:] == [(0, ([], []), True)]
+    assert block_tables.num_blocks.np[:, :1].tolist() == [[0], [0]]
     assert runner.remove_diffusion_kv_requests(["req-0"]) == 0
-    with pytest.raises(KeyError, match="No native diffusion KV row"):
-        runner.get_diffusion_kv_row("req-0", 0)
+    with pytest.raises(KeyError, match="No native diffusion KV sequence binding"):
+        runner.resolve_sequence_binding("req-0", 0)
 
-    runner.install_diffusion_kv_metadata(_metadata("req-1"))
-    assert runner.get_diffusion_kv_row("req-1", 0) == 0
-    assert runner.get_diffusion_kv_row("req-1", 0, "text") == 1
-
-
-def test_cached_step_does_not_reinstall_metadata() -> None:
-    runner = object.__new__(DiffusionModelRunner)
-    runner.od_config = SimpleNamespace(diffusion_kv_mode=DiffusionKVCacheMode.PAGED_SCHEDULER)
-    runner.pipeline = object()
-    runner.install_diffusion_kv_metadata = Mock()
-    runner._supports_step_mode = Mock(return_value=False)
-    scheduler_output = DiffusionSchedulerOutput(
-        step_id=1,
-        scheduled_new_reqs=[],
-        scheduled_cached_reqs=CachedRequestData(request_ids=["req-0"]),
-        finished_req_ids=set(),
-        num_running_reqs=1,
-        num_waiting_reqs=0,
-    )
-
-    with pytest.raises(ValueError, match="does not support step execution"):
-        runner.execute_stepwise(scheduler_output)
-    runner.install_diffusion_kv_metadata.assert_not_called()
+    runner.install_allocations(_metadata("req-1"))
+    assert runner.resolve_sequence_binding("req-1", 0).req_index == 0
 
 
 def test_dense_cleanup_and_wake_are_noops_but_paged_wake_refreshes(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -769,4 +688,4 @@ def test_dense_cleanup_and_wake_are_noops_but_paged_wake_refreshes(monkeypatch: 
     dense_backend.refresh_block_table_layout()
     dense_backend.block_tables.init_block_table_layout_tensors.assert_not_called()
     with pytest.raises(ValueError, match="Dense diffusion execution"):
-        dense_backend.install_diffusion_kv_metadata(_metadata())
+        dense_backend.install_allocations(_metadata())

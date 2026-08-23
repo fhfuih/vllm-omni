@@ -67,6 +67,7 @@ def make_kv_cache_config(
 def make_paged_od_config(**kwargs) -> OmniDiffusionConfig:
     return OmniDiffusionConfig.from_kwargs(
         diffusion_kv_mode="paged_scheduler",
+        diffusion_kv_max_sequences_per_request=2,
         max_model_len=64,
         kv_transfer_config=dict(DEFAULT_KV_TRANSFER_YAML),
         **kwargs,

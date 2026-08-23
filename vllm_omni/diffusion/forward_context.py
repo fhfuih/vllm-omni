@@ -26,11 +26,9 @@ class ForwardContext:
     vllm_config: VllmConfig | None = None
     omni_diffusion_config: OmniDiffusionConfig | None = None
     attn_metadata: dict[str, AttentionMetadata] | list[dict[str, AttentionMetadata]] | None = None
-    # Active Worker-side paged KV adapter.  The adapter is installed only for
-    # the duration of a paged forward; dense forwards leave this as ``None``.
     # Keep the field opaque here to avoid coupling the common context module to
     # the diffusion_kv implementation.
-    paged_kv_adapter: Any | None = None
+    paged_kv_runtime: Any | None = None
     split_text_embed_in_sp: bool = False
     denoise_step_idx: int | None = None
     denoise_timestep: float | None = None
@@ -152,6 +150,7 @@ def create_forward_context(
     attn_metadata: dict[str, AttentionMetadata] | list[dict[str, AttentionMetadata]] | None = None,
     split_text_embed_in_sp: bool = False,
     denoise_step_idx: int | None = None,
+    paged_kv_runtime: Any | None = None,
 ):
     return ForwardContext(
         vllm_config=vllm_config,
@@ -159,6 +158,7 @@ def create_forward_context(
         attn_metadata=attn_metadata,
         split_text_embed_in_sp=split_text_embed_in_sp,
         denoise_step_idx=denoise_step_idx,
+        paged_kv_runtime=paged_kv_runtime,
     )
 
 
@@ -184,6 +184,7 @@ def set_forward_context(
     attn_metadata: dict[str, AttentionMetadata] | list[dict[str, AttentionMetadata]] | None = None,
     split_text_embed_in_sp: bool = False,
     denoise_step_idx: int | None = None,
+    paged_kv_runtime: Any | None = None,
 ):
     """A context manager that stores the current forward context,
     can be attention metadata, split_text_embed_in_sp, etc.
@@ -195,6 +196,7 @@ def set_forward_context(
         attn_metadata=attn_metadata,
         split_text_embed_in_sp=split_text_embed_in_sp,
         denoise_step_idx=denoise_step_idx,
+        paged_kv_runtime=paged_kv_runtime,
     )
     # vLLM CustomOp dispatch (e.g. QKVParallelLinear) requires a global
     # vLLM config set via set_current_vllm_config().
@@ -215,27 +217,45 @@ def set_forward_context(
 
 
 @contextmanager
-def override_paged_kv_adapter(adapter: Any | None):
-    """Temporarily expose a Worker paged-KV adapter to Omni Attention.
-
-    This is deliberately a small context override instead of a second global
-    forward context.  The model runner owns the outer context and the adapter
-    only replaces one opaque field while its prepared native metadata is live.
-    """
-
+def override_paged_kv_runtime(runtime: Any | None):
     if _forward_context is None:
-        # Unit-level adapter users can prepare/activate metadata without an
-        # Omni model forward context.  In that case there is nothing to
-        # override and the adapter's explicit ``forward`` API remains usable.
         yield
         return
 
-    previous = _forward_context.paged_kv_adapter
-    _forward_context.paged_kv_adapter = adapter
+    previous = _forward_context.paged_kv_runtime
+    _forward_context.paged_kv_runtime = runtime
     try:
         yield
     finally:
-        _forward_context.paged_kv_adapter = previous
+        _forward_context.paged_kv_runtime = previous
+
+
+def is_paged_kv_runtime_available() -> bool:
+    return _forward_context is not None and _forward_context.paged_kv_runtime is not None
+
+
+def get_paged_kv_computed_tokens(request_id: str, sequence_ids: list[int] | tuple[int, ...]) -> tuple[int, ...]:
+    if _forward_context is None or _forward_context.paged_kv_runtime is None:
+        return ()
+    runtime = _forward_context.paged_kv_runtime
+    return tuple(
+        runtime.resolve_sequence(request_id, sequence_id).num_computed_tokens
+        for sequence_id in sequence_ids
+    )
+
+
+@contextmanager
+def activate_paged_kv_sequences(sequences: Any):
+    if _forward_context is None or _forward_context.paged_kv_runtime is None:
+        yield False
+        return
+    sequences = tuple(sequences)
+    if not sequences:
+        raise ValueError("Paged KV execution requires at least one attention sequence")
+    runtime = _forward_context.paged_kv_runtime
+    batch = runtime.prepare_batch(sequences)
+    with runtime.activate(batch):
+        yield True
 
 
 def set_forward_context_denoise_step_idx(step_idx: int | None) -> None:

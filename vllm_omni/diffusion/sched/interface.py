@@ -184,31 +184,21 @@ class NewRequestData:
         *,
         diffusion_kv_metadata: DiffusionKVMetadata | None = None,
     ) -> NewRequestData:
+        if state.request_id != state.req.request_id:
+            raise ValueError(
+                "Diffusion request identity mismatch: "
+                f"state request_id={state.request_id!r}, forwarded request_id={state.req.request_id!r}"
+            )
+        if diffusion_kv_metadata is not None and diffusion_kv_metadata.request_id != state.request_id:
+            raise ValueError(
+                "Diffusion request identity mismatch: "
+                f"metadata request_id={diffusion_kv_metadata.request_id!r}, state request_id={state.request_id!r}"
+            )
         return cls(
             request_id=state.request_id,
             req=state.req,
             diffusion_kv_metadata=diffusion_kv_metadata,
         )
-
-
-def validate_new_request_data_identity(new_req: NewRequestData) -> None:
-    """Ensure an envelope and its forwarded request describe the same request."""
-    forwarded_request_id = new_req.req.request_id
-    if new_req.request_id != forwarded_request_id:
-        raise ValueError(
-            "Diffusion request identity mismatch: "
-            f"envelope request_id={new_req.request_id!r}, "
-            f"forwarded request_id={forwarded_request_id!r}"
-        )
-
-    metadata = new_req.diffusion_kv_metadata
-    if metadata is not None and metadata.request_id != forwarded_request_id:
-        raise ValueError(
-            "Diffusion request identity mismatch: "
-            f"metadata request_id={metadata.request_id!r}, "
-            f"forwarded request_id={forwarded_request_id!r}"
-        )
-
 
 @dataclass
 class CachedRequestData:
@@ -246,6 +236,7 @@ class DiffusionSchedulerOutput:
     # Opaque KVConnectorMetadata for the new (v1) paged KV connector.
     # The Scheduler-role. Workers bind this before start_load_kv.
     kv_connector_metadata: KVConnectorMetadata | None = None
+    kv_connector_request_ids: frozenset[str] = frozenset()
 
     @cached_property
     def scheduled_request_ids(self) -> list[str]:

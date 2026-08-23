@@ -25,12 +25,12 @@ import torch.distributed as dist
 import zmq
 from vllm.config import VllmConfig, set_current_vllm_config
 from vllm.distributed.device_communicators.shm_broadcast import MessageQueue
-from vllm.distributed.kv_transfer.kv_transfer_state import has_kv_transfer_group
 from vllm.logger import init_logger
 from vllm.profiler.wrapper import CudaProfilerWrapper, WorkerProfiler
 from vllm.utils.import_utils import resolve_obj_by_qualname
 from vllm.utils.mem_utils import GiB_bytes, MemorySnapshot, format_gib, memory_profiling
 from vllm.v1.kv_cache_interface import KVCacheConfig, KVCacheSpec
+from vllm.v1.outputs import ModelRunnerOutput
 from vllm.v1.worker.utils import request_memory
 from vllm.v1.worker.workspace import init_workspace_manager
 
@@ -44,11 +44,6 @@ from vllm_omni.diffusion.data import (
     OmniWakeTask,
 )
 from vllm_omni.diffusion.diffusion_kv.config import DiffusionKVCacheMode
-from vllm_omni.diffusion.diffusion_kv.metadata import DiffusionKVMetadata
-from vllm_omni.diffusion.diffusion_kv.v1.connector import (
-    init_worker_kv_connector_v1,
-    shutdown_kv_connector_v1,
-)
 from vllm_omni.diffusion.distributed.parallel_state import (
     destroy_distributed_env,
     init_distributed_environment,
@@ -63,7 +58,6 @@ from vllm_omni.diffusion.sched.interface import (
     DiffusionSchedulerOutput,
     KVPrefetchJob,
     NewRequestData,
-    validate_new_request_data_identity,
 )
 from vllm_omni.diffusion.vllm_config import create_diffusion_vllm_config
 from vllm_omni.diffusion.worker.diffusion_model_runner import DiffusionModelRunner
@@ -193,11 +187,6 @@ class DiffusionWorker:
         # requests, which only carry their request_id in subsequent ticks.
         self._step_lora_state: dict[str, tuple[LoRARequest | None, float]] = {}
         self.stage_id = getattr(od_config, "stage_id", 0)
-        if self.od_config.diffusion_kv_mode is DiffusionKVCacheMode.PAGED_SCHEDULER:
-            logger.warning_once(
-                "paged_scheduler initializes native paged KV storage, but no production diffusion model uses the "
-                "paged-attention adapter yet; model attention remains on the dense path."
-            )
         self.init_device()
         # Create model runner — one decision chain, in precedence order:
         #   1. explicit od_config.diffusion_model_runner_cls (user override),
@@ -467,30 +456,27 @@ class DiffusionWorker:
         self.vllm_config.cache_config.num_gpu_blocks = kv_cache_config.num_blocks
         with self._maybe_get_memory_pool_context("kv_cache"):
             self.model_runner.set_kv_cache_config(kv_cache_config)
-        if self.vllm_config.kv_transfer_config is not None and not has_kv_transfer_group():
-            init_worker_kv_connector_v1(self.vllm_config, kv_cache_config=kv_cache_config)
 
-        # Connector registration is intentionally left as a stub in this PR.
-        # ``set_kv_cache_config`` binds pages to layer adapters through
-        # ``AttentionLayerBase.bind_kv_cache``; a later change can collect
-        # those layer caches and register them with the connector.
-        # configured_layers = {
-        #     layer_name
-        #     for group in kv_cache_config.kv_cache_groups
-        #     for layer_name in group.layer_names
-        # }
-        # forward_context = self.vllm_config.compilation_config.static_forward_context
-        # kv_caches_by_layer = {
-        #     layer_name: forward_context[layer_name].kv_cache
-        #     for layer_name in configured_layers
-        # }
-        # maybe_register_vllm_kv_caches(kv_caches_by_layer)
+    def prepare_kv_for_forward(
+        self,
+        scheduler_output: DiffusionSchedulerOutput,
+        timeout_s: float,
+    ) -> ModelRunnerOutput:
+        assert self.model_runner is not None, "Model runner not initialized"
+        return self.model_runner.prepare_kv_for_forward(
+            scheduler_output,
+            timeout_s,
+            rank=self.rank,
+        )
+
+    def shutdown_kv_connector(self) -> bool:
+        if self.model_runner is not None:
+            self.model_runner.shutdown_kv_connector()
+        return True
 
     def remove_diffusion_kv_requests(self, request_ids: list[str]) -> int:
-        """Clear Worker-local rows without freeing Scheduler-owned blocks."""
-
         assert self.model_runner is not None, "Model runner not initialized"
-        return self.model_runner.remove_diffusion_kv_requests(request_ids)
+        return self.model_runner.diffusion_kv_backend.remove_diffusion_kv_requests(request_ids)
 
     def init_lora_manager(self) -> None:
         """Initialize the LoRA manager for this worker."""
@@ -567,7 +553,6 @@ class DiffusionWorker:
         req: OmniDiffusionRequest | list[NewRequestData],
         od_config: OmniDiffusionConfig,
         kv_prefetch_job: KVPrefetchJob | None = None,
-        diffusion_kv_metadata: DiffusionKVMetadata | None = None,
     ) -> DiffusionOutput:
         """Execute a forward pass by delegating to the model runner.
 
@@ -593,9 +578,7 @@ class DiffusionWorker:
             dp_rank = get_data_parallel_rank()
             idx = dp_rank % len(req)
             new_req = req[idx]
-            validate_new_request_data_identity(new_req)
             req = new_req.req
-            diffusion_kv_metadata = new_req.diffusion_kv_metadata
 
         if self.lora_manager is not None:
             try:
@@ -607,10 +590,7 @@ class DiffusionWorker:
         profiler = self._get_profiler()
         ctx = profiler.annotate_context_manager("diffusion_forward") if profiler else nullcontext()
         with ctx:
-            kwargs: dict[str, Any] = {"kv_prefetch_job": kv_prefetch_job}
-            if diffusion_kv_metadata is not None:
-                kwargs["diffusion_kv_metadata"] = diffusion_kv_metadata
-            output = self.model_runner.execute_model(req, **kwargs)
+            output = self.model_runner.execute_model(req, kv_prefetch_job=kv_prefetch_job)
         if profiler:
             profiler.step()
 
@@ -781,7 +761,7 @@ class DiffusionWorker:
         allocator.wake_up(tags)
         current_omni_platform.synchronize()
         if self.model_runner is not None and (tags is None or "kv_cache" in tags):
-            self.model_runner.refresh_diffusion_kv_block_table_layout()
+            self.model_runner.diffusion_kv_backend.refresh_block_table_layout()
         if len(self._sleep_saved_buffers) and self.model_runner is not None:
             model = self.model_runner.pipeline
             for name, buffer in model.named_buffers():
@@ -914,7 +894,7 @@ class DiffusionWorker:
             mgr = getattr(self.model_runner, "kv_transfer_manager", None)
             if mgr is not None:
                 mgr.shutdown_prefetch()
-        shutdown_kv_connector_v1()
+        self.shutdown_kv_connector()
         destroy_distributed_env()
 
 
@@ -1178,6 +1158,7 @@ class WorkerProc:
         kwargs = rpc_request.get("kwargs", {})
         output_rank = rpc_request.get("output_rank")
         exec_all_ranks = rpc_request.get("exec_all_ranks", False)
+        aggregate_all_ranks = rpc_request.get("aggregate_all_ranks", False)
         collect_rank_status = rpc_request.get("collect_rank_status", False)
         wave_id = rpc_request.get("wave_id")
 
@@ -1188,7 +1169,9 @@ class WorkerProc:
         # For DP multi-concurrency (output_rank=None), only the primary rank
         # within each DP replica should reply.  This prevents SP/TP/CFG/PP
         # ranks from enqueuing extra replies that the executor doesn't drain.
-        if output_rank is None and exec_all_ranks:
+        if aggregate_all_ranks:
+            should_reply = self.result_mq is not None
+        elif output_rank is None and exec_all_ranks:
             from vllm.distributed.parallel_state import get_tensor_model_parallel_rank
 
             from vllm_omni.diffusion.distributed.parallel_state import (
@@ -1260,6 +1243,8 @@ class WorkerProc:
             raise rpc_exception
         if isinstance(result, dict) and wave_id is not None:
             result["wave_id"] = wave_id
+        if aggregate_all_ranks:
+            result = {"worker_rank": self.gpu_id, "output": result, "wave_id": wave_id}
         return result, should_reply
 
     def recv_message(self) -> Any:
@@ -1311,6 +1296,7 @@ class WorkerProc:
                     # that compete with the expected responder's message.
                     output_rank = msg.get("output_rank")
                     exec_all_ranks = msg.get("exec_all_ranks", False)
+                    aggregate_all_ranks = msg.get("aggregate_all_ranks", False)
                     wave_id = msg.get("wave_id")
                     if self.result_mq is not None:
                         if rpc_id is not None:
@@ -1322,6 +1308,15 @@ class WorkerProc:
                                     rpc_id=rpc_id,
                                     error=str(e),
                                 )
+                            )
+                        elif aggregate_all_ranks:
+                            self._return_result(
+                                {
+                                    "status": "error",
+                                    "error": str(e),
+                                    "rank": self.gpu_id,
+                                    "wave_id": wave_id,
+                                }
                             )
                         elif output_rank is None and exec_all_ranks:
                             # DP multi-concurrency: primary ranks reply, tagged
@@ -1552,7 +1547,6 @@ class WorkerWrapperBase:
         req: OmniDiffusionRequest | list[NewRequestData],
         od_config: OmniDiffusionConfig,
         kv_prefetch_job: KVPrefetchJob | None = None,
-        diffusion_kv_metadata: DiffusionKVMetadata | None = None,
     ) -> DiffusionOutput:
         """
         Execute a forward pass.
@@ -1565,10 +1559,7 @@ class WorkerWrapperBase:
         Returns:
             DiffusionOutput with generated results
         """
-        kwargs: dict[str, Any] = {"kv_prefetch_job": kv_prefetch_job}
-        if diffusion_kv_metadata is not None:
-            kwargs["diffusion_kv_metadata"] = diffusion_kv_metadata
-        return self.worker.execute_model(req, od_config, **kwargs)
+        return self.worker.execute_model(req, od_config, kv_prefetch_job=kv_prefetch_job)
 
     def execute_stepwise(self, scheduler_output: DiffusionSchedulerOutput) -> BaseRunnerOutput:
         """Execute one diffusion step."""

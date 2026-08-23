@@ -3,7 +3,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
 
@@ -12,41 +12,47 @@ from vllm.v1.request import RequestStatus
 
 
 @dataclass(frozen=True)
-class DiffusionKVContext:
-    """An independently managed K/V context outside the primary sequence.
+class DiffusionPagedAttentionSequence:
+    """One logical sequence participating in a paged attention call."""
 
-    ``context_id`` identifies the logical context within one execution
-    sequence. ``cache_role`` binds it to a logical attention cache role exposed
-    by the Worker. Physical cache geometry remains native ``KVCacheSpec`` /
-    ``KVCacheConfig`` state and is deliberately absent here.
-    """
-
-    context_id: str
-    cache_role: str
-    num_tokens: int
-    block_hashes: tuple[BlockHash, ...] = ()
+    request_id: str
+    query_len: int
+    seq_len: int
+    sequence_id: int
+    kv_start_pos: int = 0
 
     def __post_init__(self) -> None:
-        if not self.context_id:
-            raise ValueError("context_id must be non-empty")
-        if not self.cache_role:
-            raise ValueError("cache_role must be non-empty")
-        if self.num_tokens <= 0:
-            raise ValueError(f"num_tokens must be positive, got {self.num_tokens}")
-        object.__setattr__(self, "block_hashes", tuple(self.block_hashes))
+        if type(self.request_id) is not str or not self.request_id:
+            raise ValueError("Paged attention request_id must be a non-empty string")
+        if type(self.sequence_id) is not int or self.sequence_id < 0:
+            raise ValueError("Paged attention sequence_id must be a non-negative integer")
+        if type(self.query_len) is not int or self.query_len <= 0:
+            raise ValueError("Paged attention query_len must be a positive integer")
+        if type(self.seq_len) is not int or self.seq_len <= 0:
+            raise ValueError("Paged attention seq_len must be a positive integer")
+        if type(self.kv_start_pos) is not int or self.kv_start_pos < 0:
+            raise ValueError("Paged attention kv_start_pos must be a non-negative integer")
+        if self.kv_start_pos + self.query_len > self.seq_len:
+            raise ValueError(
+                "Paged attention write span exceeds seq_len: "
+                f"start={self.kv_start_pos}, query_len={self.query_len}, seq_len={self.seq_len}"
+            )
+
+    @property
+    def identity(self) -> tuple[str, int]:
+        return (self.request_id, self.sequence_id)
 
 
 class DiffusionKVRequest:
     """Scheduler-owned KV state for one diffusion execution sequence.
 
     The primary sequence follows an ordered ``[prefix | target]`` policy, such
-    as one Hunyuan CFG row. ``prefix_len`` is the contiguous reusable prefix;
-    ``target_len`` is overwritten by every denoise step; ``num_tokens`` is the
-    complete first-step allocation boundary.
+    as one Hunyuan CFG execution sequence. ``prefix_len`` is the contiguous
+    reusable prefix; ``target_len`` is overwritten by every denoise step;
+    ``num_tokens`` is the complete first-step allocation boundary.
 
-    Independent cross/joint-attention K/V does not belong to that token axis
-    and is described by ``kv_contexts``. This object also exposes the minimal
-    mutable Request surface consumed by native ``KVCacheManager``.
+    This object also exposes the minimal mutable Request surface consumed by
+    native ``KVCacheManager``.
 
     An empty ``block_hashes`` sequence means the prefix has no canonical cache
     identity yet. Such a request may use native request-local page allocation,
@@ -64,7 +70,6 @@ class DiffusionKVRequest:
         target_len: int,
         seq_len: int,
         block_hashes: Sequence[BlockHash] = (),
-        kv_contexts: Sequence[DiffusionKVContext] = (),
         kv_transfer_params: dict[str, Any] | None = None,
         prompt_token_ids: list[int] | None = None,
     ) -> None:
@@ -84,18 +89,10 @@ class DiffusionKVRequest:
                 f"prefix_len={prefix_len}, target_len={target_len}, seq_len={seq_len}"
             )
 
-        contexts = tuple(kv_contexts)
-        if any(not isinstance(context, DiffusionKVContext) for context in contexts):
-            raise TypeError("kv_contexts must contain only DiffusionKVContext values")
-        context_ids = [context.context_id for context in contexts]
-        if len(context_ids) != len(set(context_ids)):
-            raise ValueError(f"kv_contexts must have unique context_id values, got {context_ids}")
-
         # Diffusion semantics consumed by the Scheduler-side facade.
         self.sequence_id = sequence_id
         self.prefix_len = prefix_len
         self.target_len = target_len
-        self.kv_contexts = contexts
 
         # Native vLLM Request surface. Keep this list intentionally small and
         # cover it with real-KVCacheManager conformance tests.
@@ -114,8 +111,6 @@ class DiffusionKVRequest:
         # KV connector v1's opaque vLLM handshake data. The Scheduler copies a public
         # request bag onto each sequence that does not already have one.
         self.kv_transfer_params = kv_transfer_params
-        # Mooncake uses len(prompt_token_ids) as the remote-load length. The
-        # Scheduler fills a zero-id placeholder of seq_len when this is omitted.
         self.prompt_token_ids = prompt_token_ids
 
     @property
@@ -123,3 +118,19 @@ class DiffusionKVRequest:
         """Complete first-step sequence length and allocation boundary."""
 
         return self.num_tokens
+
+
+def prepare_kv_connector_request(
+    request: DiffusionKVRequest,
+    transfer_params: Mapping[str, Any] | None,
+) -> None:
+    if transfer_params is None:
+        return
+    if request.kv_transfer_params is None:
+        request.kv_transfer_params = dict(transfer_params)
+    if request.prompt_token_ids is None:
+        source_tokens = transfer_params.get("num_transfer_tokens")
+        if source_tokens is not None and (type(source_tokens) is not int or source_tokens < 0):
+            raise ValueError("num_transfer_tokens must be a non-negative integer")
+        transfer_tokens = request.prefix_len if source_tokens is None else source_tokens
+        request.prompt_token_ids = [0] * min(request.prefix_len, transfer_tokens)

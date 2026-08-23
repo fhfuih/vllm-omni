@@ -227,16 +227,8 @@ class AttentionImpl(ABC, Generic[T]):
             raise NotImplementedError(f"No forward implementation for platform: {current_omni_platform}")
 
     def forward_paged(self, paged_kv_context: Any) -> torch.Tensor:
-        """Execute one Worker-prepared paged-KV attention call.
-
-        The context is intentionally opaque to the common attention layer.
-        Backends opt in by setting ``supports_paged_kv`` on their backend
-        class and implementing this method.  Dense callers continue to use
-        ``forward`` unchanged.
-        """
-
-        del paged_kv_context
-        raise NotImplementedError(f"{type(self).__name__} does not support paged KV attention")
+        """Execute a Worker-prepared native paged-attention context."""
+        return paged_kv_context.run()
 
     def forward_cuda(
         self,

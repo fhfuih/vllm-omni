@@ -185,7 +185,7 @@ def test_native_control_plane_config_initializes_scheduler() -> None:
         kv_vllm_config=vllm_config,
     )
 
-    assert scheduler._diffusion_kv_manager is not None
+    assert scheduler.kv_cache_manager is not None
     scheduler.close()
 
 

@@ -11,6 +11,8 @@ from typing import TYPE_CHECKING, Any
 import torch
 
 if TYPE_CHECKING:
+    from vllm.v1.outputs import KVConnectorOutput
+
     from vllm_omni.diffusion.data import DiffusionOutput
     from vllm_omni.inputs.data import OmniDiffusionSamplingParams, OmniPromptType
 
@@ -167,7 +169,10 @@ class StepRequestState:
         return self.chunk_index >= self.total_chunks
 
 
+@dataclass(kw_only=True)
 class BaseRunnerOutput(ABC):
+    kv_connector_output: KVConnectorOutput | None = None
+
     @abstractmethod
     def get_request_output(self, request_id: str) -> RunnerOutput | None:
         pass

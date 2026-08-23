@@ -582,7 +582,7 @@ class TestRequestScheduler:
         request = _make_request("native-error")
         _attach_diffusion_kv(request)
         self.scheduler.add_request(request)
-        manager = self.scheduler._diffusion_kv_manager
+        manager = self.scheduler.kv_cache_manager
         assert manager is not None
 
         def raise_native_error(*args, **kwargs):
@@ -609,7 +609,7 @@ class TestRequestScheduler:
         _attach_diffusion_kv(request)
         self.scheduler.add_request(request)
         self.scheduler.schedule()
-        manager = self.scheduler._diffusion_kv_manager
+        manager = self.scheduler.kv_cache_manager
         assert manager is not None
         metadata = manager.get_metadata("preempted")
 
@@ -634,7 +634,7 @@ class TestRequestScheduler:
         _attach_diffusion_kv(request)
         self.scheduler.add_request(request)
         self.scheduler.schedule()
-        manager = self.scheduler._diffusion_kv_manager
+        manager = self.scheduler.kv_cache_manager
         assert manager is not None
         assert manager.has_request("terminal") is True
 

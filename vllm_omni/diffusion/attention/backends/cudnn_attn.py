@@ -17,6 +17,7 @@ logger = init_logger(__name__)
 
 class CuDNNAttentionBackend(AttentionBackend):
     accept_output_buffer: bool = True
+    supports_paged_kv: bool = True
     supports_prefix_kv_slicing: bool = True
 
     @classmethod

@@ -23,7 +23,11 @@ from vllm.transformers_utils.config import get_config
 from vllm_omni.diffusion.data import DiffusionOutput, OmniDiffusionConfig
 from vllm_omni.diffusion.diffusion_kv.config import DiffusionKVCacheMode
 from vllm_omni.diffusion.distributed.utils import get_local_device
-from vllm_omni.diffusion.forward_context import set_forward_context_denoise_step_idx
+from vllm_omni.diffusion.forward_context import (
+    activate_paged_kv_sequences,
+    is_paged_kv_runtime_available,
+    set_forward_context_denoise_step_idx,
+)
 from vllm_omni.diffusion.model_loader.diffusers_loader import DiffusersPipelineLoader
 from vllm_omni.diffusion.models.interface import SupportImageInput, SupportsComponentDiscovery
 from vllm_omni.diffusion.profiler.diffusion_pipeline_profiler import (
@@ -649,11 +653,20 @@ class HunyuanImage3Pipeline(
         states: list["StepRequestState"],
         row_state_indexes: list[int],
         row_branches: list[int],
+        paged_kv_active: bool,
     ) -> list[int] | None:
         if not states or states[0].step_index == 0:
             return None
         prefix_lens: list[int] = []
         for state_idx, branch in zip(row_state_indexes, row_branches):
+            if paged_kv_active:
+                layout = request_layout_utils.get_hunyuan_prepared_layout(states[state_idx])
+                if layout is None or layout.tokenizer_output.gen_timestep_scatter_index is None:
+                    raise ValueError(
+                        f"Missing Hunyuan prepared prefix layout for request {states[state_idx].request_id}"
+                    )
+                prefix_lens.append(int(layout.tokenizer_output.gen_timestep_scatter_index[branch, -1].item()))
+                continue
             prompt_kv = states[state_idx].extra.get(_STEP_PROMPT_KV)
             if prompt_kv is None:
                 raise ValueError(
@@ -669,8 +682,14 @@ class HunyuanImage3Pipeline(
         row_state_indexes: list[int],
         row_branches: list[int],
         first_step: bool,
+        paged_kv_active: bool,
     ) -> tuple[torch.Tensor | None, dict[str, Any]]:
-        prefix_lens = self._prompt_kv_prefix_lens(states, row_state_indexes, row_branches)
+        prefix_lens = self._prompt_kv_prefix_lens(
+            states,
+            row_state_indexes,
+            row_branches,
+            paged_kv_active,
+        )
         max_prefix_len = max(prefix_lens) if prefix_lens is not None else None
         per_row_kwargs = [states[state_idx].extra[_STEP_MODEL_KWARGS] for state_idx in row_state_indexes]
         merged: dict[str, Any] = {}
@@ -1872,7 +1891,10 @@ class HunyuanImage3Pipeline(
         return row_state_indexes, row_branches
 
     @staticmethod
-    def _validate_step_group_states(states: list["StepRequestState"]) -> tuple[bool, int]:
+    def _validate_step_group_states(
+        states: list["StepRequestState"],
+        paged_kv_active: bool,
+    ) -> tuple[bool, int]:
         if not states:
             raise ValueError("HunyuanImage3 denoise_step received an empty group.")
 
@@ -1902,7 +1924,7 @@ class HunyuanImage3Pipeline(
                     raise ValueError(f"Missing Hunyuan AR KV snapshot for request {state.request_id}.")
                 if _STEP_INPUT_IDS not in state.extra:
                     raise ValueError(f"Missing Hunyuan step input ids for request {state.request_id}.")
-            elif _STEP_PROMPT_KV not in state.extra:
+            elif not paged_kv_active and _STEP_PROMPT_KV not in state.extra:
                 raise ValueError(f"Missing Hunyuan prompt KV cache for request {state.request_id}.")
 
         return first_step, cfg_factor
@@ -1961,7 +1983,8 @@ class HunyuanImage3Pipeline(
             state.extra[_STEP_INPUT_IDS] = None
 
     def _denoise_step_group(self, states: list["StepRequestState"]) -> torch.Tensor:
-        first_step, cfg_factor = self._validate_step_group_states(states)
+        paged_kv_active = is_paged_kv_runtime_available()
+        first_step, cfg_factor = self._validate_step_group_states(states, paged_kv_active)
         row_state_indexes, row_branches = self._step_row_order(states, cfg_factor)
         latents = torch.cat([state.latents for state in states], dim=0)
         latent_model_input = torch.cat([latents] * cfg_factor, dim=0)
@@ -1979,11 +2002,13 @@ class HunyuanImage3Pipeline(
             row_state_indexes,
             row_branches,
             first_step,
+            paged_kv_active,
         )
-        if first_step:
-            self._restore_injected_ar_kv(states, row_state_indexes, row_branches)
-        else:
-            self._restore_prompt_kv_cache(states, row_state_indexes, row_branches)
+        if not paged_kv_active:
+            if first_step:
+                self._restore_injected_ar_kv(states, row_state_indexes, row_branches)
+            else:
+                self._restore_prompt_kv_cache(states, row_state_indexes, row_branches)
 
         model_inputs = self.prepare_inputs_for_generation(
             input_ids,
@@ -1996,14 +2021,25 @@ class HunyuanImage3Pipeline(
         context_step_index = next(iter(step_indexes)) if len(step_indexes) == 1 else None
         set_forward_context_denoise_step_idx(context_step_index)
         try:
-            with torch.autocast(device_type=self.device.type, dtype=torch.bfloat16, enabled=True):
-                model_output = self.forward_call(**model_inputs, first_step=first_step)
-                pred = model_output["diffusion_prediction"]
+            if paged_kv_active:
+                paged_sequences = request_layout_utils.build_hunyuan_paged_attention_sequences(
+                    request_ids=tuple(state.request_id for state in states),
+                    sequence_request_indexes=tuple(row_state_indexes),
+                    sequence_ids=tuple(row_branches),
+                    query_lens=tuple(model_inputs["query_lens"]),
+                    seq_lens=tuple(model_inputs["seq_lens"]),
+                )
+            else:
+                paged_sequences = ()
+            with activate_paged_kv_sequences(paged_sequences):
+                with torch.autocast(device_type=self.device.type, dtype=torch.bfloat16, enabled=True):
+                    model_output = self.forward_call(**model_inputs, first_step=first_step)
+                    pred = model_output["diffusion_prediction"]
         finally:
             set_forward_context_denoise_step_idx(None)
         pred = pred.to(dtype=torch.float32)
 
-        if first_step:
+        if first_step and not paged_kv_active:
             self._capture_prompt_kv_cache(states, row_state_indexes, row_branches)
         if cfg_factor > 1:
             pred_cond, pred_uncond = pred.chunk(2)
@@ -2148,6 +2184,7 @@ class HunyuanImage3Pipeline(
         # ---- AR KV Reuse: extract injected KV from request ----
         ar_kv_kwargs = self._extract_ar_kv_from_request(req)
 
+        prepared_layout = request_layout_utils.get_hunyuan_prepared_layout(req.requests[0])
         model_inputs = self.prepare_model_inputs(
             prompt=prompt,
             cot_text=cot_text,
@@ -2159,11 +2196,15 @@ class HunyuanImage3Pipeline(
             guidance_scale=guidance_scale,
             batch_cond_image_info=batch_cond_image_info,
             bot_task=tokenizer_bot_task,
-            prepared_layout=request_layout_utils.get_hunyuan_prepared_layout(req.requests[0]),
+            prepared_layout=prepared_layout,
             **ar_kv_kwargs,
         )
 
         model_inputs.update(ar_kv_kwargs)
+        if is_paged_kv_runtime_available():
+            if prepared_layout is None:
+                raise ValueError("Native Hunyuan execution requires its Scheduler-prepared layout")
+            model_inputs["_paged_request_id"] = req.request_id
 
         outputs = self._generate(**model_inputs, **kwargs)
         image = outputs[0]

@@ -130,4 +130,4 @@ class RequestScheduler(BaseScheduler):
                 terminal_statuses[request_id] = DiffusionRequestStatus.FINISHED_COMPLETED
                 terminal_errors[request_id] = None
 
-        return self._finalize_update_from_output(sched_output, terminal_statuses, terminal_errors)
+        return self._finalize_update_from_output(sched_output, output, terminal_statuses, terminal_errors)

@@ -28,6 +28,8 @@ from vllm_omni.diffusion.utils.future_utils import try_set_exception, try_set_re
 from vllm_omni.diffusion.worker import WorkerProc
 
 if TYPE_CHECKING:
+    from vllm.distributed.kv_transfer.kv_connector.utils import KVOutputAggregator
+
     from vllm_omni.diffusion.sched.interface import DiffusionSchedulerOutput
     from vllm_omni.diffusion.worker.utils import BaseRunnerOutput
 
@@ -454,16 +456,9 @@ class MultiprocDiffusionExecutor(DiffusionExecutor):
         from vllm_omni.diffusion.worker.utils import BatchRunnerOutput, RunnerOutput
 
         self._ensure_open()
+        kv_connector_output = self._prepare_kv_for_forward(scheduler_output)
         new_reqs = scheduler_output.scheduled_new_reqs
         runner_outputs: list[RunnerOutput] = []
-
-        # Validate every envelope before selecting a dispatch path. In
-        # particular, keep identity errors outside the RPC error wrapper so an
-        # invalid request cannot be forwarded or converted into a worker output.
-        from vllm_omni.diffusion.sched.interface import validate_new_request_data_identity
-
-        for new_req in new_reqs:
-            validate_new_request_data_identity(new_req)
 
         # DP multi-concurrency: when DLO+AllGather is active and multiple
         # requests are scheduled, send every complete NewRequestData envelope
@@ -539,14 +534,14 @@ class MultiprocDiffusionExecutor(DiffusionExecutor):
                             result=DiffusionOutput(error=str(exc)),
                         )
                     )
-            return BatchRunnerOutput.from_list(runner_outputs)
+            output = BatchRunnerOutput.from_list(runner_outputs)
+            output.kv_connector_output = kv_connector_output
+            return output
 
         for new_req in new_reqs:
             req = new_req.req
             try:
                 args: tuple = (req, self.od_config, scheduler_output.kv_prefetch_job)
-                if new_req.diffusion_kv_metadata is not None:
-                    args += (new_req.diffusion_kv_metadata,)
                 result = self.collective_rpc(
                     "execute_model",
                     args=args,
@@ -584,7 +579,9 @@ class MultiprocDiffusionExecutor(DiffusionExecutor):
                     )
                 )
 
-        return BatchRunnerOutput.from_list(runner_outputs)
+        output = BatchRunnerOutput.from_list(runner_outputs)
+        output.kv_connector_output = kv_connector_output
+        return output
 
     def execute_batch(self, scheduler_output: DiffusionSchedulerOutput) -> BaseRunnerOutput:
         """Execute request-mode work through the unified request-batch path.
@@ -614,6 +611,8 @@ class MultiprocDiffusionExecutor(DiffusionExecutor):
             # fused pipeline request batch, so models such as MiniMax-H3 do not
             # need to advertise supports_request_batch=True.
             return self.execute_request(scheduler_output)
+
+        kv_connector_output = self._prepare_kv_for_forward(scheduler_output)
 
         result = self.collective_rpc(
             "execute_model_batch",
@@ -656,9 +655,12 @@ class MultiprocDiffusionExecutor(DiffusionExecutor):
                     batch_output = None
                     error = str(exc)
                 self._deliver_batch_split(per_req_map, batch_output, error)
-            return BatchRunnerOutput.from_list(runner_outputs)
+            output = BatchRunnerOutput.from_list(runner_outputs)
+            output.kv_connector_output = kv_connector_output
+            return output
         if not isinstance(result, BatchRunnerOutput):
             raise RuntimeError(f"Unexpected response type for execute_batch: {type(result)!r}")
+        result.kv_connector_output = kv_connector_output
         return result
 
     def execute_step(self, scheduler_output: DiffusionSchedulerOutput) -> BaseRunnerOutput:
@@ -666,6 +668,7 @@ class MultiprocDiffusionExecutor(DiffusionExecutor):
         from vllm_omni.diffusion.worker.utils import BaseRunnerOutput
 
         self._ensure_open()
+        kv_connector_output = self._prepare_kv_for_forward(scheduler_output)
         result = self.collective_rpc(
             "execute_stepwise",
             args=(scheduler_output,),
@@ -674,6 +677,7 @@ class MultiprocDiffusionExecutor(DiffusionExecutor):
         )
 
         if isinstance(result, BaseRunnerOutput):
+            result.kv_connector_output = kv_connector_output
             return result
         raise RuntimeError(f"Unexpected response type for execute_step: {type(result)!r}")
 
@@ -685,14 +689,16 @@ class MultiprocDiffusionExecutor(DiffusionExecutor):
         kwargs: dict | None = None,
         unique_reply_rank: int | None = None,
         exec_all_ranks: bool = False,
+        kv_output_aggregator: KVOutputAggregator | None = None,
     ) -> Any:
         self._ensure_open()
 
         deadline = None if timeout is None else time.monotonic() + timeout
         kwargs = kwargs or {}
 
-        multi_rank_reply = unique_reply_rank is None and exec_all_ranks
-        execute_all_ranks = unique_reply_rank is None or exec_all_ranks
+        aggregate_all_ranks = kv_output_aggregator is not None
+        multi_rank_reply = aggregate_all_ranks or (unique_reply_rank is None and exec_all_ranks)
+        execute_all_ranks = aggregate_all_ranks or unique_reply_rank is None or exec_all_ranks
         # Status aggregation is for control-plane RPCs, where rank 0 sends
         # one envelope representing every rank. DP request concurrency needs
         # one independent reply per DP primary instead.
@@ -705,6 +711,7 @@ class MultiprocDiffusionExecutor(DiffusionExecutor):
             "output_rank": None if multi_rank_reply else (unique_reply_rank if unique_reply_rank is not None else 0),
             "exec_all_ranks": execute_all_ranks,
             "collect_rank_status": collect_rank_status,
+            "aggregate_all_ranks": aggregate_all_ranks,
         }
 
         # ── Path 1: async execute_model / execute_model_batch ──
@@ -745,32 +752,41 @@ class MultiprocDiffusionExecutor(DiffusionExecutor):
             # - unique_reply_rank=None + exec_all_ranks=True: all DP ranks reply
             #   (N responses, one per DP worker).
             # - Otherwise: 1 response (only rank 0 or specified rank)
-            if unique_reply_rank is None and exec_all_ranks:
+            if aggregate_all_ranks:
+                num_responses = int(self.od_config.num_gpus or 1)
+            elif unique_reply_rank is None and exec_all_ranks:
                 dp_size = getattr(self.od_config.parallel_config, "data_parallel_size", 1)
                 num_responses = max(1, dp_size)
             else:
                 num_responses = 1
 
             responses: list = []
-            if unique_reply_rank is None and exec_all_ranks and num_responses > 1:
-                # DP multi-concurrency: collect num_responses replies, sort by dp_rank.
+            if multi_rank_reply and num_responses > 1:
                 result_mqs: list[MessageQueue | None] = [None] * num_responses
                 if self.od_config.step_execution:
-                    parallel_config = self.od_config.parallel_config
-                    replica_size = (
-                        getattr(parallel_config, "tensor_parallel_size", 1)
-                        * getattr(parallel_config, "sequence_parallel_size", 1)
-                        * getattr(parallel_config, "pipeline_parallel_size", 1)
-                        * getattr(parallel_config, "cfg_parallel_size", 1)
-                    )
-                    primary_ranks = [dp_rank * replica_size for dp_rank in range(num_responses)]
                     all_result_mqs = getattr(self, "_result_mqs", [])
-                    if not all_result_mqs or primary_ranks[-1] >= len(all_result_mqs):
-                        raise RuntimeError(
-                            "Missing result queues for DP primary ranks "
-                            f"{primary_ranks}; available queues: {len(all_result_mqs)}"
+                    if aggregate_all_ranks:
+                        if len(all_result_mqs) < num_responses:
+                            raise RuntimeError(
+                                "Missing result queues for all-rank native KV prepare: "
+                                f"expected={num_responses}, got={len(all_result_mqs)}"
+                            )
+                        result_mqs = list(all_result_mqs[:num_responses])
+                    else:
+                        parallel_config = self.od_config.parallel_config
+                        replica_size = (
+                            getattr(parallel_config, "tensor_parallel_size", 1)
+                            * getattr(parallel_config, "sequence_parallel_size", 1)
+                            * getattr(parallel_config, "pipeline_parallel_size", 1)
+                            * getattr(parallel_config, "cfg_parallel_size", 1)
                         )
-                    result_mqs = [all_result_mqs[rank] for rank in primary_ranks]
+                        primary_ranks = [dp_rank * replica_size for dp_rank in range(num_responses)]
+                        if not all_result_mqs or primary_ranks[-1] >= len(all_result_mqs):
+                            raise RuntimeError(
+                                "Missing result queues for DP primary ranks "
+                                f"{primary_ranks}; available queues: {len(all_result_mqs)}"
+                            )
+                        result_mqs = [all_result_mqs[rank] for rank in primary_ranks]
                 tagged: list[tuple[int, Any]] = []
                 collected_errors: list[str] = []
                 for result_mq in result_mqs:
@@ -784,7 +800,9 @@ class MultiprocDiffusionExecutor(DiffusionExecutor):
                         collected_errors.append(str(response.get("error", "unknown")))
                     else:
                         response = MultiprocDiffusionExecutor._handle_rpc_response(response)
-                        if isinstance(response, dict) and "dp_rank" in response:
+                        if isinstance(response, dict) and "worker_rank" in response:
+                            tagged.append((response["worker_rank"], response["output"]))
+                        elif isinstance(response, dict) and "dp_rank" in response:
                             tagged.append((response["dp_rank"], response["output"]))
                         else:
                             tagged.append((len(tagged), response))
@@ -806,6 +824,8 @@ class MultiprocDiffusionExecutor(DiffusionExecutor):
 
                     responses.append(response)
 
+            if kv_output_aggregator is not None:
+                return kv_output_aggregator.aggregate(responses, output_rank=unique_reply_rank or 0)
             return responses[0] if unique_reply_rank is not None else responses
         except Exception as e:
             logger.error(f"RPC call failed: {e}")

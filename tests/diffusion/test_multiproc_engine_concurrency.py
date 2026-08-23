@@ -300,6 +300,42 @@ class TestRequestModeDispatch:
 
         assert [result.error for result in results] == ["0", "1"]
 
+    def test_kv_output_aggregator_collects_every_worker_rank(self):
+        executor, req_q, res_q = _make_executor(num_gpus=2)
+        executor.od_config = SimpleNamespace(
+            num_gpus=2,
+            step_execution=False,
+            parallel_config=SimpleNamespace(data_parallel_size=1),
+        )
+        executor._sync_result_buffer = res_q
+        aggregated = object()
+        aggregator = SimpleNamespace(aggregate=Mock(return_value=aggregated))
+
+        def worker():
+            request = req_q.get(timeout=2)
+            assert request["aggregate_all_ranks"] is True
+            assert request["output_rank"] is None
+            assert request["collect_rank_status"] is False
+            for rank in (1, 0):
+                proc = object.__new__(WorkerProc)
+                proc.gpu_id = rank
+                proc.result_mq = object()
+                proc.worker = SimpleNamespace(execute_method=Mock(return_value=f"rank-{rank}"))
+                response, should_reply = proc._execute_rpc(request)
+                assert should_reply is True
+                res_q.put(response)
+
+        thread = threading.Thread(target=worker, daemon=True)
+        thread.start()
+        result = executor.collective_rpc(
+            "prepare_kv_for_forward",
+            kv_output_aggregator=aggregator,
+        )
+        thread.join(timeout=2)
+
+        assert result is aggregated
+        aggregator.aggregate.assert_called_once_with(["rank-0", "rank-1"], output_rank=0)
+
     @pytest.mark.parametrize(
         ("tp_size", "sp_size", "pp_size", "cfg_size", "expected_primary_ranks"),
         [
@@ -931,6 +967,7 @@ class TestMultiprocExecutorStepStreamingOutput:
         scheduler_output = SimpleNamespace(
             scheduled_request_ids=["sched-stream"],
         )
+        executor._prepare_kv_for_forward = Mock(return_value=None)
 
         def _worker():
             for runner_output in runner_outputs:

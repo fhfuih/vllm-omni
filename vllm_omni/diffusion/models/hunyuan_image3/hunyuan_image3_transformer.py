@@ -75,7 +75,12 @@ from vllm_omni.diffusion.distributed.sp_plan import (
     SequenceParallelOutput,
 )
 from vllm_omni.diffusion.distributed.utils import get_local_device
-from vllm_omni.diffusion.forward_context import set_forward_context_denoise_step_idx
+from vllm_omni.diffusion.forward_context import (
+    activate_paged_kv_sequences,
+    get_paged_kv_computed_tokens,
+    is_paged_kv_runtime_available,
+    set_forward_context_denoise_step_idx,
+)
 from vllm_omni.diffusion.layers.fused_moe import FusedMoE
 from vllm_omni.diffusion.layers.norm import RMSNorm
 from vllm_omni.diffusion.layers.rope import RotaryEmbedding
@@ -1099,7 +1104,31 @@ class ImageKVCacheManager(nn.Module):
         key = key.reshape(bs, q_len, kv_head_num_per_rank, head_dim)
         value = value.reshape(bs, q_len, kv_head_num_per_rank, head_dim)
 
-        if uncond_cfg_prefill:
+        paged_kv_active = self.attn.is_paged_kv_active()
+        if paged_kv_active:
+            if self.sp_size > 1 and uncond_cfg_prefill:
+                # The negative-CFG delta is replicated; its shared prefix is already paged.
+                joint_text_query = query
+                joint_text_key = key
+                joint_text_value = value
+                query = query[:, :0, :, :]
+                key = key[:, :0, :, :]
+                value = value[:, :0, :, :]
+            elif self.sp_size > 1 and first_step:
+                # SP shards only the image span; the prompt remains a joint prefix.
+                joint_query_len = query.shape[1] - shard_image_size
+                joint_text_query = query[:, :joint_query_len, :, :]
+                joint_text_key = key[:, :joint_query_len, :, :]
+                joint_text_value = value[:, :joint_query_len, :, :]
+                query = query[:, joint_query_len:, :, :]
+                key = key[:, joint_query_len:, :, :]
+                value = value[:, joint_query_len:, :, :]
+            elif self.sp_size > 1:
+                # Later denoise steps write only the rank-local image shard.
+                joint_text_query = query[:, :0, :, :]
+                joint_text_key = key[:, :0, :, :]
+                joint_text_value = value[:, :0, :, :]
+        elif uncond_cfg_prefill:
             key, value = self._build_neg_ar_kv(key, value, seq_len)
             if self.sp_size > 1:
                 joint_text_query = query
@@ -1134,7 +1163,7 @@ class ImageKVCacheManager(nn.Module):
                 joint_text_query = query[:, :0, :, :]
                 joint_text_key, joint_text_value = self._reuse_prompt_kv(key, value, seq_len, bs, shard_image_size)
 
-        if not keep_kv_compressed and not self.attn.is_paged_kv_active():
+        if not keep_kv_compressed and not paged_kv_active:
             key = repeat_kv(key, repeat_num)
             value = repeat_kv(value, repeat_num)
             if self.sp_size > 1:
@@ -1144,11 +1173,14 @@ class ImageKVCacheManager(nn.Module):
         attention_mask = attention_mask.contiguous()
 
         full_attn_spans = kwargs.get("full_attn_spans", None)
+        paged_tail_padding = int(kwargs.get("shard_padding_size", 0) or 0) if paged_kv_active else 0
+        attn_extra = {"paged_kv_tail_padding": paged_tail_padding} if paged_tail_padding > 0 else {}
 
         if self.sp_size <= 1:
             attn_metadata = AttentionMetadata(
                 attn_mask=attention_mask,
                 full_attn_spans=full_attn_spans,
+                extra=attn_extra,
             )
         else:
             attn_metadata = AttentionMetadata(
@@ -1158,6 +1190,7 @@ class ImageKVCacheManager(nn.Module):
                 joint_strategy="front",
                 attn_mask=attention_mask,
                 full_attn_spans=full_attn_spans,
+                extra=attn_extra,
             )
         attn_output = self.attn(query, key, value, attn_metadata)
         attn_output = attn_output.reshape(bs * q_len, head_num_per_rank, head_dim)
@@ -1719,7 +1752,7 @@ class HunYuanAttention(nn.Module):
             num_kv_heads=self.num_kv_heads,
             scaling=self.scaling,
             image_token_len=4097,
-            prefix=f"{prefix}.image_attn",
+            prefix=f"model.layers.{self.layer_id}.self_attn",
         )
         self.image_rope2d_emb = HunYuanRotary2DEmbedder(
             num_heads=self.num_heads,
@@ -2768,12 +2801,14 @@ class HunyuanImage3Text2ImagePipeline(DiffusionPipeline):
         cfg_parallel_ready,
         cfg_rank,
         device,
+        paged_kv_active: bool,
+        paged_request_id: str | None = None,
     ):
         if cfg_parallel_ready and cfg_rank != 1:
             return
 
-        assert negative_reuse_len is not None and negative_reuse_len > 0, (
-            "negative_reuse_len should be greater than 0 for running negative CFG prefill"
+        assert negative_reuse_len is not None and negative_reuse_len >= 0, (
+            "negative_reuse_len should be non-negative for running negative CFG prefill"
         )
 
         prefill_inputs = self._build_negative_cfg_prefill_inputs(
@@ -2789,13 +2824,28 @@ class HunyuanImage3Text2ImagePipeline(DiffusionPipeline):
             import time
 
             t0 = time.perf_counter()
-        with torch.autocast(device_type=device.type, dtype=torch.bfloat16, enabled=True):
-            self.model.forward_call(**prefill_inputs)
+        if paged_kv_active:
+            if paged_request_id is None:
+                raise ValueError("Native Hunyuan CFG prefill is missing its paged sequence identity")
+            from .request_layout import build_hunyuan_paged_attention_sequences
+
+            paged_sequences = build_hunyuan_paged_attention_sequences(
+                request_ids=(paged_request_id,),
+                sequence_request_indexes=(0,),
+                sequence_ids=(1,),
+                query_lens=tuple(prefill_inputs["query_lens"]),
+                seq_lens=tuple(prefill_inputs["seq_lens"]),
+            )
+        else:
+            paged_sequences = ()
+        with activate_paged_kv_sequences(paged_sequences):
+            with torch.autocast(device_type=device.type, dtype=torch.bfloat16, enabled=True):
+                self.model.forward_call(**prefill_inputs)
         if logger.isEnabledFor(logging.DEBUG):
             torch.accelerator.synchronize()
             logger.debug("[CFG] Uncond prefill took %.3fs", time.perf_counter() - t0)
 
-        if cfg_parallel_ready:
+        if cfg_parallel_ready and not paged_kv_active:
             self._keep_negative_kv_only()
 
     # ==========================================================
@@ -2826,6 +2876,13 @@ class HunyuanImage3Text2ImagePipeline(DiffusionPipeline):
                 model_kwargs["custom_pos_emb"][1][batch_slice],
             )
 
+        full_attn_spans = model_kwargs.get("full_attn_spans")
+        if full_attn_spans:
+            full_attn_spans = [
+                [(start, min(end, prefill_seq_len)) for start, end in spans if start < prefill_seq_len]
+                for spans in full_attn_spans[batch_slice]
+            ]
+
         return dict(
             input_ids=input_ids[batch_slice, seq_slice],
             attention_mask=model_kwargs["attention_mask"][batch_slice, :, seq_slice, :prefill_seq_len],
@@ -2838,9 +2895,7 @@ class HunyuanImage3Text2ImagePipeline(DiffusionPipeline):
             seq_lens=[prefill_seq_len],
             num_image_tokens=0,
             ar_kv_reuse_len=negative_reuse_len,
-            full_attn_spans=model_kwargs["full_attn_spans"][batch_slice]
-            if model_kwargs.get("full_attn_spans")
-            else None,
+            full_attn_spans=full_attn_spans,
         )
 
     # ==========================================================
@@ -2888,8 +2943,53 @@ class HunyuanImage3Text2ImagePipeline(DiffusionPipeline):
         cfg_parallel_ready,
         cfg_rank,
         device,
+        paged_request_id: str | None = None,
+        paged_branches: tuple[int, ...] = (),
+        paged_kv_active: bool | None = None,
     ):
         ar_kv_data = model_kwargs.pop("ar_kv_data", None)
+        if paged_kv_active is None:
+            paged_kv_active = is_paged_kv_runtime_available()
+        if paged_kv_active:
+            if ar_kv_data is not None:
+                raise ValueError("Native paged Hunyuan execution must not receive legacy dense ar_kv_data")
+            if paged_request_id is None:
+                raise ValueError("Native Hunyuan AR KV reuse is missing its paged request ID")
+            paged_computed_tokens = get_paged_kv_computed_tokens(paged_request_id, paged_branches)
+            if not any(paged_computed_tokens):
+                return input_ids, 0
+
+            positive_reuse_len = min(paged_computed_tokens)
+            _legacy_positive_reuse_len, negative_reuse_len = self._get_kv_reuse_len(
+                model_kwargs,
+                batch_size,
+            )
+            if (
+                self.do_classifier_free_guidance
+                and 1 in paged_branches
+                and negative_reuse_len is not None
+                and negative_reuse_len < positive_reuse_len
+            ):
+                self._maybe_run_negative_cfg_prefill(
+                    input_ids=input_ids,
+                    model_kwargs=model_kwargs,
+                    batch_size=batch_size,
+                    positive_reuse_len=positive_reuse_len,
+                    negative_reuse_len=negative_reuse_len,
+                    cfg_parallel_ready=cfg_parallel_ready,
+                    cfg_rank=cfg_rank,
+                    device=device,
+                    paged_kv_active=True,
+                    paged_request_id=paged_request_id,
+                )
+            return (
+                self._truncate_reused_prefix(
+                    input_ids=input_ids,
+                    model_kwargs=model_kwargs,
+                    positive_reuse_len=positive_reuse_len,
+                ),
+                positive_reuse_len,
+            )
         if ar_kv_data is None:
             logger.debug(
                 "[AR KV Reuse] cfg_rank=%s: no AR KV received, fallback to full recompute (reuse_len=0)",
@@ -2920,6 +3020,7 @@ class HunyuanImage3Text2ImagePipeline(DiffusionPipeline):
                 cfg_parallel_ready=cfg_parallel_ready,
                 cfg_rank=cfg_rank,
                 device=device,
+                paged_kv_active=False,
             )
 
         # 4. truncate reused prefix
@@ -3046,6 +3147,11 @@ class HunyuanImage3Text2ImagePipeline(DiffusionPipeline):
         # Prepare extra step kwargs.
         _scheduler_step_extra_kwargs = self.prepare_extra_func_kwargs(self.scheduler.step, {"generator": generator})
 
+        paged_request_id = model_kwargs.pop("_paged_request_id", None)
+        paged_kv_active = is_paged_kv_runtime_available()
+        if paged_kv_active and not paged_request_id:
+            raise ValueError("Native Hunyuan request-mode execution requires a paged request ID")
+
         # Prepare model kwargs — attention mask is built from the full
         # (cfg_factor=2) batch before any splitting so that each rank's
         # slice is correct.
@@ -3070,9 +3176,11 @@ class HunyuanImage3Text2ImagePipeline(DiffusionPipeline):
             input_ids = input_ids[s]
             attention_mask = attention_mask[s]
             self._split_model_kwargs_for_cfg_parallel(model_kwargs, batch_size, cfg_rank)
+            paged_branches = (cfg_rank,)
         else:
             cfg_factor = 1 + self.do_classifier_free_guidance
             cfg_rank = None
+            paged_branches = tuple(range(cfg_factor))
 
         b, _, q_len1, seq_len = attention_mask.shape
         query_lens = [q_len1] * b
@@ -3084,7 +3192,15 @@ class HunyuanImage3Text2ImagePipeline(DiffusionPipeline):
         # Attempt to reuse KV cache from the AR stage.
         # Note: the reusable KV length may differ between positive and negative prompts.
         input_ids, ar_kv_reuse_len = self._maybe_handle_ar_kv_reuse(
-            input_ids, model_kwargs, batch_size, cfg_parallel_ready, cfg_rank, device
+            input_ids,
+            model_kwargs,
+            batch_size,
+            cfg_parallel_ready,
+            cfg_rank,
+            device,
+            paged_request_id=paged_request_id,
+            paged_branches=paged_branches,
+            paged_kv_active=paged_kv_active,
         )
 
         # Store ar_kv_reuse_len in model_kwargs for use in forward method (SP mode)
@@ -3141,9 +3257,22 @@ class HunyuanImage3Text2ImagePipeline(DiffusionPipeline):
                         **model_kwargs,
                     )
 
-                    with torch.autocast(device_type=self.device.type, dtype=torch.bfloat16, enabled=True):
-                        model_output = self.model.forward_call(**model_inputs, first_step=(i == 0))
-                        pred = model_output["diffusion_prediction"]
+                    if paged_kv_active:
+                        from .request_layout import build_hunyuan_paged_attention_sequences
+
+                        paged_sequences = build_hunyuan_paged_attention_sequences(
+                            request_ids=(paged_request_id,),
+                            sequence_request_indexes=(0,) * len(paged_branches),
+                            sequence_ids=paged_branches,
+                            query_lens=tuple(model_inputs["query_lens"]),
+                            seq_lens=tuple(model_inputs["seq_lens"]),
+                        )
+                    else:
+                        paged_sequences = ()
+                    with activate_paged_kv_sequences(paged_sequences):
+                        with torch.autocast(device_type=self.device.type, dtype=torch.bfloat16, enabled=True):
+                            model_output = self.model.forward_call(**model_inputs, first_step=(i == 0))
+                            pred = model_output["diffusion_prediction"]
                     pred = pred.to(dtype=torch.float32)
 
                     if tea_cache_config is not None:

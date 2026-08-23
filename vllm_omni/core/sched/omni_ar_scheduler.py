@@ -108,6 +108,13 @@ class OmniARScheduler(OmniSchedulerMixin, VLLMScheduler):
         # Snapshot prompt length for each streaming input update
         self._new_prompt_len_snapshot: dict[str, int] = {}
 
+        from vllm_omni.config.omni_config import KVTransferBackend
+
+        self._kv_transfer_backend = KVTransferBackend.resolve(
+            kv_transfer_config=getattr(self.vllm_config, "kv_transfer_config", None),
+            omni_kv_config=self._omni_kv_config,
+        )
+
     def _get_confirmed_num_computed_tokens(self, request: Request) -> int:
         """num_computed_tokens minus async placeholders (KV actually on GPU)."""
         # Output placeholders are zero when async scheduling isn't used
@@ -154,6 +161,10 @@ class OmniARScheduler(OmniSchedulerMixin, VLLMScheduler):
         Returns True if request should be STOPPED.
         Returns False if request should continue (even if transfer was triggered).
         """
+        from vllm_omni.config.omni_config import KVTransferBackend
+
+        if self._kv_transfer_backend is not KVTransferBackend.OMNI_KV_TRANSFER:
+            return False
         if not self.kv_transfer_criteria:
             return False
 
@@ -700,13 +711,23 @@ class OmniARScheduler(OmniSchedulerMixin, VLLMScheduler):
         # Use getattr for safety with test __new__ code paths.
         getattr(self, "_inflight_prefills", set()).discard(request)
 
-        if self._uses_native_kv_source(request) and request.status == RequestStatus.FINISHED_STOPPED:
+        from vllm_omni.config.omni_config import KVTransferBackend
+
+        transfer_params = getattr(request, "kv_transfer_params", None)
+        has_kv_connector_source = bool(
+            self._kv_transfer_backend is KVTransferBackend.KV_CONNECTOR
+            and transfer_params
+            and transfer_params.get("transfer_id")
+            and transfer_params.get("do_remote_decode")
+        )
+        if has_kv_connector_source and request.status == RequestStatus.FINISHED_STOPPED:
             request.status = RequestStatus.FINISHED_LENGTH_CAPPED
 
         # 1. Standard cleanup parts from base _free_request
         connector_delay_free_blocks, kv_xfer_params = self._connector_finished(request)
-        if self._uses_native_kv_source(request):
-            kv_xfer_params = None
+        if has_kv_connector_source:
+            kv_xfer_params = dict(kv_xfer_params or {})
+            kv_xfer_params["num_transfer_tokens"] = self._get_confirmed_num_computed_tokens(request)
 
         self.encoder_cache_manager.free(request)
         request_id = request.request_id
@@ -722,11 +743,11 @@ class OmniARScheduler(OmniSchedulerMixin, VLLMScheduler):
         # coordinator is None, so the unconditional finally is safe.
         try:
             # 2. Omni Specific: Check if we need to transfer KV
-            if self._uses_native_kv_source(request):
+            if has_kv_connector_source:
                 delay_free_blocks |= connector_delay_free_blocks
                 if not delay_free_blocks:
                     self._free_blocks(request)
-                return None, None
+                return kv_xfer_params, None
             if self._should_transfer_kv_for_request(request_id):
                 already_triggered = request_id in self.transfer_triggered_requests
                 is_active = request_id in self.active_kv_transfers
@@ -835,13 +856,12 @@ class OmniARScheduler(OmniSchedulerMixin, VLLMScheduler):
             self.requests_needing_kv_transfer[req_id] = {"seq_len": seq_len, "block_ids": block_ids}
             logger.debug(f"Marked request {req_id} for KV cache transfer (len={seq_len}, blocks={len(block_ids)})")
 
-    def _uses_native_kv_source(self, request: Request) -> bool:
-        """True when Router attached Mooncake source handshake params."""
-        params = request.kv_transfer_params
-        return bool(params and params.get("transfer_id") and params.get("do_remote_decode"))
-
     def _should_transfer_kv_for_request(self, req_id: str) -> bool:
         """Determine if a request should trigger KV cache transfer."""
+        from vllm_omni.config.omni_config import KVTransferBackend
+
+        if self._kv_transfer_backend is not KVTransferBackend.OMNI_KV_TRANSFER:
+            return False
         if not self._get_omni_kv_config_value("need_send_cache", False):
             return False
         request = self.requests.get(req_id)

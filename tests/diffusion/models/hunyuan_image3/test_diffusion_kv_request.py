@@ -12,6 +12,7 @@ from vllm_omni.diffusion.diffusion_kv.config import DiffusionKVCacheMode
 from vllm_omni.diffusion.diffusion_kv.request import DiffusionKVRequest
 from vllm_omni.diffusion.models.hunyuan_image3.hunyuan_image3_tokenizer import TokenizerEncodeOutput
 from vllm_omni.diffusion.models.hunyuan_image3.hunyuan_image3_transformer import (
+    HunyuanImage3Text2ImagePipeline,
     ImageInfo,
     JointImageInfo,
 )
@@ -31,6 +32,28 @@ from vllm_omni.diffusion.request import OmniDiffusionRequest
 from vllm_omni.inputs.data import OmniDiffusionSamplingParams
 
 pytestmark = [pytest.mark.core_model, pytest.mark.cpu, pytest.mark.diffusion]
+
+
+def test_negative_cfg_prefill_clips_piecewise_spans_to_prefill_sequence() -> None:
+    pipeline = object.__new__(HunyuanImage3Text2ImagePipeline)
+    model_kwargs = {
+        "attention_mask": torch.ones(2, 1, 20, 20, dtype=torch.bool),
+        "position_ids": torch.arange(20).repeat(2, 1),
+        "custom_pos_emb": (torch.zeros(2, 20, 2), torch.zeros(2, 20, 2)),
+        "full_attn_spans": [[(1, 5)], [(2, 12), (14, 18)]],
+    }
+
+    inputs = pipeline._build_negative_cfg_prefill_inputs(
+        input_ids=torch.arange(40).reshape(2, 20),
+        model_kwargs=model_kwargs,
+        batch_size=1,
+        negative_reuse_len=6,
+        positive_reuse_len=10,
+        cfg_parallel_ready=False,
+    )
+
+    assert inputs["full_attn_spans"] == [[(2, 10)]]
+    assert inputs["attention_mask"].shape == (1, 1, 4, 10)
 
 
 def test_dense_legacy_preprocess_does_not_initialize_layout_tokenizer(monkeypatch) -> None:
@@ -180,7 +203,6 @@ def test_builds_kv_request_lengths_without_model_execution() -> None:
     assert tokenizer.calls[0]["sequence_template"] == "instruct"
     assert tokenizer.calls[0]["cfg_factor"] == 1
     assert kv_requests[0].block_hashes == []
-    assert kv_requests[0].kv_contexts == ()
     assert kv_requests[0].skip_reading_prefix_cache is True
 
 
@@ -234,7 +256,6 @@ def test_passes_preprocessed_reference_image_geometry_to_tokenizer() -> None:
     assert kv_requests[0].prefix_len == 20
     assert kv_requests[0].target_len == 17
     assert kv_requests[0].seq_len == 40
-    assert kv_requests[0].kv_contexts == ()
 
 
 def _assert_nested_equal(actual, expected) -> None:
