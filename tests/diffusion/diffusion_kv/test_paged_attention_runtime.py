@@ -956,9 +956,7 @@ def test_prepare_batch_passes_dcp_local_seq_lens_to_native_builder(
     block_tables.cp_interleave = 2
     block_tables.num_blocks.np[0, 2] = 1
 
-    runtime.prepare_batch(
-        [DiffusionPagedAttentionSequence(request_id="req-0", sequence_id=0, query_len=5, seq_len=5)]
-    )
+    runtime.prepare_batch([DiffusionPagedAttentionSequence(request_id="req-0", sequence_id=0, query_len=5, seq_len=5)])
 
     assert events[0][1]["dcp_local_seq_lens"].tolist() == [2]
 

@@ -58,6 +58,4 @@ def validate_diffusion_kv_transfer_config(config: KVTransferConfig) -> None:
     if not isinstance(config.engine_id, str) or not config.engine_id.strip():
         raise ValueError("Diffusion stage kv_transfer_config requires a non-empty engine_id")
     if config.kv_role != "kv_consumer":
-        raise ValueError(
-            f"Diffusion stage kv_transfer_config requires kv_role='kv_consumer'; got {config.kv_role!r}"
-        )
+        raise ValueError(f"Diffusion stage kv_transfer_config requires kv_role='kv_consumer'; got {config.kv_role!r}")

@@ -132,16 +132,11 @@ class DiffusionKVCacheManager:
         if not requests:
             raise ValueError("Diffusion KV allocation requires at least one sequence")
         if reservation_inputs is None:
-            native_inputs = tuple(
-                (self.native_manager.empty_kv_cache_blocks, 0, 0)
-                for _ in requests
-            )
+            native_inputs = tuple((self.native_manager.empty_kv_cache_blocks, 0, 0) for _ in requests)
         else:
             native_inputs = tuple(reservation_inputs)
             if len(native_inputs) != len(requests):
-                raise ValueError(
-                    "Diffusion KV reservation input count must match execution sequences"
-                )
+                raise ValueError("Diffusion KV reservation input count must match execution sequences")
 
         sequence_ids = [request.sequence_id for request in requests]
         internal_ids = [request.request_id for request in requests]
@@ -174,9 +169,7 @@ class DiffusionKVCacheManager:
         allocated: list[DiffusionKVRequest] = []
         sequence_metadata: list[DiffusionKVSequenceMetadata] = []
         try:
-            for request, (computed_blocks, local_tokens, external_tokens) in zip(
-                requests, native_inputs, strict=True
-            ):
+            for request, (computed_blocks, local_tokens, external_tokens) in zip(requests, native_inputs, strict=True):
                 if local_tokens < 0 or external_tokens < 0:
                     raise ValueError("Diffusion KV computed token counts must be non-negative")
                 if local_tokens + external_tokens > request.seq_len:
@@ -235,9 +228,7 @@ class DiffusionKVCacheManager:
             raise RuntimeError(f"Diffusion KV request {public_request_id!r} is not reserved")
         expected = frozenset(request.request_id for request in self._requests[public_request_id])
         if not sequence_request_ids or not sequence_request_ids.issubset(expected):
-            raise ValueError(
-                "Loading sequence IDs must be a non-empty subset of the public request sequences"
-            )
+            raise ValueError("Loading sequence IDs must be a non-empty subset of the public request sequences")
         self._loading_sequence_ids[public_request_id] = sequence_request_ids
         self._states[public_request_id] = DiffusionKVReservationState.LOADING
 

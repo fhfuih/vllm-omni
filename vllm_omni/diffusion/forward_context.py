@@ -238,10 +238,7 @@ def get_paged_kv_computed_tokens(request_id: str, sequence_ids: list[int] | tupl
     if _forward_context is None or _forward_context.paged_kv_runtime is None:
         return ()
     runtime = _forward_context.paged_kv_runtime
-    return tuple(
-        runtime.resolve_sequence(request_id, sequence_id).num_computed_tokens
-        for sequence_id in sequence_ids
-    )
+    return tuple(runtime.resolve_sequence(request_id, sequence_id).num_computed_tokens for sequence_id in sequence_ids)
 
 
 @contextmanager

@@ -156,10 +156,7 @@ class KVTransferBackendManager:
         if min(plan.source_stage_id, plan.target_stage_id, plan.attempt) < 0:
             raise ValueError("source_stage_id, target_stage_id, and attempt must be non-negative")
         return {
-            "transfer_id": (
-                f"xfer-{plan.request_id}-s{plan.source_stage_id}-"
-                f"t{plan.target_stage_id}-a{plan.attempt}"
-            ),
+            "transfer_id": (f"xfer-{plan.request_id}-s{plan.source_stage_id}-t{plan.target_stage_id}-a{plan.attempt}"),
             "do_remote_decode": True,
             "do_remote_prefill": False,
         }

@@ -200,6 +200,7 @@ class NewRequestData:
             diffusion_kv_metadata=diffusion_kv_metadata,
         )
 
+
 @dataclass
 class CachedRequestData:
     """Cached diffusion requests that only need their request ids resent."""
