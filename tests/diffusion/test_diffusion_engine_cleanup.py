@@ -33,16 +33,19 @@ def _make_engine() -> DiffusionEngine:
     engine = DiffusionEngine.__new__(DiffusionEngine)
     engine.scheduler = RequestScheduler()
     engine.scheduler.initialize(SimpleNamespace())
-    engine.executor = SimpleNamespace(shutdown=Mock())
+    engine.executor = SimpleNamespace(shutdown=Mock(), drop_output=Mock(), wait_output_ready=Mock())
     engine._rpc_lock = threading.RLock()
     engine._cv = threading.Condition(engine._rpc_lock)
     engine._out_streams = {}
+    engine._pending_async_outputs = {}
+    engine._async_output_owners = {}
     engine._closed = False
     engine._shutdown_complete = False
     engine.abort_queue = queue.Queue()
     engine._loop_started = False
     engine.stop_event = None
     engine.worker_thread = None
+    engine.main_loop = None
     return engine
 
 
@@ -379,3 +382,60 @@ def test_close_defers_resource_shutdown_until_worker_thread_stops() -> None:
     engine.executor.shutdown.assert_called_once()
     assert engine._shutdown_complete is True
     assert engine._loop_started is False
+
+
+def test_put_output_drops_async_id_when_consumer_stream_is_gone() -> None:
+    engine = _make_engine()
+    engine._put_output("missing-req", DiffusionOutput(async_output_id="aid-gone"))
+    engine.executor.drop_output.assert_called_once_with("aid-gone")
+
+
+def test_close_drops_pending_async_outputs() -> None:
+    engine = _make_engine()
+    engine._pending_async_outputs["req-1"] = "aid-1"
+    engine._async_output_owners["aid-1"] = "req-1"
+
+    engine.close()
+
+    engine.executor.drop_output.assert_called_once_with("aid-1")
+    assert engine._pending_async_outputs == {}
+    assert engine._async_output_owners == {}
+
+
+def test_abandoned_output_stream_drops_unwaited_async_output() -> None:
+    engine = _make_engine()
+    request_id = "req-abandon"
+    out_queue: asyncio.Queue[DiffusionOutput] = asyncio.Queue()
+    engine._out_streams[request_id] = out_queue
+    engine._put_output(request_id, DiffusionOutput(async_output_id="aid-abandon"))
+    engine.executor.drop_output.assert_not_called()
+
+    async def _run() -> None:
+        gen = engine.get_output_stream(request_id)
+        yielded = await gen.__anext__()
+        assert yielded.async_output_id == "aid-abandon"
+        await gen.aclose()
+
+    asyncio.run(_run())
+
+    engine.executor.drop_output.assert_called_once_with("aid-abandon")
+    assert engine._pending_async_outputs == {}
+
+
+def test_waited_async_output_is_not_dropped_on_stream_close() -> None:
+    engine = _make_engine()
+    request_id = "req-waited"
+    out_queue: asyncio.Queue[DiffusionOutput] = asyncio.Queue()
+    engine._out_streams[request_id] = out_queue
+    engine._put_output(request_id, DiffusionOutput(async_output_id="aid-waited"))
+    engine._wait_output_ready("aid-waited")
+
+    async def _run() -> None:
+        gen = engine.get_output_stream(request_id)
+        await gen.__anext__()
+        await gen.aclose()
+
+    asyncio.run(_run())
+
+    engine.executor.drop_output.assert_not_called()
+    engine.executor.wait_output_ready.assert_called_once_with("aid-waited")

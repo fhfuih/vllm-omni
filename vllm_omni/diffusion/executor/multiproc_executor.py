@@ -899,18 +899,21 @@ class MultiprocDiffusionExecutor(DiffusionExecutor):
                     if batch_id:
                         with self._futures_lock:
                             pending = self._output_futures.pop(batch_id, None)
-                            if pending is not None and not pending.done():
-                                if exc is not None:
-                                    try_set_exception(pending, exc)
-                                else:
-                                    try_set_result(pending, output_result)
-                            else:
+                            if pending is None:
+                                # No waiter yet: cache for a later wait_output_ready().
                                 fut = concurrent.futures.Future()
                                 if exc is not None:
                                     fut.set_exception(exc)
                                 else:
                                     fut.set_result(output_result)
                                 self._completed_outputs[batch_id] = fut
+                            elif not pending.done():
+                                if exc is not None:
+                                    try_set_exception(pending, exc)
+                                else:
+                                    try_set_result(pending, output_result)
+                            # else: waiter cancelled/done (abandoned stream) ->
+                            # discard, do not re-cache.
 
     def _deliver_batch_split(
         self,
@@ -930,12 +933,13 @@ class MultiprocDiffusionExecutor(DiffusionExecutor):
                 per_req_result = DiffusionOutput(error="No output result for batch request")
             with self._futures_lock:
                 pending = self._output_futures.pop(per_req_id, None)
-                if pending is not None and not pending.done():
-                    try_set_result(pending, per_req_result)
-                else:
+                if pending is None:
                     fut: concurrent.futures.Future = concurrent.futures.Future()
                     fut.set_result(per_req_result)
                     self._completed_outputs[per_req_id] = fut
+                elif not pending.done():
+                    try_set_result(pending, per_req_result)
+                # else: waiter cancelled/done -> discard, do not re-cache.
 
     def describe_pending_state(self, async_output_id: str | None = None) -> str:
         """Summarize async-output bookkeeping for diagnosing stuck waits."""
@@ -966,6 +970,28 @@ class MultiprocDiffusionExecutor(DiffusionExecutor):
             fut: concurrent.futures.Future = concurrent.futures.Future()
             self._output_futures[async_output_id] = fut
         return fut
+
+    def drop_output(self, async_output_id: str) -> None:
+        """Discard an async output that will never be waited on.
+
+        The consumer stream can disappear before :meth:`wait_output_ready`
+        registers a waiter (client disconnect / generator close). A late
+        ``OUTPUT_READY`` would then be unpacked and cached in
+        ``_completed_outputs`` forever. Draining it here keeps engine-process
+        memory bounded. Handles both arrival orderings:
+
+        * result already arrived -> pop and drop the cached future
+        * result not yet arrived -> register a placeholder waiter so the pump
+          resolves into it instead of caching
+
+        A genuine waiter that is already registered is left untouched.
+        """
+        with self._futures_lock:
+            if self._completed_outputs.pop(async_output_id, None) is not None:
+                return
+            if async_output_id in self._output_futures:
+                return
+            self._output_futures[async_output_id] = concurrent.futures.Future()
 
     def check_health(self) -> None:
         if self._is_failed:
@@ -1004,5 +1030,6 @@ class MultiprocDiffusionExecutor(DiffusionExecutor):
                 self._rpc_futures.clear()
                 self._output_futures.clear()
                 self._batch_split_map.clear()
+                self._completed_outputs.clear()
             self._shutdown_cleaner = None
             self._processes = []

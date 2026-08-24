@@ -371,6 +371,9 @@ class DiffusionEngine:
         self._rpc_lock = threading.RLock()
         self._cv = threading.Condition(self._rpc_lock)
         self._out_streams: dict[str, asyncio.Queue[DiffusionOutput]] = {}
+        # request_id -> async_output_id published to a stream but not yet waited on.
+        self._pending_async_outputs: dict[str, str] = {}
+        self._async_output_owners: dict[str, str] = {}
         self._closed = False
         self._shutdown_complete = False
         self.abort_queue: queue.Queue[str] = queue.Queue()
@@ -429,7 +432,7 @@ class DiffusionEngine:
             exec_total_time = time.perf_counter() - exec_start_time
             # Async mode: wait for background D2H/SHM to complete.
             if output.async_output_id:
-                fut = self.executor.wait_output_ready(output.async_output_id)
+                fut = self._wait_output_ready(output.async_output_id)
                 timeout = _async_output_timeout()
                 try:
                     output = await asyncio.wait_for(asyncio.wrap_future(fut), timeout=timeout)
@@ -878,6 +881,7 @@ class DiffusionEngine:
             with self._cv:
                 if self._out_streams.get(request_id) is queue:
                     self._out_streams.pop(request_id, None)
+            self._drop_abandoned_async_output(request_id)
 
     def async_add_req_and_stream_response(self, request: OmniDiffusionRequest) -> AsyncGenerator[DiffusionOutput, None]:
         request_id = self.add_request(request)
@@ -952,7 +956,7 @@ class DiffusionEngine:
                         missing_result_error="Diffusion execution finished without a final output.",
                     )
                     if output.async_output_id:
-                        fut = self.executor.wait_output_ready(output.async_output_id)
+                        fut = self._wait_output_ready(output.async_output_id)
                         output = fut.result(timeout=_async_output_timeout())
                     return output
 
@@ -1227,15 +1231,49 @@ class DiffusionEngine:
         else:
             queue.put_nowait(output)
 
+    def _wait_output_ready(self, async_output_id: str) -> concurrent.futures.Future[DiffusionOutput]:
+        self._claim_pending_async_output(async_output_id)
+        return self.executor.wait_output_ready(async_output_id)
+
+    def _track_pending_async_output(self, request_id: str, async_output_id: str) -> None:
+        old_id = self._pending_async_outputs.get(request_id)
+        if old_id is not None and old_id != async_output_id:
+            self._async_output_owners.pop(old_id, None)
+        self._pending_async_outputs[request_id] = async_output_id
+        self._async_output_owners[async_output_id] = request_id
+
+    def _claim_pending_async_output(self, async_output_id: str) -> None:
+        with self._cv:
+            request_id = self._async_output_owners.pop(async_output_id, None)
+            if request_id is not None:
+                self._pending_async_outputs.pop(request_id, None)
+
+    def _drop_abandoned_async_output(self, request_id: str) -> None:
+        with self._cv:
+            async_output_id = self._pending_async_outputs.pop(request_id, None)
+            if async_output_id is not None:
+                self._async_output_owners.pop(async_output_id, None)
+        if async_output_id is not None:
+            self.executor.drop_output(async_output_id)
+
     def _put_output(self, request_id: str, output: DiffusionOutput) -> None:
         with self._cv:
             queue = self._out_streams.get(request_id)
+            if queue is None:
+                async_output_id = output.async_output_id
+            else:
+                async_output_id = None
+                if output.async_output_id is not None:
+                    self._track_pending_async_output(request_id, output.async_output_id)
         if queue is None:
+            if async_output_id is not None:
+                self.executor.drop_output(async_output_id)
             return
         self._put_queue_output(queue, output)
 
     def close(self) -> None:
         pending_streams: list[asyncio.Queue[DiffusionOutput]] = []
+        abandoned_async_ids: list[str] = []
         with self._cv:
             if self._closed and self._shutdown_complete:
                 return
@@ -1245,7 +1283,12 @@ class DiffusionEngine:
                     self.stop_event.set()
                 pending_streams = list(self._out_streams.values())
                 self._out_streams.clear()
+                abandoned_async_ids = list(self._pending_async_outputs.values())
+                self._pending_async_outputs.clear()
+                self._async_output_owners.clear()
                 self._cv.notify_all()
+        for async_output_id in abandoned_async_ids:
+            self.executor.drop_output(async_output_id)
 
         closed_output = DiffusionOutput(error="DiffusionEngine is closed.")
         for stream in pending_streams:

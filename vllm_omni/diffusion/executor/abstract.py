@@ -170,6 +170,17 @@ class DiffusionExecutor(ABC):
             args=(unique_request_ids,),
         )
 
+    def drop_output(self, async_output_id: str) -> None:
+        """Discard an async output that will never be waited on.
+
+        The multiproc executor caches late ``OUTPUT_READY`` payloads in
+        ``_completed_outputs`` until :meth:`wait_output_ready` pops them.
+        When the consumer stream is gone, that wait never happens and the
+        unpacked tensors would leak for the process lifetime. UniProc has no
+        async cache, so the default is a no-op.
+        """
+        return None
+
     @abstractmethod
     def shutdown(self) -> None:
         """Shutdown the executor and release resources."""
