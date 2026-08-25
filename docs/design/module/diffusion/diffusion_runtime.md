@@ -35,6 +35,7 @@ validation_paths:
   - tests/diffusion/test_diffusion_model_runner.py
   - tests/diffusion/test_diffusion_worker.py
   - tests/diffusion/test_multiproc_engine_concurrency.py
+  - tests/diffusion/test_uniproc_executor.py
   - tests/diffusion/test_result_pump.py
   - tests/diffusion/test_async_output_worker.py
   - tests/diffusion/test_diffusion_ipc.py
@@ -43,8 +44,8 @@ validation_paths:
   - tests/diffusion/test_inline_stage_diffusion_client.py
 upstream_refs:
   - diffusers.DiffusionPipeline
-last_reviewed: 2026-08-20
-last_verified_commit: ce985ac944473bee1ed073dd66fe8926a030977e
+last_reviewed: 2026-08-25
+last_verified_commit: f7e96541dd11c21dce50fdcd9fc5b1269353ee2a
 ---
 
 # Diffusion runtime
@@ -55,7 +56,7 @@ output, cancellation, and cleanup inside a diffusion stage.
 It is easiest to think of the runtime as a small control loop:
 
 1. the **scheduler** chooses ready requests;
-2. the **executor** sends that choice to worker processes;
+2. the **executor** sends that choice to the worker layer;
 3. each **worker** manages its device and delegates model work to a **runner**;
 4. the runner calls the model pipeline and returns per-request results; and
 5. the engine feeds those results back to the scheduler and output streams.
@@ -84,10 +85,19 @@ define a model's denoising algorithm:
 
 ## Runtime at a glance
 
-In a process-backed deployment, the stage process owns `DiffusionEngine` and
-`MultiprocDiffusionExecutor`. The inline stage client keeps the same stack in
-its caller process. In either layout, the executor starts one `WorkerProc` per
-configured device. Each worker process owns its device, distributed state,
+The stage owns `DiffusionEngine` and a `DiffusionExecutor` backend. The inline
+stage client keeps that stack in the caller process; a process-backed stage
+runs it inside `StageDiffusionProc`.
+
+The executor then chooses how the worker runs:
+
+- **`uni`** (default when `num_gpus == 1`): `UniProcDiffusionExecutor` builds
+  one in-process worker. There is no worker subprocess and no shared-memory
+  RPC.
+- **`mp`** (default when `num_gpus > 1`, or when set explicitly):
+  `MultiprocDiffusionExecutor` starts one `WorkerProc` per device.
+
+Either way, each worker owns its device, distributed state,
 `DiffusionWorker`, `DiffusionModelRunner`, and pipeline instance.
 
 ```mermaid
@@ -98,7 +108,7 @@ flowchart TB
         stageProc["StageDiffusionProc<br/>stage transport and lifecycle"]
         engine["DiffusionEngine<br/>admission and control loop"]
         scheduler["RequestScheduler or StepScheduler<br/>request state and policy"]
-        executor["DiffusionExecutor<br/>worker transport and lifecycle"]
+        executor["DiffusionExecutor<br/>uni or mp backend"]
         streams["Per-request output streams"]
 
         stageProc --> engine
@@ -108,28 +118,30 @@ flowchart TB
         engine --> streams
     end
 
-    subgraph workers["Worker processes (one per device)"]
-        workerProc["WorkerProc<br/>IPC loop"]
+    subgraph workers["Worker layer"]
+        workerProc["WorkerProc<br/>mp IPC loop only"]
         worker["DiffusionWorker<br/>device and distributed setup"]
         runner["DiffusionModelRunner<br/>model state and execution"]
         pipeline["Diffusion pipeline<br/>model-specific computation"]
 
-        workerProc --> worker --> runner --> pipeline
+        workerProc --> worker
+        worker --> runner --> pipeline
     end
 
     client -->|"process-backed: ZMQ"| stageProc
     client -.->|"inline: direct call"| engine
-    executor <-->|"broadcast requests / collect results"| workerProc
+    executor -->|"mp: broadcast / result queues"| workerProc
+    executor -.->|"uni: in-process call"| worker
     streams -->|"process-backed"| stageProc
     stageProc -->|"ZMQ results"| client
     streams -.->|"inline"| client
 ```
 
-!!! info "Two separate process layers"
+!!! info "Stage process vs worker process"
 
     A deployed stage may already run in a `StageDiffusionProc` child process.
-    Inside that process, the multiprocess executor starts the device workers
-    shown above. Do not confuse the stage process with a worker process.
+    That is separate from the optional `mp` worker processes. With `uni`, the
+    worker lives in the same process as the engine.
 
 ## Component responsibilities
 
@@ -140,8 +152,9 @@ flowchart TB
 | `RequestScheduler` | Complete-request waves and optional admission delay for request-level batching | Denoising-step progress |
 | `StepScheduler` | Per-request denoising progress and step-wise completion | Pipeline tensors and model state |
 | `DiffusionExecutor` | Execution backend contract, worker RPC, health, shutdown | Admission and request-state transitions |
-| `MultiprocDiffusionExecutor` | Worker processes, shared-memory message queues, result dispatch, worker monitoring | Model/device internals |
-| `WorkerProc` | One worker process's IPC loop and reply rules | Scheduling policy |
+| `UniProcDiffusionExecutor` | Single in-process worker for `num_gpus == 1`; no IPC or async output pump | Multi-GPU execution |
+| `MultiprocDiffusionExecutor` | Worker processes, shared-memory message queues, result dispatch, worker monitoring | In-process single-GPU path |
+| `WorkerProc` | One `mp` worker process's IPC loop and reply rules | Scheduling policy; unused by `uni` |
 | `DiffusionWorker` | Device/distributed setup, LoRA activation, profiling, sleep/wake, runner delegation | Request admission |
 | `DiffusionModelRunner` | Pipeline loading, request-local model state, cache/compile setup, request or step execution | Queueing and cross-stage routing |
 
@@ -170,10 +183,10 @@ sequenceDiagram
     Engine->>Scheduler: schedule()
     Scheduler-->>Engine: DiffusionSchedulerOutput
     Engine->>Executor: execute_batch() or execute_step()
-    Executor->>Worker: RPC over message queue
+    Executor->>Worker: run worker method
     Worker->>Runner: execute model or one step
     Runner-->>Worker: RunnerOutput(s)
-    Worker-->>Executor: result message
+    Worker-->>Executor: result
     Executor-->>Engine: BaseRunnerOutput
     Engine->>Scheduler: update_from_output(...)
     Scheduler-->>Engine: finished request IDs
@@ -206,6 +219,12 @@ Step mode keeps `StepRequestState` in the runner. New requests run
 `prepare_encode()` once; every tick runs `denoise_step()` and
 `step_scheduler()`; completed requests run `post_decode()`. The scheduler keeps
 only lifecycle and progress metadata—it does not hold model tensors.
+
+Step mode is also the path for streaming diffusion output. Enabling
+`streaming_output` turns on step execution if needed. Chunk-capable pipelines
+can emit intermediate outputs through the same request stream; final-only step
+pipelines still emit only the final result. If the pipeline does not implement
+step execution, initialization fails.
 
 !!! tip
 
@@ -245,12 +264,29 @@ head-of-line blocking.
 
 ## Executor and IPC
 
-`DiffusionExecutor` is the backend interface. The current built-in backend is
-`MultiprocDiffusionExecutor`, selected by `distributed_executor_backend="mp"`
-(also the default and only implementation). Ray and external-launcher
-diffusion backends are not implemented in diffusion call path.
+`DiffusionExecutor` is the backend interface. Built-in backends are selected by
+`distributed_executor_backend`:
 
-The multiprocess backend:
+| Backend | When chosen | Worker layout |
+| --- | --- | --- |
+| `uni` | Default for `num_gpus == 1`, or set explicitly | One in-process worker |
+| `mp` | Default for `num_gpus > 1`, or set explicitly | One worker process per device |
+
+Ray and external-launcher diffusion backends are not implemented. A custom
+`DiffusionExecutor` subclass or import path is also accepted.
+
+### Uniproc backend
+
+`UniProcDiffusionExecutor` constructs `WorkerWrapperBase` in the engine process
+and calls worker methods directly. It avoids a second model load, MessageQueue
+rings, ZMQ IPC sockets, and `/dev/shm` tensor packing. RPC timeouts are
+accepted for interface parity but are not enforced: a hung worker blocks the
+calling thread. Sticky accelerator faults mark the executor dead through
+failure callbacks; ordinary request errors stay per-request.
+
+### Multiproc backend
+
+`MultiprocDiffusionExecutor`:
 
 1. creates a broadcast queue shared by all workers;
 2. spawns one worker process per configured device;
@@ -259,21 +295,24 @@ The multiprocess backend:
 5. applies rank-aware reply rules so only expected ranks respond; and
 6. monitors worker process sentinels and fails the executor if a worker dies.
 
-In request mode, workers always return a lightweight `COMPUTE_DONE` message
-first. A worker-side thread then copies output to host/shared memory, and the
-executor's result-pump threads resolve the final output later. This lets the
-device begin more compute without waiting for output packing. Step mode keeps
-the synchronous result path and does not start those pumps.
+In request mode on this backend, workers always return a lightweight
+`COMPUTE_DONE` message first. A worker-side thread then copies output to
+host/shared memory, and the executor's result-pump threads resolve the final
+output later. This lets the device begin more compute without waiting for
+output packing. Step mode keeps the synchronous result path and does not start
+those pumps.
 
-See [Async diffusion output](../../feature/async_diffusion_output.md) for that
-feature's detailed timeline.
+See [Async diffusion output](../../feature/async_diffusion_output.md) for the
+multiproc request-mode timeline.
 
 ## Worker and runner boundary
 
-`WorkerProc` receives messages and calls methods through `WorkerWrapperBase`.
-`DiffusionWorker` handles the parts tied to a device: distributed
-initialization, model-runner construction, LoRA activation, profiling, and
-memory sleep/wake. It delegates actual model work to `DiffusionModelRunner`.
+On the `mp` path, `WorkerProc` receives messages and calls methods through
+`WorkerWrapperBase`. On the `uni` path, the executor owns that wrapper
+directly. In both cases, `DiffusionWorker` handles the parts tied to a device:
+distributed initialization, model-runner construction, LoRA activation,
+profiling, and memory sleep/wake. It delegates actual model work to
+`DiffusionModelRunner`.
 
 The runner owns long-lived model-side state:
 
@@ -305,22 +344,34 @@ aborted output when a consumer still exists. The runner removes cached
 step-mode state when it receives a scheduler output that reports the finished
 request ID.
 
-Dropping an output-stream consumer removes only that consumer's queue. It does
-not silently take ownership of scheduler cleanup.
+On the multiproc request-mode async path, an aborted request may still have a
+pending `async_output_id`. Finalization tells the executor to `drop_output()`
+that id so a late `OUTPUT_READY` is not cached forever.
+
+Dropping an output-stream consumer removes that consumer's queue and also
+releases any still-unclaimed async output ids for the request. It does not
+take ownership of scheduler cleanup.
 
 ### Shutdown and worker failure
 
 `DiffusionEngine.close()` is idempotent. It stops the busy loop, wakes pending
-streams with an error, closes scheduler state, and shuts down the executor.
-The executor asks workers to stop, waits for them, then terminates workers that
-miss the grace period. Worker cleanup tears down the model runner, IPC context,
-and distributed environment.
+streams with an error, releases unclaimed async outputs, closes scheduler
+state, and shuts down the executor.
+
+- **`mp`**: the executor asks workers to stop, waits for them, then terminates
+  workers that miss the grace period. Shutdown also clears cached async-output
+  futures so unpacked tensors do not survive the engine.
+- **`uni`**: the executor shuts down the in-process worker, drops the final
+  model reference, and empties the accelerator cache so a later engine can reuse
+  the device.
 
 !!! warning
 
     Do not continue using a worker group after a fatal collective timeout or
     unexpected worker exit. Distributed state may be incomplete. The
     multiprocess executor deliberately fails closed so the stage can restart.
+    The uniproc executor fails closed when the accelerator context itself is
+    poisoned.
 
 ## Extension boundaries
 
@@ -328,9 +379,10 @@ and distributed environment.
   `diffusion_model_runner_cls` configuration still wins.
 - Tests and custom engine integrations may inject a `BaseScheduler` subclass.
   `SchedulerInterface` remains only as a deprecated compatibility name.
-- `distributed_executor_backend` may be a `DiffusionExecutor` subclass or its
-  import path. A backend must preserve scheduler output, request identity,
-  health, and cleanup contracts.
+- `distributed_executor_backend` may be `"uni"`, `"mp"`, a custom `DiffusionExecutor`
+  subclass, or an import path. A backend must preserve scheduler output,
+  request identity, health, and cleanup contracts. Use `"mp"` when you need
+  process isolation or multi-GPU; `"uni"` is the single-GPU default.
 - Worker extensions go through `WorkerWrapperBase`. They add worker methods;
   they do not become a second scheduler or request lifecycle.
 
@@ -352,7 +404,9 @@ admitting, reordering, or forwarding requests independently.
 ### DIFF-RUNTIME-INV-003: Terminal cleanup is complete
 
 **Rule:** Every terminal path MUST release request state, temporary tensors,
-hooks, and runtime-owned resources.
+hooks, and runtime-owned resources. On the multiproc async-output path that
+includes reclaiming abandoned `async_output_id`s via `drop_output()`, not only
+scheduler and runner state.
 
 ### DIFF-RUNTIME-INV-004: Optional features use runtime hooks
 
@@ -372,7 +426,7 @@ Test the smallest affected slice, then cover its neighboring boundary:
 | --- | --- |
 | Admission or state transitions | `test_diffusion_scheduler.py`, including duplicate IDs, compatibility, abort, and missing output |
 | Engine loop or output delivery | `test_diffusion_engine.py`, `test_diffusion_engine_cleanup.py`, `test_diffusion_engine_rpc_routing.py` |
-| Executor or IPC | `test_multiproc_engine_concurrency.py`, `test_result_pump.py`, `test_diffusion_ipc.py`, `test_async_output_worker.py` |
+| Executor or IPC | `test_multiproc_engine_concurrency.py`, `test_uniproc_executor.py`, `test_result_pump.py`, `test_diffusion_ipc.py`, `test_async_output_worker.py` |
 | Worker or runner | `test_diffusion_worker.py`, `test_diffusion_model_runner.py` |
 | Stage boundary | `test_stage_diffusion_proc.py`, `test_inline_stage_diffusion_client.py` |
 | Warmup or streaming | `test_diffusion_engine_dummy_run.py`, `test_diffusion_streaming_output.py` |
