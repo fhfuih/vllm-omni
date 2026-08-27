@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-# SPDX-FileCopyrightText: Copyright contributors to the vLLM project
+# SPDX-FileCopyrightText: Copyright contributors to the vLLM-Omni project
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -113,17 +113,14 @@ class SupportsInteractionApply(Protocol):
     """Optional protocol for pipelines with unified mid-generation, chunk-boundary hooks."""
 
     def peek_chunk_media(self, state: StepRequestState) -> ChunkMediaSpec:
-        """Return the media timeline represented by the upcoming/current chunk."""
+        """Return the media timeline represented by the upcoming/current chunk.
+
+        Useful when interaction handler needs interpolation/integration on a frame-by-frame basis,
+        or for backpressure/pacing.
+        """
         ...
 
-    def apply_interaction_at_chunk_boundary(
-        self,
-        state: StepRequestState,
-        *,
-        chunk_index: int | None = None,
-        num_frames: int | None = None,
-        fps: float | None = None,
-    ) -> None:
+    def apply_interaction_at_chunk_boundary(self, state: StepRequestState) -> None:
         """Advance queued interactions before the next generation chunk."""
         ...
 

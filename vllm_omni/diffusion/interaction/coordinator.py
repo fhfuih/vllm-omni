@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-# SPDX-FileCopyrightText: Copyright contributors to the vLLM project
+# SPDX-FileCopyrightText: Copyright contributors to the vLLM-Omni project
 """Interaction coordinator to be co-owned by a pipeline and a runner."""
 
 from __future__ import annotations
@@ -50,6 +50,11 @@ class InteractionCoordinator:
     def has_modality(self, modality: str) -> bool:
         return modality in self._handlers
 
+    @property
+    def needs_chunk_media(self) -> bool:
+        """Whether any registered handler needs chunk ``num_frames``/``fps``."""
+        return any(handler.needs_chunk_media for handler in self._handlers.values())
+
     def get_handler(self, modality: str) -> InteractionHandler:
         handler = self._handlers.get(modality)
         if handler is None:
@@ -82,20 +87,22 @@ class InteractionCoordinator:
         self,
         state: StepRequestState,
         *,
-        chunk_index: int,
-        num_frames: int,
-        fps: float,
         boundary_at: float,
+        chunk_index: int | None = None,
+        num_frames: int | None = None,
+        fps: float | None = None,
     ) -> InteractionChunkMetadata:
         """Fan out chunk-boundary apply to handlers in stable order (prompt first)."""
+        if chunk_index is None:
+            chunk_index = state.chunk_index
         metas: list[InteractionChunkMetadata] = []
         for handler in self._handlers_in_apply_order():
             meta = handler.apply_at_chunk_boundary(
                 state,
+                boundary_at=boundary_at,
                 chunk_index=chunk_index,
                 num_frames=num_frames,
                 fps=fps,
-                boundary_at=boundary_at,
             )
             if meta is not None:
                 metas.append(meta)

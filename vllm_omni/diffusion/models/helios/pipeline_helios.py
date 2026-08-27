@@ -541,8 +541,13 @@ class HeliosPipeline(
     def peek_chunk_media(self, state: StepRequestState) -> ChunkMediaSpec:
         """Expose this chunk's decoded media extent for interaction timelines."""
         num_frames = int(state.extra["window_num_frames"])
-        fps = float(state.sampling.fps or 0.0)
-        return ChunkMediaSpec(num_frames=num_frames, fps=fps)
+        fps = state.sampling.fps
+        if fps is None or float(fps) <= 0:
+            raise ValueError(
+                "sampling.fps is required and must be > 0 for interaction modalities that use the "
+                f"chunk media timeline, got {fps!r} (request_id={state.request_id!r})"
+            )
+        return ChunkMediaSpec(num_frames=num_frames, fps=float(fps))
 
     @override
     def prepare_next_chunk(self, state: StepRequestState) -> None:

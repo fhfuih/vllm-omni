@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-# SPDX-FileCopyrightText: Copyright contributors to the vLLM project
+# SPDX-FileCopyrightText: Copyright contributors to the vLLM-Omni project
 """Base interaction handler interface."""
 
 from __future__ import annotations
@@ -23,6 +23,9 @@ class InteractionHandler(ABC):
     """
 
     modality: ClassVar[str]
+    # When True, chunk-boundary apply needs ``ChunkMediaSpec`` (num_frames/fps)
+    # Those information are useful when interaction handler needs interpolation/integration on a frame-by-frame basis
+    needs_chunk_media: ClassVar[bool] = False
 
     @classmethod
     def from_pipeline(cls, pipeline: object) -> Self:
@@ -51,9 +54,9 @@ class InteractionHandler(ABC):
         self,
         state: StepRequestState,
         *,
-        chunk_index: int,
-        num_frames: int,
-        fps: float,
         boundary_at: float,
+        chunk_index: int | None = None,  # defaults to state.chunk_index when omitted
+        num_frames: int | None = None,  # only set when at least one interaction handler needs it
+        fps: float | None = None,  # only set when at least one interaction handler needs it
     ) -> InteractionChunkMetadata | None:
         """Advance request-local state and materialize this chunk's effects."""

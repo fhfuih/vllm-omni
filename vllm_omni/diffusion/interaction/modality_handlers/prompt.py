@@ -170,13 +170,14 @@ class PromptInteractionHandler(InteractionHandler):
         self,
         state: StepRequestState,
         *,
-        chunk_index: int,
-        num_frames: int,
-        fps: float,
         boundary_at: float,
+        chunk_index: int | None = None,
+        num_frames: int | None = None,
+        fps: float | None = None,
     ) -> InteractionChunkMetadata | None:
         """Advance or start prompt interpolation before the next chunk."""
-        del chunk_index, num_frames, fps  # Prompt lerp is chunk-based and last-write-wins
+        # Prompt lerp is chunk-LWW; media timeline and caller chunk_index unused.
+        del chunk_index, num_frames, fps
         session = _get_prompt_session(state)
         # Prompt ignores frame scheduling but still records the boundary clock.
         session.last_boundary_at = boundary_at

@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-# SPDX-FileCopyrightText: Copyright contributors to the vLLM project
+# SPDX-FileCopyrightText: Copyright contributors to the vLLM-Omni project
 """Interaction-handling mixin for diffusion pipelines. Process interactions at chunk boundaries."""
 
 from __future__ import annotations
@@ -17,8 +17,8 @@ if TYPE_CHECKING:
 class InteractionMixin:
     """Unified chunk-boundary interaction hook.
 
-    Pipelines inherit this mixin and implement ``peek_chunk_media`` to support interaction apply.
-    Diffusion runner calls ``apply_interaction_at_chunk_boundary`` without providing the interacting modality.
+    Pipelines inherit this mixin and implement ``peek_chunk_media`` to offer playback information about the next chunk.
+    Diffusion runner calls ``apply_interaction_at_chunk_boundary`` without knowing which modality is being applied.
 
     Per-modality session state lives on ``StepRequestState.interaction_sessions``;
     handler strategy objects live on the pipeline/runner ``InteractionCoordinator``.
@@ -26,24 +26,8 @@ class InteractionMixin:
 
     _interaction_coordinator: InteractionCoordinator | None = None
 
-    def apply_interaction_at_chunk_boundary(
-        self,
-        state: StepRequestState,
-        *,
-        chunk_index: int | None = None,
-        num_frames: int | None = None,
-        fps: float | None = None,
-    ) -> None:
+    def apply_interaction_at_chunk_boundary(self, state: StepRequestState) -> None:
         """Advance all active interaction tracks before the next chunk."""
-        if chunk_index is None or num_frames is None or fps is None:
-            media = cast(SupportsInteractionApply, self).peek_chunk_media(state)
-            if chunk_index is None:
-                chunk_index = state.chunk_index
-            if num_frames is None:
-                num_frames = media.num_frames
-            if fps is None:
-                fps = media.fps
-
         if self._interaction_coordinator is None:
             raise RuntimeError(
                 "interaction coordinator is not initialized; "
@@ -51,12 +35,18 @@ class InteractionMixin:
                 "onto the pipeline before chunked generation"
             )
 
+        num_frames: int | None = None
+        fps: float | None = None
+        if self._interaction_coordinator.needs_chunk_media:
+            media = cast(SupportsInteractionApply, self).peek_chunk_media(state)
+            num_frames = media.num_frames
+            fps = media.fps
+
         merged = self._interaction_coordinator.apply_at_chunk_boundary(
             state,
-            chunk_index=chunk_index,
+            boundary_at=time.monotonic(),
             num_frames=num_frames,
             fps=fps,
-            boundary_at=time.monotonic(),
         )
         state.interaction_chunk_metadata = merged
 
