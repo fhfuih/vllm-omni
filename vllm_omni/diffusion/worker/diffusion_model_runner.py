@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-# SPDX-FileCopyrightText: Copyright contributors to the vLLM project
+# SPDX-FileCopyrightText: Copyright contributors to the vLLM-Omni project
 """
 Diffusion Model Runner for vLLM-Omni.
 
@@ -1211,8 +1211,7 @@ class DiffusionModelRunner(OmniConnectorModelRunnerMixin):
                 self.pipeline._interaction_coordinator = coordinator
 
         event = interaction.get("event")
-        multi_modal_data = event.get("multi_modal_data") if isinstance(event, dict) else None
-        has_mm = isinstance(multi_modal_data, dict) and bool(multi_modal_data)
+        has_mm = isinstance(event, dict) and "multi_modal_data" in event
         has_prompt = isinstance(event, dict) and "prompt" in event and event.get("prompt") is not None
 
         # Prompt-only interactions in this release; multi_modal_data lands with camera support.
