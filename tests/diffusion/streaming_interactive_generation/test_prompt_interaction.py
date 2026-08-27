@@ -7,6 +7,7 @@ from __future__ import annotations
 import asyncio
 import queue
 import time
+from contextlib import contextmanager
 from types import SimpleNamespace
 from typing import Any, cast
 from unittest.mock import MagicMock, patch
@@ -323,6 +324,148 @@ class TestPromptUpdateExecution:
         # Further chunk boundaries after completion must not bump the version.
         pipeline.apply_interaction_at_chunk_boundary(state)
         assert session.version == 3
+
+    def test_stepwise_runner_applies_prompt_update_and_acks(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Drive the production runner loop: submit → apply(no media args) → ACK on next chunk.
+
+        Also regresses ``sampling.fps is None`` on the prompt-only path (no peek).
+        ACK ids land on the *next* chunk's ``DiffusionOutput`` via
+        ``_attach_stepwise_metadata`` consuming the prior boundary metadata.
+        """
+        import vllm_omni.diffusion.worker.diffusion_model_runner as model_runner_module
+        from vllm_omni.diffusion.interaction.mixin import InteractionMixin
+        from vllm_omni.diffusion.interaction.types import ChunkMediaSpec
+
+        chunks = [
+            DiffusionOutput(output="chunk-0", finished=False, chunk_index=0, total_chunks=2),  # pyright: ignore[reportArgumentType]
+            DiffusionOutput(output="chunk-1", finished=True, chunk_index=1, total_chunks=2),  # pyright: ignore[reportArgumentType]
+        ]
+
+        class _InteractiveChunkPipeline(InteractionMixin):
+            device = torch.device("cpu")
+            supports_step_execution = True
+
+            def __init__(self) -> None:
+                self._outputs = chunks
+                self.decode_calls = 0
+                self.transformer = SimpleNamespace(dtype=torch.float32)
+                self.encode_prompt = MagicMock(return_value=(torch.full((1, 4, 2), 2.0), None))
+                self.prepare_next_chunk = MagicMock()
+                od_config = SimpleNamespace(model_class_name="HeliosPipeline")
+                self._interaction_coordinator = InteractionCoordinator.build(self, od_config)  # pyright: ignore[reportArgumentType]
+
+            def peek_chunk_media(self, state: StepRequestState) -> ChunkMediaSpec:
+                # Same contract as Helios: never coerce missing fps to 0.0.
+                fps = state.sampling.fps
+                if fps is None or float(fps) <= 0:
+                    raise ValueError(
+                        "sampling.fps is required and must be > 0 for interaction modalities "
+                        f"that use the chunk media timeline, got {fps!r} "
+                        f"(request_id={state.request_id!r})"
+                    )
+                return ChunkMediaSpec(num_frames=int(state.extra["window_num_frames"]), fps=float(fps))
+
+            def prepare_encode(self, state: StepRequestState) -> StepRequestState:
+                state.prompt_embeds = torch.zeros(1, 4, 2)
+                state.latents = torch.zeros(1, 1)
+                state.timesteps = torch.tensor([1.0, 0.0, 1.0, 0.0])
+                state.step_index = 0
+                state.step_in_chunk = 0
+                state.chunk_num_steps = 2
+                state.total_chunks = 2
+                state.extra = {"window_num_frames": 8}
+                return state
+
+            def denoise_step(self, input_batch: Any, states: Any) -> torch.Tensor:
+                del states
+                return torch.ones_like(input_batch.latents)
+
+            def step_scheduler(self, state: StepRequestState, noise_pred: torch.Tensor | None) -> None:
+                state.latents = noise_pred
+                state.step_index += 1
+                state.step_in_chunk += 1
+
+            def post_decode(self, state: StepRequestState) -> DiffusionOutput:
+                output = self._outputs[self.decode_calls]
+                self.decode_calls += 1
+                state.chunk_index += 1
+                state.step_index = 0
+                state.step_in_chunk = 0
+                if not state.request_denoise_completed:
+                    state.latents = torch.zeros(1, 1)
+                return output
+
+        pipeline = _InteractiveChunkPipeline()
+        runner = _make_diffusion_model_runner(pipeline=pipeline)
+        runner._supports_step_mode = lambda: DiffusionModelRunner._supports_step_mode(runner)
+        runner.od_config.streaming_output = True
+        runner.od_config.step_execution = True
+        runner.diffusion_kv_backend = SimpleNamespace(remove_diffusion_kv_requests=lambda *_: 0)  # pyright: ignore[reportAttributeAccessIssue]
+
+        sampling = SimpleNamespace(
+            generator=None,
+            seed=None,
+            generator_device=None,
+            num_inference_steps=4,
+            num_outputs_per_prompt=1,
+            max_sequence_length=226,
+            fps=None,
+        )
+        req = SimpleNamespace(
+            request_id="req",
+            prompt="a prompt",
+            sampling_params=sampling,
+            kv_sender_info=None,
+        )
+
+        @contextmanager
+        def _noop_forward_context(*args: Any, **kwargs: Any):
+            del args, kwargs
+            yield
+
+        monkeypatch.setattr(model_runner_module, "set_forward_context", _noop_forward_context)
+        monkeypatch.setattr(model_runner_module.current_omni_platform, "reset_peak_memory_stats", lambda: None)
+        monkeypatch.setattr(model_runner_module.current_omni_platform, "max_memory_reserved", lambda: 0)
+        monkeypatch.setattr(model_runner_module.current_omni_platform, "max_memory_allocated", lambda: 0)
+        monkeypatch.setattr(model_runner_module.current_omni_platform, "is_available", lambda: False)
+
+        scheduler_output = SimpleNamespace(
+            finished_req_ids=set(),
+            scheduled_new_reqs=[SimpleNamespace(request_id="req", req=req, diffusion_kv_metadata=None)],
+            scheduled_cached_reqs=SimpleNamespace(request_ids=[]),
+        )
+        # Admit request and run first denoise step (no chunk boundary yet).
+        DiffusionModelRunner.execute_stepwise(runner, scheduler_output)  # pyright: ignore[reportArgumentType]
+        assert "req" in runner.state_cache
+        assert runner.state_cache["req"].sampling.fps is None
+
+        runner.submit_interaction("req", _prompt_interaction("new scene", transition_chunks=2))
+
+        cached = SimpleNamespace(
+            finished_req_ids=set(),
+            scheduled_new_reqs=[],
+            scheduled_cached_reqs=SimpleNamespace(request_ids=["req"]),
+        )
+        # Second step completes chunk 0: apply runs (no peek), metadata staged.
+        chunk0 = DiffusionModelRunner.execute_stepwise(runner, cached).get_request_output("req")  # pyright: ignore[reportArgumentType]
+        assert chunk0 is not None and chunk0.result is not None
+        assert chunk0.result.started_event_ids == []
+        state = runner.state_cache["req"]
+        assert torch.equal(state.prompt_embeds, torch.ones(1, 4, 2))  # pyright: ignore[reportArgumentType]
+        assert state.interaction_chunk_metadata is not None
+        assert state.interaction_chunk_metadata.started_event_ids == ["ui-update-1"]
+        pipeline.prepare_next_chunk.assert_called()  # pyright: ignore[reportAttributeAccessIssue]
+
+        # Next chunk decode attaches prior-boundary ACK ids onto DiffusionOutput.
+        DiffusionModelRunner.execute_stepwise(runner, cached)  # pyright: ignore[reportArgumentType]
+        chunk1 = DiffusionModelRunner.execute_stepwise(runner, cached).get_request_output("req")  # pyright: ignore[reportArgumentType]
+        assert chunk1 is not None and chunk1.result is not None
+        assert chunk1.result.started_event_ids == ["ui-update-1"]
+        assert chunk1.result.active_event_ids == ["ui-update-1"]
+        assert chunk1.finished is True
 
 
 class TestPromptUpdateIntegration:
