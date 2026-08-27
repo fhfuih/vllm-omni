@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-# SPDX-FileCopyrightText: Copyright contributors to the vLLM project
+# SPDX-FileCopyrightText: Copyright contributors to the vLLM-Omni project
 """Tests for midway prompt update across runner, batch, pipeline, and entrypoint layers."""
 
 from __future__ import annotations
@@ -65,25 +65,47 @@ def pipeline() -> HeliosPipeline:
     return pipeline
 
 
-def _make_diffusion_request_state(*, request_id: str = "req-1") -> StepRequestState:
+def _make_diffusion_request_state(*, request_id: str = "req-1", fps: int | None = None) -> StepRequestState:
     state = StepRequestState(
         request_id=request_id,
-        sampling=SimpleNamespace(num_outputs_per_prompt=1, max_sequence_length=226),  # pyright: ignore[reportArgumentType]
+        sampling=SimpleNamespace(  # pyright: ignore[reportArgumentType]
+            num_outputs_per_prompt=1,
+            max_sequence_length=226,
+            fps=fps,
+        ),
         prompt="hello",
     )
     state.prompt_embeds = torch.zeros(1, 4, 2)
-    state.extra = {}
+    state.extra = {"window_num_frames": 8}
     return state
 
 
-def _make_diffusion_model_runner(*, pipeline, streaming_output: bool = True) -> DiffusionModelRunner:
+def _make_diffusion_model_runner(
+    *,
+    pipeline,
+    streaming_output: bool = True,
+    model_class_name: str = "HeliosPipeline",
+) -> DiffusionModelRunner:
     runner = object.__new__(DiffusionModelRunner)
     runner.pipeline = pipeline
     runner.state_cache = {}
     runner.od_config = SimpleNamespace(  # pyright: ignore[reportAttributeAccessIssue]
-        model_class_name="HeliosPipeline",
+        model_class_name=model_class_name,
         streaming_output=streaming_output,
+        cache_backend=None,
+        parallel_config=SimpleNamespace(use_hsdp=False),
     )
+    runner.vllm_config = object()
+    runner.device = torch.device("cpu")
+    runner.cache_backend = None
+    runner.offload_backend = None
+    runner.prompt_embed_cache = None
+    runner.kv_transfer_manager = SimpleNamespace(
+        receive_multi_kv_cache_distributed=lambda *a, **k: None,
+    )
+    # HeliosPipeline skeletons from object.__new__ are not full SupportsStepExecution
+    # instances; unit tests of submit_interaction stub this. Stepwise path tests
+    # rebind to the real method.
     runner._supports_step_mode = lambda: True
     runner._interaction_coordinator = None
     return runner
@@ -146,6 +168,9 @@ class TestPromptUpdateExecution:
             {},
             {"multi_modal_data": {"camera": {"type": "pose"}}},
             {"event": {"prompt": "updated", "multi_modal_data": {"camera": {"type": "pose"}}}},
+            {"event": {"prompt": "updated", "multi_modal_data": {}}},
+            {"event": {"prompt": "updated", "multi_modal_data": None}},
+            {"event": {"prompt": "updated", "multi_modal_data": "bad"}},
         ],
     )
     def test_runner_interaction_rejects_structural_payloads_until_implemented(
@@ -159,6 +184,34 @@ class TestPromptUpdateExecution:
 
         with pytest.raises(NotImplementedError, match="Only text-only prompt update interactions"):
             runner.submit_interaction("req-1", cast(Any, interaction))
+
+    @pytest.mark.parametrize("model_class_name", ["HeliosPipeline", "HeliosPyramidPipeline"])
+    def test_coordinator_registers_prompt_for_helios_aliases(
+        self,
+        pipeline: HeliosPipeline,
+        model_class_name: str,
+    ) -> None:
+        """Both Helios architecture names resolve the prompt handler registry."""
+        od_config = SimpleNamespace(model_class_name=model_class_name)
+        coordinator = InteractionCoordinator.build(pipeline, od_config)
+        assert coordinator.has_modality("prompt")
+
+        runner = _make_diffusion_model_runner(pipeline=pipeline, model_class_name=model_class_name)
+        runner.state_cache["req-1"] = _make_diffusion_request_state()
+        runner.submit_interaction("req-1", _prompt_interaction())
+        session = runner.state_cache["req-1"].interaction_sessions["prompt"]
+        assert isinstance(session, PromptSession)
+        assert session.pending_event is not None
+
+    def test_helios_peek_chunk_media_requires_positive_fps(self, pipeline: HeliosPipeline) -> None:
+        """Media-timeline peek must raise on missing/invalid fps instead of coercing to 0.0."""
+        state = _make_diffusion_request_state(fps=None)
+        with pytest.raises(ValueError, match="sampling.fps is required and must be > 0"):
+            pipeline.peek_chunk_media(state)
+
+        state.sampling.fps = 0  # pyright: ignore[reportAttributeAccessIssue]
+        with pytest.raises(ValueError, match="sampling.fps is required and must be > 0"):
+            pipeline.peek_chunk_media(state)
 
     def test_input_batch_refreshes_prompt_embeds_on_version_change(self) -> None:
         """InputBatch rebuilds prompt_embeds when prompt_update_version changes."""
@@ -222,7 +275,7 @@ class TestPromptUpdateExecution:
 
     def test_helios_apply_interaction_at_chunk_boundary_starts_transition(self, pipeline: HeliosPipeline) -> None:
         """At chunk boundary, starts transition state and bumps prompt_update_version."""
-        state = _make_diffusion_request_state()
+        state = _make_diffusion_request_state(fps=None)
         PromptInteractionHandler.from_pipeline(pipeline).enqueue(
             state,
             event_id="ui-update-1",
@@ -231,7 +284,7 @@ class TestPromptUpdateExecution:
             transition_chunks=2,
         )
 
-        pipeline.apply_interaction_at_chunk_boundary(state, chunk_index=state.chunk_index, num_frames=1, fps=0)
+        pipeline.apply_interaction_at_chunk_boundary(state)
 
         session = state.interaction_sessions["prompt"]
         assert isinstance(session, PromptSession)
@@ -247,7 +300,7 @@ class TestPromptUpdateExecution:
 
     def test_helios_apply_interaction_advances_transition_over_chunks(self, pipeline: HeliosPipeline) -> None:
         """At chunk boundary, interpolates embeds until the target prompt is reached."""
-        state = _make_diffusion_request_state()
+        state = _make_diffusion_request_state(fps=None)
         PromptInteractionHandler.from_pipeline(pipeline).enqueue(
             state,
             event_id="ui-update-1",
@@ -255,12 +308,12 @@ class TestPromptUpdateExecution:
             payload={"prompt": "new scene"},
             transition_chunks=3,
         )
-        pipeline.apply_interaction_at_chunk_boundary(state, chunk_index=state.chunk_index, num_frames=1, fps=0)
+        pipeline.apply_interaction_at_chunk_boundary(state)
 
         assert torch.allclose(state.prompt_embeds, torch.full((1, 4, 2), 2.0 / 3.0))  # pyright: ignore[reportArgumentType]
 
         for _ in range(2):
-            pipeline.apply_interaction_at_chunk_boundary(state, chunk_index=state.chunk_index, num_frames=1, fps=0)
+            pipeline.apply_interaction_at_chunk_boundary(state)
 
         assert torch.allclose(state.prompt_embeds, torch.full((1, 4, 2), 2.0))  # pyright: ignore[reportArgumentType]
         session = state.interaction_sessions["prompt"]
@@ -268,7 +321,7 @@ class TestPromptUpdateExecution:
         assert session.version == 3
 
         # Further chunk boundaries after completion must not bump the version.
-        pipeline.apply_interaction_at_chunk_boundary(state, chunk_index=state.chunk_index, num_frames=1, fps=0)
+        pipeline.apply_interaction_at_chunk_boundary(state)
         assert session.version == 3
 
 
