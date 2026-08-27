@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-# SPDX-FileCopyrightText: Copyright contributors to the vLLM project
+# SPDX-FileCopyrightText: Copyright contributors to the vLLM-Omni project
 """Prompt-track interaction handler (midway prompt updates)."""
 
 from __future__ import annotations
@@ -7,9 +7,10 @@ from __future__ import annotations
 import logging
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
-from typing import Any, ClassVar, override
+from typing import Any, ClassVar
 
 import torch
+from typing_extensions import override
 
 from vllm_omni.diffusion.interaction.modality_handlers.base import InteractionHandler
 from vllm_omni.diffusion.interaction.types import (
