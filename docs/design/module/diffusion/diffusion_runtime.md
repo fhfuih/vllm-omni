@@ -44,8 +44,8 @@ validation_paths:
   - tests/diffusion/test_inline_stage_diffusion_client.py
 upstream_refs:
   - diffusers.DiffusionPipeline
-last_reviewed: 2026-08-25
-last_verified_commit: f7e96541dd11c21dce50fdcd9fc5b1269353ee2a
+last_reviewed: 2026-08-27
+last_verified_commit: 19da23824637e76bdbb2e8131ec50eaf68903097
 ---
 
 # Diffusion runtime
@@ -211,9 +211,12 @@ executor call.
 Request mode runs a complete pipeline forward for each scheduled wave. A
 single-request wave is the conservative path. A multi-request wave usually
 uses fused `execute_model_batch()` and requires the pipeline to declare
-request-batch support. One exception is distributed layerwise offload with
-AllGather: the engine may schedule one request per DP replica and keep the
-per-request `execute_model()` path instead of a fused batch.
+request-batch support. Under distributed layerwise offload with AllGather,
+the engine raises running capacity to `dp_size` so the scheduler can admit one
+request per DP replica in a wave. The multiproc executor still receives that
+multi-request `DiffusionSchedulerOutput`, but routes it through
+`execute_request()` / per-rank `execute_model` envelopes instead of fused
+`execute_model_batch()`.
 
 Step mode keeps `StepRequestState` in the runner. New requests run
 `prepare_encode()` once; every tick runs `denoise_step()` and
@@ -242,8 +245,6 @@ flow is:
 stateDiagram-v2
     [*] --> WAITING: add_request
     WAITING --> RUNNING: schedule
-    RUNNING --> PREEMPTED: preempt
-    PREEMPTED --> RUNNING: schedule again
     WAITING --> FINISHED_ABORTED: abort
     RUNNING --> FINISHED_ABORTED: abort
     RUNNING --> FINISHED_COMPLETED: successful output
@@ -252,6 +253,9 @@ stateDiagram-v2
     FINISHED_ABORTED --> [*]: deliver and remove state
     FINISHED_ERROR --> [*]: deliver and remove state
 ```
+
+`PREEMPTED` and `BaseScheduler.preempt_request()` exist on the scheduler API,
+but the engine loop does not call them today—only scheduler unit tests do.
 
 `request_id` ties together scheduler state, runner state, executor results, and
 the output queue. Batch positions are temporary and must never replace request
