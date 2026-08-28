@@ -82,15 +82,6 @@ def prompt_update_versions(states: Sequence[StepRequestState]) -> tuple[int, ...
     return tuple(versions)
 
 
-def _get_prompt_session(state: StepRequestState) -> PromptSession:
-    session = state.interaction_sessions.get("prompt")
-    if isinstance(session, PromptSession):
-        return session
-    session = PromptSession()
-    state.interaction_sessions["prompt"] = session
-    return session
-
-
 class PromptInteractionHandler(InteractionHandler):
     """Encode-and-queue prompt updates; lerp embeds at chunk boundaries.
 
@@ -154,7 +145,8 @@ class PromptInteractionHandler(InteractionHandler):
             device=self._device,
             dtype=self._dtype,
         )
-        session = _get_prompt_session(state)
+        session = state.interaction_sessions.setdefault("prompt", PromptSession())
+        assert isinstance(session, PromptSession)
         with session.lock:
             # Chunk-level LWW: replace any prior pending event.
             session.pending_event = QueuedPromptEvent(
@@ -178,7 +170,8 @@ class PromptInteractionHandler(InteractionHandler):
         """Advance or start prompt interpolation before the next chunk."""
         # Prompt lerp is chunk-LWW; media timeline and caller chunk_index unused.
         del chunk_index, num_frames, fps
-        session = _get_prompt_session(state)
+        session = state.interaction_sessions.get("prompt")
+        assert isinstance(session, PromptSession)
 
         embeds_changed = False
         next_chunk_index = state.chunk_index

@@ -97,6 +97,11 @@ class InteractionCoordinator:
             chunk_index = state.chunk_index
         metas: list[InteractionChunkMetadata] = []
         for handler in self._handlers_in_apply_order():
+            if handler.modality not in state.interaction_sessions:
+                # This function is always called at chunk boundary without knowing if an interaction is really enqueued.
+                # `state.interaction_sessions[this modality]` is lazy-populated after the first interaction is enqueued.
+                # So, check here and skip a modality handler if this modality's session is not yet created.
+                continue
             meta = handler.apply_at_chunk_boundary(
                 state,
                 boundary_at=boundary_at,

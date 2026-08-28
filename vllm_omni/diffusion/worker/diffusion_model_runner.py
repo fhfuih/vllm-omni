@@ -15,7 +15,7 @@ import gc
 import time
 from collections.abc import Callable
 from contextlib import AbstractContextManager, nullcontext
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 import torch
 from torch.profiler import record_function
@@ -44,6 +44,7 @@ from vllm_omni.diffusion.forward_context import set_forward_context
 from vllm_omni.diffusion.interaction.coordinator import InteractionCoordinator
 from vllm_omni.diffusion.model_loader.diffusers_loader import DiffusersPipelineLoader
 from vllm_omni.diffusion.models.interface import (
+    SupportsInteractionApply,
     adopt_request_scoped_cache_dit,
     is_request_scoped_cache_dit_enabled,
     supports_interaction_apply,
@@ -1119,8 +1120,9 @@ class DiffusionModelRunner(OmniConnectorModelRunnerMixin):
                                     # After consuming this chunk's interaction metadata, apply pending interactions and
                                     # prepare the next chunk (prepare_next_chunk may be a no-op---depending on pipeline)
                                     if supports_interaction_apply(self.pipeline) and not req.request_denoise_completed:
-                                        self.pipeline.apply_interaction_at_chunk_boundary(req)
-                                        self.pipeline.prepare_next_chunk(req)
+                                        pipe = cast(SupportsInteractionApply, self.pipeline)
+                                        pipe.apply_interaction_at_chunk_boundary(req)
+                                        pipe.prepare_next_chunk(req)
                             else:
                                 result = None
                             # finished should be computed after post_decode() advanced chunk_index
