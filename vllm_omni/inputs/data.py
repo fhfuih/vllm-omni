@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: Copyright contributors to the vLLM-Omni project
+
 import copy
 import pprint
 from dataclasses import asdict, dataclass, field
@@ -44,10 +47,11 @@ class OmniInteractionEvent(OmniTextPrompt, total=False):
 
 
 class OmniInteractionPrompt(TypedDict):
-    """Mid-stream interaction payload"""
+    """Normalized mid-stream interaction payload passed to ``submit_interaction``.
 
-    # `event_id` is optional in the user payload, but since interaction is only possible in online mode,
-    # and API layer always guarantees its presence from raw payload, it is not marked `NotRequired` here.
+    WebSocket clients payload may omit ``event_id``; the API layer assigns a fallback ID in this case.
+    """
+
     event_id: str
     event: OmniInteractionEvent
     transition_chunks: NotRequired[int]

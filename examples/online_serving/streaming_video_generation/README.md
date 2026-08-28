@@ -21,7 +21,7 @@ The `--diffusion-streaming-output` CLI flag is forwarded as `streaming_output=Tr
 | Direction | Message | Format | Description |
 | --- | --- | --- | --- |
 | Client to server | `session.start` | JSON text: `{"type":"session.start","model":"...","prompt":"...","format":"m4s"}` | Starts generation. `format` is optional and accepts `m4s` (default). Sampling fields such as `width`, `height`, `fps`, `num_frames`, and `extra_params` may be included. |
-| Client to server | `session.interaction` | JSON text: `{"type":"session.interaction","interaction":{"event_id":"xxx","event":{"prompt":"..."},"transition_chunks":3}}` | Updates the active prompt midway through generation. `event_id` is optional and `transition_chunks` defaults to the model setting. |
+| Client to server | `session.interaction` | JSON text: `{"type":"session.interaction","interaction":{"event_id":"xxx","event":{"prompt":"..."},"transition_chunks":3}}` | Updates the active prompt midway through generation. `event_id` is optional (the server assigns a fallback ID); `transition_chunks` defaults to the model setting. |
 | Server to client | `video.start` | JSON text: `{"type":"video.start","request_id":"...","format":"m4s","config":{...}}` | Confirms the session and mirrors the accepted `format`. |
 | Server to client | `video.chunk_metadata` | JSON text: `{"type":"video.chunk_metadata","request_id":"...","kind":"media","transport_chunk_index":0,"generation_chunk_index":0,"num_frames":9,"byte_length":1234,"started_event_ids":[],"active_event_ids":[],"completed_event_ids":[]}` | Precedes each binary frame and describes the immediately following payload. |
 | Server to client | Video chunk | Binary WebSocket frame | Fragmented MP4 (`m4s`) video bytes. |
