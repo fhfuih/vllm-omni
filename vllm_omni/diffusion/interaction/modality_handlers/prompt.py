@@ -179,13 +179,6 @@ class PromptInteractionHandler(InteractionHandler):
         # Prompt lerp is chunk-LWW; media timeline and caller chunk_index unused.
         del chunk_index, num_frames, fps
         session = _get_prompt_session(state)
-        # Prompt ignores frame scheduling but still records the boundary clock.
-        session.last_boundary_at = boundary_at
-
-        with session.lock:
-            pending_event = session.pending_event
-            session.pending_event = None
-        active_event = session.active_event
 
         embeds_changed = False
         next_chunk_index = state.chunk_index
@@ -193,78 +186,85 @@ class PromptInteractionHandler(InteractionHandler):
         active_event_ids: list[str] = []
         completed_event_ids: list[str] = []
 
-        # If current transition is not complete, advance it.
-        # After completion, leave active_event in place (so a later pending
-        # update can abort/overwrite), but do not keep bumping the version.
-        if active_event is not None:
-            in_transition = (
-                active_event.transition_chunks > 0
-                and active_event.elapsed_transition_chunks < active_event.transition_chunks
-            )
-            if in_transition:
-                active_event.advance_transition()
-                state.prompt_embeds = active_event.blended_prompt_embeds()
-                embeds_changed = True
-                active_event_ids.append(active_event.event_id)
-                if active_event.elapsed_transition_chunks >= active_event.transition_chunks:
-                    state.prompt_embeds = active_event.target_prompt_embeds
-                    active_event.source_prompt_embeds = active_event.target_prompt_embeds
-                    completed_event_ids.append(active_event.event_id)
+        with session.lock:
+            # Prompt ignores frame scheduling but still records the boundary clock.
+            session.last_boundary_at = boundary_at
+            pending_event = session.pending_event
+            session.pending_event = None
+            active_event = session.active_event
+
+            # If current transition is not complete, advance it.
+            # After completion, leave active_event in place (so a later pending
+            # update can abort/overwrite), but do not keep bumping the version.
+            if active_event is not None:
+                in_transition = (
+                    active_event.transition_chunks > 0
+                    and active_event.elapsed_transition_chunks < active_event.transition_chunks
+                )
+                if in_transition:
+                    active_event.advance_transition()
+                    state.prompt_embeds = active_event.blended_prompt_embeds()
+                    embeds_changed = True
+                    active_event_ids.append(active_event.event_id)
+                    if active_event.elapsed_transition_chunks >= active_event.transition_chunks:
+                        state.prompt_embeds = active_event.target_prompt_embeds
+                        active_event.source_prompt_embeds = active_event.target_prompt_embeds
+                        completed_event_ids.append(active_event.event_id)
+                        logger.debug(
+                            "prompt_update transition complete request_id=%s next_chunk_index=%d prompt=%.20s...",
+                            state.request_id,
+                            next_chunk_index,
+                            active_event.prompt,
+                        )
+
+            # If a new prompt update is pending, start a new transition.
+            if pending_event is not None:
+                if state.prompt_embeds is None:
+                    raise RuntimeError(
+                        "internal error: trying to apply a pending prompt update but "
+                        f"current prompt_embeds is None (request_id={state.request_id!r})"
+                    )
+                # Stage lerp-start embeds at activation (after any same-boundary advance).
+                pending_event.source_prompt_embeds = state.prompt_embeds.detach().clone()
+                pending_event.elapsed_transition_chunks = 0.0
+                session.active_event = pending_event
+                active_event = pending_event
+                event_id = pending_event.event_id
+                duration = pending_event.transition_chunks
+                prompt = pending_event.prompt
+                target = pending_event.target_prompt_embeds
+                started_event_ids.append(event_id)
+                active_event_ids.append(event_id)
+                if duration <= 0:
+                    # A hard/immediate transition
+                    state.prompt_embeds = target
+                    pending_event.source_prompt_embeds = target
+                    completed_event_ids.append(event_id)
                     logger.debug(
-                        "prompt_update transition complete request_id=%s next_chunk_index=%d prompt=%.20s...",
+                        "prompt_update sharp transition request_id=%s next_chunk_index=%d prompt=%.20s...",
                         state.request_id,
                         next_chunk_index,
-                        active_event.prompt,
+                        prompt,
                     )
+                else:
+                    # A transition that really takes some time
+                    active_event.advance_transition()
+                    state.prompt_embeds = active_event.blended_prompt_embeds()
+                    if active_event.elapsed_transition_chunks >= active_event.transition_chunks:
+                        state.prompt_embeds = active_event.target_prompt_embeds
+                        active_event.source_prompt_embeds = active_event.target_prompt_embeds
+                        completed_event_ids.append(event_id)
+                    logger.debug(
+                        "prompt_update transition start request_id=%s next_chunk_index=%d prompt=%.20s...",
+                        state.request_id,
+                        next_chunk_index,
+                        prompt,
+                    )
+                embeds_changed = True
 
-        # If a new prompt update is pending, start a new transition.
-        if pending_event is not None:
-            if state.prompt_embeds is None:
-                raise RuntimeError(
-                    "internal error: trying to apply a pending prompt update but "
-                    f"current prompt_embeds is None (request_id={state.request_id!r})"
-                )
-            # Stage lerp-start embeds at activation (after any same-boundary advance).
-            pending_event.source_prompt_embeds = state.prompt_embeds.detach().clone()
-            pending_event.elapsed_transition_chunks = 0.0
-            session.active_event = pending_event
-            active_event = pending_event
-            event_id = pending_event.event_id
-            duration = pending_event.transition_chunks
-            prompt = pending_event.prompt
-            target = pending_event.target_prompt_embeds
-            started_event_ids.append(event_id)
-            active_event_ids.append(event_id)
-            if duration <= 0:
-                # A hard/immediate transition
-                state.prompt_embeds = target
-                pending_event.source_prompt_embeds = target
-                completed_event_ids.append(event_id)
-                logger.debug(
-                    "prompt_update sharp transition request_id=%s next_chunk_index=%d prompt=%.20s...",
-                    state.request_id,
-                    next_chunk_index,
-                    prompt,
-                )
-            else:
-                # A transition that really takes some time
-                active_event.advance_transition()
-                state.prompt_embeds = active_event.blended_prompt_embeds()
-                if active_event.elapsed_transition_chunks >= active_event.transition_chunks:
-                    state.prompt_embeds = active_event.target_prompt_embeds
-                    active_event.source_prompt_embeds = active_event.target_prompt_embeds
-                    completed_event_ids.append(event_id)
-                logger.debug(
-                    "prompt_update transition start request_id=%s next_chunk_index=%d prompt=%.20s...",
-                    state.request_id,
-                    next_chunk_index,
-                    prompt,
-                )
-            embeds_changed = True
-
-        # Indicate that prompt embeddings have changed---clear input batch cache.
-        if embeds_changed:
-            session.version += 1
+            # Indicate that prompt embeddings have changed---clear input batch cache.
+            if embeds_changed:
+                session.version += 1
 
         return InteractionChunkMetadata(
             started_event_ids=started_event_ids,
