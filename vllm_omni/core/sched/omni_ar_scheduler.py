@@ -826,13 +826,8 @@ class OmniARScheduler(OmniSchedulerMixin, VLLMScheduler):
         # Use getattr for safety with test __new__ code paths.
         getattr(self, "_inflight_prefills", set()).discard(request)
 
-        if self._uses_native_kv_source(request) and request.status == RequestStatus.FINISHED_STOPPED:
-            request.status = RequestStatus.FINISHED_LENGTH_CAPPED
-
         # 1. Standard cleanup parts from base _free_request
         connector_delay_free_blocks, kv_xfer_params = self._connector_finished(request)
-        if self._uses_native_kv_source(request):
-            kv_xfer_params = None
 
         # EC Connector: mirror the KV hook (upstream v0.28 _free_request).
         # The contract requires firing before the encoder cache is freed so
@@ -859,11 +854,6 @@ class OmniARScheduler(OmniSchedulerMixin, VLLMScheduler):
         # coordinator is None, so the unconditional finally is safe.
         try:
             # 2. Omni Specific: Check if we need to transfer KV
-            if self._uses_native_kv_source(request):
-                delay_free_blocks |= connector_delay_free_blocks
-                if not delay_free_blocks:
-                    self._free_blocks(request)
-                return None, None
             if self._should_transfer_kv_for_request(request_id):
                 already_triggered = request_id in self.transfer_triggered_requests
                 is_active = request_id in self.active_kv_transfers
@@ -973,11 +963,6 @@ class OmniARScheduler(OmniSchedulerMixin, VLLMScheduler):
 
             self.requests_needing_kv_transfer[req_id] = {"seq_len": seq_len, "block_ids": block_ids}
             logger.debug(f"Marked request {req_id} for KV cache transfer (len={seq_len}, blocks={len(block_ids)})")
-
-    def _uses_native_kv_source(self, request: Request) -> bool:
-        """True when Router attached Mooncake source handshake params."""
-        params = request.kv_transfer_params
-        return bool(params and params.get("transfer_id") and params.get("do_remote_decode"))
 
     def _should_transfer_kv_for_request(self, req_id: str) -> bool:
         """Determine if a request should trigger KV cache transfer."""

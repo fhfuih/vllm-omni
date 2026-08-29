@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-# SPDX-FileCopyrightText: Copyright contributors to the vLLM project
+# SPDX-FileCopyrightText: Copyright contributors to the vLLM-Omni project
 
 from types import SimpleNamespace
 
@@ -434,14 +434,11 @@ def test_paged_preprocess_attaches_layout_and_scheduler_kv_requests(monkeypatch)
     preprocess = get_hunyuan_image_3_pre_process_func(
         SimpleNamespace(model="model", diffusion_kv_mode=DiffusionKVCacheMode.PAGED_SCHEDULER)
     )
-    handshake = {"transfer_id": "xfer-req", "do_remote_prefill": True, "remote_engine_id": "ar-engine"}
     request = _request(guidance_scale=1.0)
-    request.kv_transfer_params = dict(handshake)
 
     prepared_request = preprocess(request)
 
     assert prepared_request is request
-    assert prepared_request.kv_transfer_params == handshake
     assert isinstance(request.prepared_layout, HunyuanPreparedLayout)
     assert request.diffusion_kv_requests is not None
     assert [(item.prefix_len, item.target_len, item.seq_len) for item in request.diffusion_kv_requests] == [

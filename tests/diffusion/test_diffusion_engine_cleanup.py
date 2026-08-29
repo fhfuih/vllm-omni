@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-# SPDX-FileCopyrightText: Copyright contributors to the vLLM project
+# SPDX-FileCopyrightText: Copyright contributors to the vLLM-Omni project
 
 import asyncio
 import queue
@@ -32,7 +32,7 @@ def _make_request(request_id: str) -> OmniDiffusionRequest:
 def _make_engine() -> DiffusionEngine:
     engine = DiffusionEngine.__new__(DiffusionEngine)
     engine.scheduler = RequestScheduler()
-    engine.scheduler.initialize(SimpleNamespace(kv_transfer_config=None))
+    engine.scheduler.initialize(SimpleNamespace())
     engine.executor = SimpleNamespace(shutdown=Mock())
     engine._rpc_lock = threading.RLock()
     engine._cv = threading.Condition(engine._rpc_lock)
@@ -135,7 +135,6 @@ def test_dense_terminal_and_abort_paths_skip_worker_row_cleanup() -> None:
 
 def test_init_accepts_custom_scheduler(monkeypatch: pytest.MonkeyPatch) -> None:
     od_config = SimpleNamespace(
-        kv_transfer_config=None,
         custom_pipeline_args=None,
         model_class_name="CustomSchedulerPipeline",
         streaming_output=False,
@@ -171,7 +170,6 @@ def test_init_accepts_custom_scheduler(monkeypatch: pytest.MonkeyPatch) -> None:
 
 def test_scheduler_initialization_failure_closes_scheduler_and_executor(monkeypatch: pytest.MonkeyPatch) -> None:
     od_config = SimpleNamespace(
-        kv_transfer_config=None,
         custom_pipeline_args=None,
         model_class_name="SchedulerInitializationFailurePipeline",
         streaming_output=False,

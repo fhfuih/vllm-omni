@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-# SPDX-FileCopyrightText: Copyright contributors to the vLLM project
+# SPDX-FileCopyrightText: Copyright contributors to the vLLM-Omni project
 """
 Diffusion Model Runner for vLLM-Omni.
 
@@ -40,7 +40,6 @@ from vllm_omni.diffusion.diffusion_kv.paged_attention_adapter import (
     DiffusionPagedAttentionRow,
     PreparedDiffusionPagedAttentionBatch,
 )
-from vllm_omni.diffusion.diffusion_kv.v1.connector import start_load_kv
 from vllm_omni.diffusion.forward_context import set_forward_context
 from vllm_omni.diffusion.model_loader.diffusers_loader import DiffusersPipelineLoader
 from vllm_omni.diffusion.models.interface import (
@@ -182,9 +181,7 @@ class DiffusionModelRunner(OmniConnectorModelRunnerMixin):
             device=device,
         )
         # Compatibility view for callers that inspect the installed config;
-        # physical ownership remains in ``diffusion_kv_backend``. This runner
-        # does not expose the backend's cache mapping to Mooncake
-        # ``register_kv_caches``.
+        # physical ownership remains in ``diffusion_kv_backend``.
         self.kv_cache_config: KVCacheConfig | None = None
 
         # Cache for per-request stepwise state.
@@ -223,15 +220,6 @@ class DiffusionModelRunner(OmniConnectorModelRunnerMixin):
             raise ValueError(
                 f"Diffusion KV metadata request mismatch: expected={request_id!r}, got={metadata.request_id!r}"
             )
-
-    def _maybe_start_remote_kv_load(self, scheduler_output: DiffusionSchedulerOutput | None) -> None:
-        """Bind metadata and kick off native remote load on the DiT worker side."""
-        if scheduler_output is None:
-            return
-        metadata = scheduler_output.kv_connector_metadata
-        if metadata is None or not scheduler_output.scheduled_new_reqs:
-            return
-        start_load_kv(metadata)
 
     def _compile_transformer(self, attr_name: str) -> None:
         """Compile a transformer attribute on the pipeline with torch.compile."""
@@ -829,7 +817,6 @@ class DiffusionModelRunner(OmniConnectorModelRunnerMixin):
                 if new_req.diffusion_kv_metadata is not None:
                     self.install_diffusion_kv_metadata(new_req.diffusion_kv_metadata)
                     installed_request_ids.append(new_req.request_id)
-            self._maybe_start_remote_kv_load(scheduler_output)
             reqs = [nr.req for nr in scheduler_output.scheduled_new_reqs]
             return self._execute_request_list(
                 reqs,
@@ -1033,7 +1020,6 @@ class DiffusionModelRunner(OmniConnectorModelRunnerMixin):
                 if new_req.diffusion_kv_metadata is not None:
                     self.install_diffusion_kv_metadata(new_req.diffusion_kv_metadata)
                     installed_request_ids.append(new_req.request_id)
-            self._maybe_start_remote_kv_load(scheduler_output)
             return self._execute_stepwise_core(
                 scheduler_output,
                 record_output_peak_memory=record_output_peak_memory,

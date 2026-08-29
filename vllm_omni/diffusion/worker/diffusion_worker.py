@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-# SPDX-FileCopyrightText: Copyright contributors to the vLLM project
+# SPDX-FileCopyrightText: Copyright contributors to the vLLM-Omni project
 
 """
 Diffusion Worker for vLLM-Omni.
@@ -25,7 +25,6 @@ import torch.distributed as dist
 import zmq
 from vllm.config import VllmConfig, set_current_vllm_config
 from vllm.distributed.device_communicators.shm_broadcast import MessageQueue
-from vllm.distributed.kv_transfer.kv_transfer_state import has_kv_transfer_group
 from vllm.logger import init_logger
 from vllm.profiler.wrapper import CudaProfilerWrapper, WorkerProfiler
 from vllm.utils.import_utils import resolve_obj_by_qualname
@@ -44,11 +43,11 @@ from vllm_omni.diffusion.data import (
     OmniWakeTask,
 )
 from vllm_omni.diffusion.diffusion_kv.config import DiffusionKVCacheMode
-from vllm_omni.diffusion.diffusion_kv.metadata import DiffusionKVMetadata
-from vllm_omni.diffusion.diffusion_kv.v1.connector import (
-    init_worker_kv_connector_v1,
-    shutdown_kv_connector_v1,
+from vllm_omni.diffusion.diffusion_kv.kv_connector import (
+    init_worker_kv_connector,
+    shutdown_kv_connector,
 )
+from vllm_omni.diffusion.diffusion_kv.metadata import DiffusionKVMetadata
 from vllm_omni.diffusion.distributed.parallel_state import (
     destroy_distributed_env,
     init_distributed_environment,
@@ -87,6 +86,16 @@ _ASYNC_OUTPUT_DRAIN_TIMEOUT_S = 10.0
 # Worker entry points that release device memory. Background D2H/SHM packing
 # still reads model output tensors, so it must finish before these run.
 _MEMORY_RELEASING_METHODS = frozenset({"sleep", "handle_sleep_task"})
+
+
+def _cleanup_after_execution_error(exc: Exception) -> None:
+    """Release device tensors retained by a failed execution traceback."""
+    exc.__traceback__ = None
+    try:
+        gc.collect()
+        current_omni_platform.empty_cache()
+    except Exception:
+        logger.warning("Failed to release device memory after an execution error", exc_info=True)
 
 
 def _all_gather_rank_values(value: Any) -> list[Any]:
@@ -310,6 +319,9 @@ class DiffusionWorker:
                     format_gib(self.requested_memory),
                 )
             init_workspace_manager(self.device)
+            # Native connector construction must happen after distributed init;
+            # PR0 still uses an empty cache config and does not register pages.
+            init_worker_kv_connector(self.vllm_config)
 
     def _create_profiler(self) -> WorkerProfiler | None:
         profiler_config = self.od_config.profiler_config
@@ -467,24 +479,6 @@ class DiffusionWorker:
         self.vllm_config.cache_config.num_gpu_blocks = kv_cache_config.num_blocks
         with self._maybe_get_memory_pool_context("kv_cache"):
             self.model_runner.set_kv_cache_config(kv_cache_config)
-        if self.vllm_config.kv_transfer_config is not None and not has_kv_transfer_group():
-            init_worker_kv_connector_v1(self.vllm_config, kv_cache_config=kv_cache_config)
-
-        # Connector registration is intentionally left as a stub in this PR.
-        # ``set_kv_cache_config`` binds pages to layer adapters through
-        # ``AttentionLayerBase.bind_kv_cache``; a later change can collect
-        # those layer caches and register them with the connector.
-        # configured_layers = {
-        #     layer_name
-        #     for group in kv_cache_config.kv_cache_groups
-        #     for layer_name in group.layer_names
-        # }
-        # forward_context = self.vllm_config.compilation_config.static_forward_context
-        # kv_caches_by_layer = {
-        #     layer_name: forward_context[layer_name].kv_cache
-        #     for layer_name in configured_layers
-        # }
-        # maybe_register_vllm_kv_caches(kv_caches_by_layer)
 
     def remove_diffusion_kv_requests(self, request_ids: list[str]) -> int:
         """Clear Worker-local rows without freeing Scheduler-owned blocks."""
@@ -910,12 +904,19 @@ class DiffusionWorker:
 
     def shutdown(self) -> None:
         """Shutdown the worker and cleanup distributed environment."""
-        if self.model_runner is not None:
-            mgr = getattr(self.model_runner, "kv_transfer_manager", None)
-            if mgr is not None:
-                mgr.shutdown_prefetch()
-        shutdown_kv_connector_v1()
-        destroy_distributed_env()
+        try:
+            if self.model_runner is not None:
+                mgr = getattr(self.model_runner, "kv_transfer_manager", None)
+                try:
+                    offload_backend = getattr(self.model_runner, "offload_backend", None)
+                    if offload_backend is not None:
+                        offload_backend.disable()
+                finally:
+                    if mgr is not None:
+                        mgr.shutdown_prefetch()
+        finally:
+            shutdown_kv_connector()
+            destroy_distributed_env()
 
 
 class CustomPipelineWorkerExtension:
@@ -1211,7 +1212,6 @@ class WorkerProc:
             return None, False
 
         result = None
-        rpc_exception: Exception | None = None
         status: dict[str, Any] = {
             "rank": self.gpu_id,
             "ok": True,
@@ -1228,7 +1228,6 @@ class WorkerProc:
             result = self.worker.execute_method(method, *args, **kwargs)
         except Exception as e:
             logger.error(f"Error executing RPC: {e}", exc_info=True)
-            rpc_exception = e
             status.update(
                 {
                     "ok": False,
@@ -1237,6 +1236,9 @@ class WorkerProc:
                     "traceback": traceback.format_exc(),
                 }
             )
+            if not collect_rank_status:
+                raise
+            _cleanup_after_execution_error(e)
 
         if isinstance(result, bool):
             status["bool_result"] = result
@@ -1256,8 +1258,6 @@ class WorkerProc:
                 )
             return None, False
 
-        if rpc_exception is not None:
-            raise rpc_exception
         if isinstance(result, dict) and wave_id is not None:
             result["wave_id"] = wave_id
         return result, should_reply
@@ -1306,6 +1306,8 @@ class WorkerProc:
                         self._return_result(result, rpc_id=rpc_id)
                 except Exception as e:
                     logger.error(f"Error processing RPC: {e}", exc_info=True)
+                    error = str(e)
+                    _cleanup_after_execution_error(e)
                     # Apply the same reply gate as the success path so
                     # non-output ranks don't enqueue stale error replies
                     # that compete with the expected responder's message.
@@ -1320,7 +1322,7 @@ class WorkerProc:
                                 AsyncDiffusionOutput(
                                     kind=AsyncOutputKind.RPC_RESULT,
                                     rpc_id=rpc_id,
-                                    error=str(e),
+                                    error=error,
                                 )
                             )
                         elif output_rank is None and exec_all_ranks:
@@ -1348,11 +1350,11 @@ class WorkerProc:
                                 except Exception:
                                     dp_rank = self.gpu_id
                                 self._return_result(
-                                    {"status": "error", "error": str(e), "dp_rank": dp_rank, "wave_id": wave_id}
+                                    {"status": "error", "error": error, "dp_rank": dp_rank, "wave_id": wave_id}
                                 )
                         elif output_rank is None or output_rank == self.gpu_id:
                             # Normal RPC: only the expected rank replies
-                            self._return_result({"status": "error", "error": str(e), "wave_id": wave_id})
+                            self._return_result({"status": "error", "error": error, "wave_id": wave_id})
 
             elif isinstance(msg, dict) and msg.get("type") == "shutdown":
                 logger.info("Worker %s: Received shutdown message", self.gpu_id)
@@ -1369,6 +1371,7 @@ class WorkerProc:
                         exc_info=True,
                     )
                     output = DiffusionOutput.from_exception(e)
+                    _cleanup_after_execution_error(e)
 
                 try:
                     self._return_result(output)

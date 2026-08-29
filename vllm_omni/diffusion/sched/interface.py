@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-# SPDX-FileCopyrightText: Copyright contributors to the vLLM project
+# SPDX-FileCopyrightText: Copyright contributors to the vLLM-Omni project
 
 from __future__ import annotations
 
@@ -244,8 +244,8 @@ class DiffusionSchedulerOutput:
     num_waiting_reqs: int
     # next request to background-prefetch KV
     kv_prefetch_job: KVPrefetchJob | None = None
-    # Opaque KVConnectorMetadata for the new (v1) paged KV connector.
-    # The Scheduler-role. Workers bind this before start_load_kv.
+    # Opaque metadata emitted by a future Scheduler-role connector. PR0 keeps
+    # the input port but does not build or consume it.
     kv_connector_metadata: KVConnectorMetadata | None = None
 
     @cached_property

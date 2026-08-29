@@ -16,12 +16,13 @@ from dataclasses import InitVar, dataclass, field, fields
 from functools import wraps
 from inspect import Parameter, signature
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Literal, TypeAlias, TypedDict, cast
+from typing import Any, Literal, TypeAlias, TypedDict, cast
 
 from pydantic import ConfigDict, Field, model_validator
 from typing_extensions import Self
 from vllm.config import CacheConfig as VllmCacheConfig
 from vllm.config import CompilationConfig as VllmCompilationConfig
+from vllm.config import KVTransferConfig
 from vllm.config import LoadConfig as VllmLoadConfig
 from vllm.config import ParallelConfig as VllmParallelConfig
 from vllm.config import ProfilerConfig as VllmProfilerConfig
@@ -49,9 +50,6 @@ from vllm_omni.config.stage_config import (
     normalize_pipeline_cli_overrides,
 )
 from vllm_omni.diffusion.diffusion_kv.config import DiffusionKVCacheMode
-
-if TYPE_CHECKING:
-    from vllm.config import KVTransferConfig
 
 _EXECUTION_TYPE_TO_STAGE_WORKER: dict[StageExecutionType, tuple[StageType, str | None]] = {
     StageExecutionType.LLM_AR: (StageType.LLM, "ar"),
@@ -233,6 +231,7 @@ class _ParallelEngineOverrides(_ParallelConfigEngineOverrides, total=False):
 
 class _ConnectorEngineOverrides(TypedDict, total=False):
     omni_kv_config: dict[str, Any]
+    kv_transfer_config: KVTransferConfig
 
 
 @dataclass(frozen=True)
@@ -479,6 +478,7 @@ class OmniStageConnectorConfig:
 
     async_chunk: bool = False
     omni_kv_config: dict[str, Any] | None = None
+    kv_transfer_config: KVTransferConfig | None = None
     stage_connector: dict[str, Any] = field(
         default_factory=lambda: {
             "name": "SharedMemoryConnector",
@@ -741,7 +741,7 @@ class _DiffusionConfigProjection:
     worker_extension_cls: str | None = None
     custom_pipeline_args: dict[str, Any] | None = None
     additional_config: dict[str, Any] = field(default_factory=dict)
-    kv_transfer_config: KVTransferConfig | dict[str, Any] | None = None
+    kv_transfer_config: KVTransferConfig | None = None
     enable_stage_verification: bool = True
     prompt_file_path: str | None = None
     quantization_config: _QuantizationConfigType = None
@@ -1736,6 +1736,7 @@ def _build_connector_config(
     return cast(Any, OmniStageConnectorConfig)(
         async_chunk=bool(deploy.async_chunk),
         omni_kv_config=_copy_value(engine.get("omni_kv_config")),
+        kv_transfer_config=_copy_value(engine.get("kv_transfer_config")),
         output_connectors=_copy_value(output_connectors) if output_connectors else None,
         input_connectors=_copy_value(input_connectors) if input_connectors else None,
     )

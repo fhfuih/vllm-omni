@@ -1,12 +1,12 @@
 # SPDX-License-Identifier: Apache-2.0
-# SPDX-FileCopyrightText: Copyright contributors to the vLLM project
+# SPDX-FileCopyrightText: Copyright contributors to the vLLM-Omni project
 
 """Build native vLLM configuration views for the Omni diffusion runtime."""
 
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, cast
 
 import torch
 from vllm.config import CompilationConfig, DeviceConfig, KVTransferConfig, VllmConfig
@@ -228,8 +228,7 @@ def configure_diffusion_vllm_config(vllm_config: VllmConfig, od_config: OmniDiff
         if max_num_batched_tokens is not None:
             vllm_config.scheduler_config.max_num_batched_tokens = int(max_num_batched_tokens)
     if od_config.kv_transfer_config is not None:
-        assert isinstance(od_config.kv_transfer_config, KVTransferConfig)
-        vllm_config.kv_transfer_config = od_config.kv_transfer_config
+        vllm_config.kv_transfer_config = cast(KVTransferConfig, od_config.kv_transfer_config)
     return vllm_config
 
 

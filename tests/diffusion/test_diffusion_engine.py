@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-# SPDX-FileCopyrightText: Copyright contributors to the vLLM project
+# SPDX-FileCopyrightText: Copyright contributors to the vLLM-Omni project
 
 import asyncio
 import queue
@@ -199,7 +199,6 @@ class TestRequestBatchCapability:
 
     def test_supports_request_batch_uses_custom_pipeline_class(self, monkeypatch: pytest.MonkeyPatch) -> None:
         od_config = SimpleNamespace(
-            kv_transfer_config=None,
             model_class_name="SinglePipeline",
             custom_pipeline_args={"pipeline_class": _BatchCapablePipeline},
         )
@@ -214,7 +213,6 @@ class TestRequestBatchCapability:
 
     def test_supports_request_batch_uses_custom_pipeline_class_name(self, monkeypatch: pytest.MonkeyPatch) -> None:
         od_config = SimpleNamespace(
-            kv_transfer_config=None,
             model_class_name="SinglePipeline",
             custom_pipeline_args={"pipeline_class": "test.module.BatchPipeline"},
         )
@@ -236,7 +234,6 @@ class TestRequestBatchCapability:
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         od_config = SimpleNamespace(
-            kv_transfer_config=None,
             model_class_name="BatchPipeline",
             custom_pipeline_args={"pipeline_class": _SingleRequestOverridePipeline},
         )
@@ -258,7 +255,6 @@ class TestRequestBatchCapability:
                 return DiffusionOutput(output=None)
 
         od_config = SimpleNamespace(
-            kv_transfer_config=None,
             model_class_name="BatchPipeline",
             custom_pipeline_args={"pipeline_class": _ExplicitlyUnsupportedOverride},
         )
@@ -276,7 +272,6 @@ class TestRequestBatchCapability:
         mocker: MockerFixture,
     ) -> None:
         od_config = SimpleNamespace(
-            kv_transfer_config=None,
             model_class_name="BatchPipeline",
             custom_pipeline_args={"pipeline_class": "test.module.MissingPipeline"},
         )
@@ -302,7 +297,6 @@ class TestRequestBatchCapability:
         mocker: MockerFixture,
     ) -> None:
         od_config = SimpleNamespace(
-            kv_transfer_config=None,
             model_class_name="SinglePipeline",
             custom_pipeline_args=None,
             streaming_output=False,
@@ -348,7 +342,6 @@ class TestRequestBatchCapability:
         mocker: MockerFixture,
     ) -> None:
         od_config = SimpleNamespace(
-            kv_transfer_config=None,
             model_class_name="SinglePipeline",
             custom_pipeline_args=None,
             streaming_output=False,
@@ -384,7 +377,6 @@ class TestRequestBatchCapability:
         mocker: MockerFixture,
     ) -> None:
         od_config = SimpleNamespace(
-            kv_transfer_config=None,
             model_class_name="SinglePipeline",
             custom_pipeline_args=None,
             streaming_output=False,
@@ -436,7 +428,6 @@ class TestRequestBatchCapability:
         mocker: MockerFixture,
     ) -> None:
         od_config = SimpleNamespace(
-            kv_transfer_config=None,
             model_class_name="BatchPipeline",
             custom_pipeline_args=None,
             streaming_output=False,
@@ -478,7 +469,6 @@ class TestRequestBatchCapability:
 
     def test_make_engine_runs_startup_warmup(self, monkeypatch: pytest.MonkeyPatch, mocker: MockerFixture) -> None:
         od_config = SimpleNamespace(
-            kv_transfer_config=None,
             model_class_name="SinglePipeline",
             custom_pipeline_args=None,
             engine_backend="default",
@@ -589,7 +579,7 @@ class TestRequestBatchAdmission:
     def test_scheduler_exposes_waiting_and_running_counts(self) -> None:
         from vllm_omni.diffusion.sched import RequestScheduler
 
-        od_config = SimpleNamespace(kv_transfer_config=None, max_num_seqs=4)
+        od_config = SimpleNamespace(max_num_seqs=4)
         scheduler = RequestScheduler()
         scheduler.initialize(od_config)
 
@@ -621,7 +611,6 @@ class TestRequestBatchAdmission:
         from vllm_omni.diffusion.sched import RequestScheduler
 
         od_config = SimpleNamespace(
-            kv_transfer_config=None,
             max_num_seqs=32,
             request_batch_max_wait_ms=1000.0,
             step_execution=False,

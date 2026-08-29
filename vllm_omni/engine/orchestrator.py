@@ -228,10 +228,7 @@ class OrchestratorRequestState:
     duplex_config_generation: int = -1
     running_counter_registered: bool = False
     request_artifact_dirs: set[str] = field(default_factory=set)
-    # fields for AR-DiT KV connection v1
     native_kv_transfer_id: str | None = None
-    native_kv_source_params: dict[str, Any] | None = None
-    native_kv_target_params: dict[str, Any] | None = None
 
 
 @dataclass
@@ -738,7 +735,7 @@ class Orchestrator:
             request_artifact_dirs=set(msg.request_artifact_dirs or ()),
         )
         self.request_states[request_id] = req_state
-        self._maybe_attach_native_kv_handshake(req_state)
+        self._maybe_attach_native_kv_transfer_params(req_state)
         self._register_running_request(req_state)
         req_state.streaming.enabled = bool(getattr(prompt, "resumable", False))
         req_state.stage_submit_ts[stage_id] = _time.time()
@@ -2893,66 +2890,30 @@ class Orchestrator:
 
         return True
 
-    def _stage_kv_transfer_config(self, stage_id: int) -> Any:
-        pool = self.stage_pools[stage_id]
-        cfg = pool.stage_vllm_config
-        if cfg is not None:
-            kv_cfg = getattr(cfg, "kv_transfer_config", None)
-            if kv_cfg is not None:
-                return kv_cfg
-        for replica_id in pool.live_replica_ids():
-            client = pool.clients[replica_id]
-            if client is None:
-                continue
-            od_config = getattr(client, "od_config", None)
-            if od_config is not None and od_config.kv_transfer_config is not None:
-                return od_config.kv_transfer_config
-        return None
+    def _maybe_attach_native_kv_transfer_params(self, req_state: OrchestratorRequestState) -> None:
+        """Attach one opaque ticket when a native Diffusion target is configured."""
 
-    def _maybe_attach_native_kv_handshake(self, req_state: OrchestratorRequestState) -> None:
-        """Mint one transfer_id and matching source/target Mooncake params, if there is a subsequent DiT stage."""
-        from vllm_omni.diffusion.diffusion_kv.v1.connector import (
-            bootstrap_addr_from_kv_transfer_config,
-            build_source_kv_transfer_params,
-            build_target_kv_transfer_params,
-            mint_transfer_id,
+        if req_state.final_stage_id < 1 or not req_state.sampling_params_list:
+            return
+        has_native_target = any(
+            self.stage_pools[stage_id].stage_type == "diffusion"
+            and getattr(getattr(self.stage_pools[stage_id], "stage_vllm_config", None), "kv_transfer_config", None)
+            is not None
+            for stage_id in range(1, req_state.final_stage_id + 1)
         )
+        if not has_native_target:
+            return
 
-        if req_state.final_stage_id < 1:
-            return
-        dit_cfg = None
-        ar_cfg = self._stage_kv_transfer_config(0)
-        for stage_id in range(1, req_state.final_stage_id + 1):
-            if self.stage_pools[stage_id].stage_type == "diffusion":
-                dit_cfg = self._stage_kv_transfer_config(stage_id)
-                if dit_cfg is not None:
-                    break
-        if dit_cfg is None:
-            return
+        from vllm_omni.diffusion.diffusion_kv.kv_connector import mint_transfer_id
 
         transfer_id = mint_transfer_id(req_state.request_id)
-        ar_engine_id = ar_cfg.engine_id if ar_cfg is not None else None
-        dit_engine_id = dit_cfg.engine_id
-        source_params = build_source_kv_transfer_params(
-            transfer_id=transfer_id,
-            remote_engine_id=dit_engine_id,
-            remote_bootstrap_addr=bootstrap_addr_from_kv_transfer_config(dit_cfg),
-        )
-        target_params = build_target_kv_transfer_params(
-            transfer_id=transfer_id,
-            remote_engine_id=ar_engine_id,
-            remote_bootstrap_addr=bootstrap_addr_from_kv_transfer_config(ar_cfg),
-        )
         req_state.native_kv_transfer_id = transfer_id
-        req_state.native_kv_source_params = source_params
-        req_state.native_kv_target_params = target_params
-
-        ar_params = req_state.sampling_params_list[0]
-        extra_args = ar_params.extra_args
+        sampling_params = req_state.sampling_params_list[0]
+        extra_args = getattr(sampling_params, "extra_args", None)
         if extra_args is None:
             extra_args = {}
-            ar_params.extra_args = extra_args
-        extra_args["kv_transfer_params"] = dict(source_params)
+            sampling_params.extra_args = extra_args
+        extra_args["kv_transfer_params"] = {"transfer_id": transfer_id}
 
     def _diffusion_submit_kwargs(
         self,
@@ -2967,8 +2928,8 @@ class Orchestrator:
                 request_id=request_id,
             )
         }
-        if req_state.native_kv_target_params:
-            submit_kwargs["kv_transfer_params"] = req_state.native_kv_target_params
+        if req_state.native_kv_transfer_id is not None:
+            submit_kwargs["kv_transfer_params"] = {"transfer_id": req_state.native_kv_transfer_id}
         return submit_kwargs
 
     def _build_kv_sender_info(

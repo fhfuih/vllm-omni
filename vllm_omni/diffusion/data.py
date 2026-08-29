@@ -908,10 +908,9 @@ class OmniDiffusionConfig:
 
     # Omni configuration (injected from stage config)
     omni_kv_config: dict[str, Any] = field(default_factory=dict)
-    # Native vLLM KV connector config (MooncakeConnector, etc.). This field
-    # enables new (v1) KV connector that supports paged transfer and routes
-    # away from old OmniKVTransferManager.
-    kv_transfer_config: "KVTransferConfig | dict[str, Any] | None" = None
+    # Native vLLM KV connector configuration. PR0 only assembles the connector;
+    # the native page data path is owned by the follow-up landing PR.
+    kv_transfer_config: "KVTransferConfig | None" = None
     additional_config: dict[str, Any] = field(default_factory=dict)
 
     profiler_config: "ProfilerConfig | dict[str, Any] | None" = None
@@ -1079,12 +1078,12 @@ class OmniDiffusionConfig:
             )
 
         if self.kv_transfer_config is not None:
-            from vllm_omni.diffusion.diffusion_kv.v1.connector import parse_kv_transfer_config
+            from vllm_omni.diffusion.diffusion_kv.kv_connector import parse_kv_transfer_config
 
-            if self.diffusion_kv_mode is not DiffusionKVCacheMode.PAGED_SCHEDULER:
+            if any(self.omni_kv_config.get(name, False) for name in ("need_send_cache", "need_recv_cache")):
                 raise ValueError(
-                    "kv_transfer_config requires diffusion_kv_mode='paged_scheduler'; "
-                    "dense_legacy continues to use OmniKVTransferManager only."
+                    "native kv_transfer_config cannot be combined with legacy omni_kv_config transfer; "
+                    "configure exactly one KV transfer path"
                 )
             self.kv_transfer_config = parse_kv_transfer_config(self.kv_transfer_config)
 

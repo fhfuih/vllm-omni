@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-# SPDX-FileCopyrightText: Copyright contributors to the vLLM project
+# SPDX-FileCopyrightText: Copyright contributors to the vLLM-Omni project
 
 from __future__ import annotations
 
@@ -111,11 +111,10 @@ class DiffusionKVRequest:
         # vLLM 0.26+ uses this optional boundary when publishing cached blocks;
         # zero means that no sparse-retention boundary is active.
         self.shared_prefix_boundary = 0
-        # KV connector v1's opaque vLLM handshake data. The Scheduler copies a public
-        # request bag onto each sequence that does not already have one.
+        # Opaque request-scoped parameters consumed by an upstream KVConnector.
         self.kv_transfer_params = kv_transfer_params
-        # Mooncake uses len(prompt_token_ids) as the remote-load length. The
-        # Scheduler fills a zero-id placeholder of seq_len when this is omitted.
+        # Mooncake derives the remote-load length from this list. PR0 carries
+        # the field without creating a placeholder or starting a load.
         self.prompt_token_ids = prompt_token_ids
 
     @property
