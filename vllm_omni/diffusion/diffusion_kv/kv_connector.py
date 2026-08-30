@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-# SPDX-FileCopyrightText: Copyright contributors to the vLLM-Omni project
+# SPDX-FileCopyrightText: Copyright contributors to the vLLM project
 """Diffusion-side assembly facade built on the upstream Mooncake KV connector.
 
 The configured ``kv_connector`` (currently ``MooncakeConnector``) is created
