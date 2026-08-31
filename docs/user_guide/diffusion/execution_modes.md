@@ -8,7 +8,7 @@ are exposed.
 ## Choose a Mode
 
 | Goal | CLI configuration |
-|---|---|
+| --- | --- |
 | Serial request execution | `--max-num-seqs 1` |
 | Fused request-level batching | `--max-num-seqs N` |
 | Single-request step execution | `--step-execution --max-num-seqs 1` |
@@ -169,8 +169,10 @@ wait
 The scheduler may batch these requests when their sampling parameters are
 compatible. See the
 [Image Generation API](../../serving/image_generation_api.md) for response
-formats and additional client examples. Streaming models can use
-model-specific streaming endpoints documented by their serving guide.
+formats and additional client examples.
+
+Streaming models can use model-specific streaming endpoints documented at
+[Streaming Video Generation API](../../serving/video_stream_generation_api.md).
 
 ## Python API
 
@@ -233,7 +235,7 @@ For step execution, set `step_execution: true` and remove
 ## CLI Reference
 
 | Flag | Default | Effect |
-|---|---:|---|
+| --- | ---: | --- |
 | `--step-execution` | disabled | Select step-wise scheduling |
 | `--max-num-seqs` | `1` for diffusion stages | Set request- or step-scheduler capacity |
 | `--request-batch-max-wait-ms` | `0` | Wait for burst coalescing in request mode |

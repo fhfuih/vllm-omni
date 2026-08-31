@@ -1,7 +1,10 @@
-# Streaming Video Generation
+# Streaming Video Generation API
 
-This example uses the custom WebSocket endpoint `WS /v1/realtime/video` to receive a video byte stream as chunks are produced.
-It covers text-only video generation. Image/reference input is intentionally not included for now.
+vLLM-Omni provides a WebSocket API endpoint `WS /v1/realtime/video` to stream a video generation request chunk-by-chunk. This mode requires the diffusion model to inherently support chunk-based progressive generation and emission.
+
+Each server instance runs a single model specified at startup with `vllm serve <model> --omni --diffusion-streaming-output`.
+
+Example scripts are also available at `examples/online_serving/streaming_video_generation/`.
 
 ## Start The Server
 
