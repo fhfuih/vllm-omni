@@ -799,8 +799,7 @@ To add streaming generation with optional mid-stream prompt updates to a new dif
 
 Serve with ``--diffusion-streaming-output`` (auto-enables step execution). See
 [Diffusion Execution Modes](../../user_guide/diffusion/execution_modes.md#streaming-output)
-and the
-[streaming video generation example](../../../examples/online_serving/streaming_video_generation/README.md).
+and the example script at `examples/online_serving/streaming_video_generation/`.
 
 **Interaction payload contract:** Although ``OmniInteractionPrompt`` type annocation requires ``event_id``,
 the WebSocket API payload may omit ``event_id`` and let the API layer assigns one.
