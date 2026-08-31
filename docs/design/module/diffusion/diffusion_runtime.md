@@ -44,8 +44,8 @@ validation_paths:
   - tests/diffusion/test_inline_stage_diffusion_client.py
 upstream_refs:
   - diffusers.DiffusionPipeline
-last_reviewed: 2026-08-27
-last_verified_commit: 19da23824637e76bdbb2e8131ec50eaf68903097
+last_reviewed: 2026-08-31
+last_verified_commit: 15c6ab8fa7cd12c55aa12ce9c2aedca25c2c016d
 ---
 
 # Diffusion runtime
@@ -299,12 +299,18 @@ failure callbacks; ordinary request errors stay per-request.
 5. applies rank-aware reply rules so only expected ranks respond; and
 6. monitors worker process sentinels and fails the executor if a worker dies.
 
-In request mode on this backend, workers always return a lightweight
-`COMPUTE_DONE` message first. A worker-side thread then copies output to
-host/shared memory, and the executor's result-pump threads resolve the final
-output later. This lets the device begin more compute without waiting for
-output packing. Step mode keeps the synchronous result path and does not start
-those pumps.
+In request mode on this backend, each async output produces two correlated
+messages keyed by `async_output_id`:
+
+- `COMPUTE_DONE` — the forward finished and the device can start the next
+  request.
+- `OUTPUT_READY` — background D2H/SHM packing finished and the final output
+  is ready.
+
+The worker queues background packing work before it enqueues `COMPUTE_DONE`,
+but either message may reach the executor first. The result pump and
+`execute_batch()` must handle both orderings. Step mode keeps the synchronous
+result path and does not start those pumps.
 
 See [Async diffusion output](../../feature/async_diffusion_output.md) for the
 multiproc request-mode timeline.
@@ -348,23 +354,20 @@ aborted output when a consumer still exists. The runner removes cached
 step-mode state when it receives a scheduler output that reports the finished
 request ID.
 
-On the multiproc request-mode async path, an aborted request may still have a
-pending `async_output_id`. Finalization tells the executor to `drop_output()`
-that id so a late `OUTPUT_READY` is not cached forever.
-
-Dropping an output-stream consumer removes that consumer's queue and also
-releases any still-unclaimed async output ids for the request. It does not
-take ownership of scheduler cleanup.
+On the multiproc request-mode async path, abort or consumer drop while output
+is still materializing must release the associated async-output bookkeeping so
+late results are not retained after the request ends. Dropping an output-stream
+consumer removes that consumer's queue. It does not take ownership of scheduler
+cleanup.
 
 ### Shutdown and worker failure
 
 `DiffusionEngine.close()` is idempotent. It stops the busy loop, wakes pending
-streams with an error, releases unclaimed async outputs, closes scheduler
-state, and shuts down the executor.
+streams with an error, closes scheduler state, and shuts down the executor.
 
 - **`mp`**: the executor asks workers to stop, waits for them, then terminates
-  workers that miss the grace period. Shutdown also clears cached async-output
-  futures so unpacked tensors do not survive the engine.
+  workers that miss the grace period. Shutdown also clears pending and cached
+  async-output state.
 - **`uni`**: the executor shuts down the in-process worker, drops the final
   model reference, and empties the accelerator cache so a later engine can reuse
   the device.
@@ -408,9 +411,8 @@ admitting, reordering, or forwarding requests independently.
 ### DIFF-RUNTIME-INV-003: Terminal cleanup is complete
 
 **Rule:** Every terminal path MUST release request state, temporary tensors,
-hooks, and runtime-owned resources. On the multiproc async-output path that
-includes reclaiming abandoned `async_output_id`s via `drop_output()`, not only
-scheduler and runner state.
+hooks, and runtime-owned resources, including async-output bookkeeping when a
+request ends before its output is consumed.
 
 ### DIFF-RUNTIME-INV-004: Optional features use runtime hooks
 
