@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-# SPDX-FileCopyrightText: Copyright contributors to the vLLM project
+# SPDX-FileCopyrightText: Copyright contributors to the vLLM-Omni project
 
 from unittest import mock
 
@@ -44,6 +44,28 @@ def test_parse_requires_explicit_engine_id() -> None:
     payload.pop("engine_id")
     with pytest.raises(ValueError, match="non-empty engine_id"):
         parse_kv_transfer_config(payload)
+
+
+def test_diffusion_projection_rejects_missing_engine_id_before_materialize() -> None:
+    """Structured resolve must not let upstream auto-mint engine_id first."""
+    from vllm_omni.config.omni_config import _DiffusionConfigProjection
+
+    payload = dict(KV_TRANSFER_CONFIG)
+    payload.pop("engine_id")
+    with pytest.raises(ValueError, match="non-empty engine_id"):
+        _DiffusionConfigProjection.from_kwargs(kv_transfer_config=payload)
+
+
+def test_diffusion_projection_preserves_explicit_engine_id() -> None:
+    from vllm_omni.config.omni_config import _DiffusionConfigProjection
+
+    projection = _DiffusionConfigProjection.from_kwargs(kv_transfer_config=dict(KV_TRANSFER_CONFIG))
+    assert isinstance(projection.kv_transfer_config, KVTransferConfig)
+    assert projection.kv_transfer_config.engine_id == "dit-engine-1"
+
+    od_config = OmniDiffusionConfig.from_kwargs(kv_transfer_config=projection.kv_transfer_config)
+    assert od_config.kv_transfer_config is not None
+    assert od_config.kv_transfer_config.engine_id == "dit-engine-1"
 
 
 class _ConcreteScheduler(BaseScheduler):

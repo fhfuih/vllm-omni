@@ -18,7 +18,7 @@ from inspect import Parameter, signature
 from pathlib import Path
 from typing import Any, Literal, TypeAlias, TypedDict, cast
 
-from pydantic import ConfigDict, Field, model_validator
+from pydantic import ConfigDict, Field, field_validator, model_validator
 from typing_extensions import Self
 from vllm.config import CacheConfig as VllmCacheConfig
 from vllm.config import CompilationConfig as VllmCompilationConfig
@@ -748,6 +748,19 @@ class _DiffusionConfigProjection:
     prompt_file_path: str | None = None
     quantization_config: _QuantizationConfigType = None
     extras: dict[str, Any] = field(default_factory=dict)
+
+    @field_validator("kv_transfer_config", mode="before")
+    @classmethod
+    def _parse_kv_transfer_config_before_materialize(cls, value: Any) -> Any:
+        """Parse raw mappings before upstream ``KVTransferConfig`` auto-fills ``engine_id``.
+
+        Pydantic would otherwise construct ``KVTransferConfig`` first; its
+        ``__post_init__`` silently mints a UUID, and later
+        ``parse_kv_transfer_config`` can no longer reject a missing id.
+        """
+        from vllm_omni.diffusion.diffusion_kv.kv_connector import parse_kv_transfer_config
+
+        return parse_kv_transfer_config(value)
 
     @classmethod
     def from_kwargs(cls, **kwargs: Any) -> _DiffusionConfigProjection:
