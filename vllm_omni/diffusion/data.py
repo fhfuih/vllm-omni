@@ -1089,8 +1089,8 @@ class OmniDiffusionConfig:
             "need_recv_cache", False
         ):
             raise ValueError(
-                "paged_scheduler Diffusion KV does not support imported AR KV in Phase 1; "
-                "disable need_recv_cache until connector-aware admission is implemented"
+                "paged_scheduler Diffusion KV does not support imported AR KV; "
+                "disable need_recv_cache until connector-aware import is implemented"
             )
 
         if self.kv_transfer_config is not None:
