@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-# SPDX-FileCopyrightText: Copyright contributors to the vLLM project
+# SPDX-FileCopyrightText: Copyright contributors to the vLLM-Omni project
 
 from __future__ import annotations
 
@@ -391,10 +391,11 @@ class BaseScheduler(ABC):
 
         # Keep the request-scoped native connector bag on each Scheduler-owned
         # sequence without interpreting its contents or creating page state.
-        if request.kv_transfer_params is not None:
+        kv_transfer_params = getattr(request, "kv_transfer_params", None)
+        if kv_transfer_params is not None:
             for kv_request in kv_requests:
                 if kv_request.kv_transfer_params is None:
-                    kv_request.kv_transfer_params = dict(request.kv_transfer_params)
+                    kv_request.kv_transfer_params = dict(kv_transfer_params)
 
         # DiffusionKVRequest objects are mutable Scheduler/native-KVCacheManager
         # state and must never ride the normal request payload to a Worker.

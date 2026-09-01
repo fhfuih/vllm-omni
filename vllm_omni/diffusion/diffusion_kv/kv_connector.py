@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-# SPDX-FileCopyrightText: Copyright contributors to the vLLM project
+# SPDX-FileCopyrightText: Copyright contributors to the vLLM-Omni project
 """Diffusion-side assembly facade built on the upstream Mooncake KV connector.
 
 The configured ``kv_connector`` (currently ``MooncakeConnector``) is created
@@ -113,7 +113,7 @@ def create_scheduler_kv_connector(
 ) -> KVConnectorBase_V1 | None:
     """Create a Scheduler-role connector when native config is present."""
 
-    kv_transfer_config = od_config.kv_transfer_config
+    kv_transfer_config = getattr(od_config, "kv_transfer_config", None)
     if kv_transfer_config is None:
         return None
     if not isinstance(kv_transfer_config, KVTransferConfig):
@@ -165,9 +165,10 @@ def _empty_kv_cache_config() -> KVCacheConfig:
 def _build_native_vllm_config(od_config: OmniDiffusionConfig) -> VllmConfig:
     from vllm_omni.diffusion.vllm_config import create_diffusion_vllm_config
 
-    assert isinstance(od_config.kv_transfer_config, KVTransferConfig)
+    kv_transfer_config = getattr(od_config, "kv_transfer_config", None)
+    assert isinstance(kv_transfer_config, KVTransferConfig)
     vllm_config = create_diffusion_vllm_config(torch.device("cpu"), od_config)
-    vllm_config.kv_transfer_config = od_config.kv_transfer_config
+    vllm_config.kv_transfer_config = kv_transfer_config
     return vllm_config
 
 
