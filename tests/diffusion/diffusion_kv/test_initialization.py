@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-# SPDX-FileCopyrightText: Copyright contributors to the vLLM-Omni project
+# SPDX-FileCopyrightText: Copyright contributors to the vLLM project
 
 from types import SimpleNamespace
 from unittest.mock import Mock
@@ -49,14 +49,11 @@ def _od_config(**overrides):
         is_moe=False,
         additional_config={},
         profiler_config=None,
-        kv_transfer_config=None,
         parallel_config=SimpleNamespace(
             tensor_parallel_size=1,
             pipeline_parallel_size=1,
             data_parallel_size=1,
             enable_expert_parallel=False,
-            sequence_parallel_size=1,
-            cfg_parallel_size=1,
         ),
         gpu_memory_utilization=0.9,
         kv_cache_memory_bytes=None,
@@ -199,8 +196,6 @@ def test_dense_config_keeps_new_paged_sizing_inputs_inactive() -> None:
             pipeline_parallel_size=4,
             data_parallel_size=1,
             enable_expert_parallel=False,
-            sequence_parallel_size=1,
-            cfg_parallel_size=1,
         ),
         gpu_memory_utilization=0.5,
         kv_cache_memory_bytes=4096,
