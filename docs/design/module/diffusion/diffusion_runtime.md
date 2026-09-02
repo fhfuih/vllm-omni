@@ -164,6 +164,10 @@ IDs for requests whose runner state is already cached, finished IDs, and
 optional KV-prefetch work. Executors and workers consume this output; they do
 not decide what should run next.
 
+`BaseScheduler.initialize()` sets `max_num_running_reqs` from
+`od_config.max_num_seqs` (default 1). The engine may override that capacity
+for distributed layerwise offload with AllGather DP concurrency.
+
 ## One scheduling tick
 
 Async requests share one engine busy loop. Worker calls and control RPCs pass
@@ -208,22 +212,39 @@ executor call.
 | Request batch | `RequestScheduler` | `execute_batch()` | `execute_model()` for one request, or `execute_model_batch()` for a fused batch |
 | Step batch | `StepScheduler` | `execute_step()` | `execute_stepwise()` |
 
-Request mode runs a complete pipeline forward for each scheduled wave. A
+**Request mode** runs a complete pipeline forward for each scheduled wave. A
 single-request wave is the conservative path. A multi-request wave usually
 uses fused `execute_model_batch()` and requires the pipeline to declare
-request-batch support. Under distributed layerwise offload with AllGather,
-the engine raises running capacity to `dp_size` so the scheduler can admit one
-request per DP replica in a wave. The multiproc executor still receives that
-multi-request `DiffusionSchedulerOutput`, but routes it through
-`execute_request()` / per-rank `execute_model` envelopes instead of fused
-`execute_model_batch()`.
+request-batch support.
 
-Step mode keeps `StepRequestState` in the runner. New requests run
+**Distributed layerwise offload with AllGather (DLO DP concurrency)** is a
+separate multiproc dispatch path. It activates when
+`data_parallel_size > 1`, `enable_distributed_layerwise_offload` is set, and
+`dlo_use_allgather` is true. The engine then sets `dp_concurrent = True` and
+raises `scheduler.max_num_running_reqs` to `dp_size`, overriding the
+`max_num_seqs` value from `initialize()`. The scheduler still emits a
+multi-request `DiffusionSchedulerOutput`; the multiproc executor routes that
+wave through `execute_request()` instead of fused `execute_model_batch()`.
+
+Optional admission coalescing can fill a `dp_size` wave: when
+`request_batch_max_wait_ms > 0`, `RequestScheduler` may wait briefly before
+the first schedule of a wave (under `dp_concurrent`, the stable window is
+`min(0.3s, wait/2)`). With the default `request_batch_max_wait_ms == 0`,
+there is no wait.
+
+Before dispatch, `MultiprocDiffusionExecutor.execute_request()` rejects waves
+whose requests differ in sampling-parameter compatibility or `extra_args`
+(AllGather requires every DP rank to follow the same forward schedule). Each
+worker rank then picks one envelope from the wave:
+`req[dp_rank % len(req)]`, so every rank enters the same collective while
+computing different requests.
+
+**Step mode** keeps `StepRequestState` in the runner. New requests run
 `prepare_encode()` once; every tick runs `denoise_step()` and
 `step_scheduler()`; completed requests run `post_decode()`. The scheduler keeps
 only lifecycle and progress metadata—it does not hold model tensors.
 
-Step mode is also the path for streaming diffusion output. Enabling
+**Step mode is also the path for streaming diffusion output**. Enabling
 `streaming_output` turns on step execution if needed. Chunk-capable pipelines
 can emit intermediate outputs through the same request stream; final-only step
 pipelines still emit only the final result. If the pipeline does not implement
@@ -342,8 +363,13 @@ engine queues or change scheduler state.
 
 `DiffusionEngine.make_engine()` resolves the engine class, constructs the
 executor and scheduler, then normally runs a small dummy request to warm up the
-model. Some distributed offload layouts skip this request because every rank
-must enter the same collective. If initialization or warmup fails, the runtime
+model.
+
+Warmup is skipped only when distributed layerwise offload with AllGather
+is enabled (via `enable_distributed_layerwise_offload` and `dlo_use_allgather`)
+and `max(data_parallel_size, sequence_parallel_size) > 1`, because
+the dummy run sends one request while AllGather needs every shard rank to
+enter the same collective. If initialization or warmup fails, the runtime
 closes scheduler state and worker resources before returning the error.
 
 ### Cancellation
@@ -406,7 +432,10 @@ until completion, cancellation, or failure.
 ### DIFF-RUNTIME-INV-002: Execution follows scheduler output
 
 **Rule:** Executors and workers MUST execute scheduler decisions without
-admitting, reordering, or forwarding requests independently.
+admitting, reordering, or forwarding requests independently. Distributed
+layerwise offload with AllGather is an exception at dispatch time: the
+scheduler may schedule a multi-request wave, but each DP rank executes one
+envelope from that wave so every rank enters the same collective schedule.
 
 ### DIFF-RUNTIME-INV-003: Terminal cleanup is complete
 
