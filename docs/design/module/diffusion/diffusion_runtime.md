@@ -44,8 +44,8 @@ validation_paths:
   - tests/diffusion/test_inline_stage_diffusion_client.py
 upstream_refs:
   - diffusers.DiffusionPipeline
-last_reviewed: 2026-08-31
-last_verified_commit: 15c6ab8fa7cd12c55aa12ce9c2aedca25c2c016d
+last_reviewed: 2026-09-02
+last_verified_commit: e51fe6ec1b9a9a0e14bb1fdb296d61b6593b93c6
 ---
 
 # Diffusion runtime
