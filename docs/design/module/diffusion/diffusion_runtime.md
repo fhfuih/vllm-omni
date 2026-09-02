@@ -160,9 +160,10 @@ flowchart TB
 
 The boundary between policy and execution is
 `DiffusionSchedulerOutput`. It contains newly admitted request payloads,
-IDs for requests whose runner state is already cached, finished IDs, and
-optional KV-prefetch work. Executors and workers consume this output; they do
-not decide what should run next.
+IDs for requests whose runner state is already cached, finished IDs,
+optional KV-prefetch work, and per-request `diffusion_kv_metadata` on
+`NewRequestData` envelopes when paged Diffusion KV is enabled. Executors and
+workers consume this output; they do not decide what should run next.
 
 `BaseScheduler.initialize()` sets `max_num_running_reqs` from
 `od_config.max_num_seqs` (default 1). The engine may override that capacity
@@ -381,10 +382,12 @@ step-mode state when it receives a scheduler output that reports the finished
 request ID.
 
 On the multiproc request-mode async path, abort or consumer drop while output
-is still materializing must release the associated async-output bookkeeping so
-late results are not retained after the request ends. Dropping an output-stream
-consumer removes that consumer's queue. It does not take ownership of scheduler
-cleanup.
+is still materializing should release the associated async-output bookkeeping
+so late results are not retained after the request ends
+*(pending #6253/#6439/#6580)*. Today, an unconsumed `OUTPUT_READY` is cached
+by design until `wait_output_ready()` or executor teardown. Dropping an
+output-stream consumer removes that consumer's queue. It does not take
+ownership of scheduler cleanup.
 
 ### Shutdown and worker failure
 
@@ -392,8 +395,10 @@ cleanup.
 streams with an error, closes scheduler state, and shuts down the executor.
 
 - **`mp`**: the executor asks workers to stop, waits for them, then terminates
-  workers that miss the grace period. Shutdown also clears pending and cached
-  async-output state.
+  workers that miss the grace period. Shutdown marks unfinished RPC and
+  async-output futures as failed, then clears them. Completed async outputs
+  cached for later `wait_output_ready()` calls are dropped with the executor
+  object.
 - **`uni`**: the executor shuts down the in-process worker, drops the final
   model reference, and empties the accelerator cache so a later engine can reuse
   the device.
@@ -440,8 +445,8 @@ envelope from that wave so every rank enters the same collective schedule.
 ### DIFF-RUNTIME-INV-003: Terminal cleanup is complete
 
 **Rule:** Every terminal path MUST release request state, temporary tensors,
-hooks, and runtime-owned resources, including async-output bookkeeping when a
-request ends before its output is consumed.
+hooks, and runtime-owned resources. Async-output bookkeeping on abort or
+consumer drop before consumption is also required *(pending #6253/#6439/#6580)*.
 
 ### DIFF-RUNTIME-INV-004: Optional features use runtime hooks
 
