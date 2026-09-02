@@ -371,9 +371,6 @@ class DiffusionWorker:
                     format_gib(self.requested_memory),
                 )
             init_workspace_manager(self.device)
-            # Native connector construction must happen after distributed init;
-            # PR0 still uses an empty cache config and does not register pages.
-            init_worker_kv_connector(self.vllm_config)
 
     def _create_profiler(self) -> WorkerProfiler | None:
         profiler_config = self.od_config.profiler_config
@@ -529,6 +526,7 @@ class DiffusionWorker:
         self.vllm_config.model_config.max_model_len = resolved_max_model_len
         kv_cache_config = kv_cache_configs[self.rank]
         self.vllm_config.cache_config.num_gpu_blocks = kv_cache_config.num_blocks
+        init_worker_kv_connector(self.vllm_config, kv_cache_config)
         with self._maybe_get_memory_pool_context("kv_cache"):
             self.model_runner.set_kv_cache_config(kv_cache_config)
 

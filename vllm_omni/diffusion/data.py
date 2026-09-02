@@ -1101,6 +1101,8 @@ class OmniDiffusionConfig:
                     "native kv_transfer_config cannot be combined with legacy omni_kv_config transfer; "
                     "configure exactly one KV transfer path"
                 )
+            if self.diffusion_kv_mode is not DiffusionKVCacheMode.PAGED_SCHEDULER:
+                raise ValueError("native kv_transfer_config requires diffusion_kv_mode='paged_scheduler'")
             self.kv_transfer_config = parse_kv_transfer_config(self.kv_transfer_config)
 
         self.master_port = self._resolve_master_port()

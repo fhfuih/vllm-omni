@@ -232,7 +232,6 @@ class _ParallelEngineOverrides(_ParallelConfigEngineOverrides, total=False):
 
 class _ConnectorEngineOverrides(TypedDict, total=False):
     omni_kv_config: dict[str, Any]
-    kv_transfer_config: KVTransferConfig
 
 
 @dataclass(frozen=True)
@@ -479,7 +478,6 @@ class OmniStageConnectorConfig:
 
     async_chunk: bool = False
     omni_kv_config: dict[str, Any] | None = None
-    kv_transfer_config: KVTransferConfig | None = None
     stage_connector: dict[str, Any] = field(
         default_factory=lambda: {
             "name": "SharedMemoryConnector",
@@ -751,13 +749,7 @@ class _DiffusionConfigProjection:
 
     @field_validator("kv_transfer_config", mode="before")
     @classmethod
-    def _parse_kv_transfer_config_before_materialize(cls, value: Any) -> Any:
-        """Parse raw mappings before upstream ``KVTransferConfig`` auto-fills ``engine_id``.
-
-        Pydantic would otherwise construct ``KVTransferConfig`` first; its
-        ``__post_init__`` silently mints a UUID, and later
-        ``parse_kv_transfer_config`` can no longer reject a missing id.
-        """
+    def _normalize_kv_transfer_config(cls, value: Any) -> Any:
         from vllm_omni.diffusion.diffusion_kv.kv_connector import parse_kv_transfer_config
 
         return parse_kv_transfer_config(value)
@@ -1751,7 +1743,6 @@ def _build_connector_config(
     return cast(Any, OmniStageConnectorConfig)(
         async_chunk=bool(deploy.async_chunk),
         omni_kv_config=_copy_value(engine.get("omni_kv_config")),
-        kv_transfer_config=_copy_value(engine.get("kv_transfer_config")),
         output_connectors=_copy_value(output_connectors) if output_connectors else None,
         input_connectors=_copy_value(input_connectors) if input_connectors else None,
     )

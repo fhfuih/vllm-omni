@@ -31,7 +31,11 @@ def _fixed_master_port(monkeypatch) -> None:
 
 
 def test_config_roundtrip_to_kv_vllm_config() -> None:
-    od_config = OmniDiffusionConfig.from_kwargs(kv_transfer_config=dict(KV_TRANSFER_CONFIG))
+    od_config = OmniDiffusionConfig.from_kwargs(
+        diffusion_kv_mode="paged_scheduler",
+        diffusion_kv_max_rows_per_request=1,
+        kv_transfer_config=dict(KV_TRANSFER_CONFIG),
+    )
 
     assert isinstance(od_config.kv_transfer_config, KVTransferConfig)
     assert od_config.kv_transfer_config.engine_id == "dit-engine-1"
@@ -63,7 +67,11 @@ def test_diffusion_projection_preserves_explicit_engine_id() -> None:
     assert isinstance(projection.kv_transfer_config, KVTransferConfig)
     assert projection.kv_transfer_config.engine_id == "dit-engine-1"
 
-    od_config = OmniDiffusionConfig.from_kwargs(kv_transfer_config=projection.kv_transfer_config)
+    od_config = OmniDiffusionConfig.from_kwargs(
+        diffusion_kv_mode="paged_scheduler",
+        diffusion_kv_max_rows_per_request=1,
+        kv_transfer_config=projection.kv_transfer_config,
+    )
     assert od_config.kv_transfer_config is not None
     assert od_config.kv_transfer_config.engine_id == "dit-engine-1"
 
@@ -77,7 +85,11 @@ class _ConcreteScheduler(BaseScheduler):
 def test_scheduler_assembles_kv_stub_and_shuts_it_down() -> None:
     scheduler = _ConcreteScheduler()
     fake_connector = mock.Mock()
-    od_config = OmniDiffusionConfig.from_kwargs(kv_transfer_config=dict(KV_TRANSFER_CONFIG))
+    od_config = OmniDiffusionConfig.from_kwargs(
+        diffusion_kv_mode="paged_scheduler",
+        diffusion_kv_max_rows_per_request=1,
+        kv_transfer_config=dict(KV_TRANSFER_CONFIG),
+    )
 
     with mock.patch(
         "vllm_omni.diffusion.diffusion_kv.kv_connector.KVConnectorFactory.create_connector",
@@ -89,6 +101,11 @@ def test_scheduler_assembles_kv_stub_and_shuts_it_down() -> None:
     with mock.patch("vllm_omni.diffusion.diffusion_kv.kv_connector.shutdown_kv_connector") as shutdown:
         scheduler.close()
     shutdown.assert_called_once_with(scheduler_connector=fake_connector)
+
+
+def test_native_config_requires_paged_scheduler() -> None:
+    with pytest.raises(ValueError, match="requires diffusion_kv_mode='paged_scheduler'"):
+        OmniDiffusionConfig.from_kwargs(kv_transfer_config=dict(KV_TRANSFER_CONFIG))
 
 
 def test_kv_and_legacy_transfer_configs_are_exclusive() -> None:

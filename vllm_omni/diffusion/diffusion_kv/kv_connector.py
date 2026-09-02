@@ -135,12 +135,12 @@ def create_scheduler_kv_connector(
     return connector
 
 
-def init_worker_kv_connector(vllm_config: VllmConfig) -> None:
-    """Initialize the Worker-role connector after distributed setup."""
+def init_worker_kv_connector(vllm_config: VllmConfig, kv_cache_config: KVCacheConfig) -> None:
+    """Initialize the Worker-role connector with its rank-local cache plan."""
 
     if vllm_config.kv_transfer_config is None:
         return
-    ensure_kv_transfer_initialized(vllm_config, _empty_kv_cache_config())
+    ensure_kv_transfer_initialized(vllm_config, kv_cache_config)
     logger.info(
         "Initialized KV connector stub (WORKER role): connector=%s engine_id=%s",
         vllm_config.kv_transfer_config.kv_connector,
