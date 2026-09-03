@@ -151,9 +151,9 @@ def init_worker_kv_connector(vllm_config: VllmConfig, kv_cache_config: KVCacheCo
 def shutdown_kv_connector(*, scheduler_connector: KVConnectorBase_V1 | None = None) -> None:
     """Shutdown Worker and Scheduler connector objects idempotently."""
 
-    ensure_kv_transfer_shutdown()
     if scheduler_connector is not None:
         scheduler_connector.shutdown()
+    ensure_kv_transfer_shutdown()
 
 
 def _empty_kv_cache_config() -> KVCacheConfig:
@@ -176,5 +176,7 @@ def _validate_kv_transfer_config(config: KVTransferConfig) -> None:
     engine_id = config.engine_id
     if not isinstance(engine_id, str) or not engine_id.strip():
         raise ValueError("Diffusion native kv_transfer_config requires a non-empty engine_id")
+    if config.kv_connector is not None and config.kv_role is None:
+        raise ValueError("Diffusion native kv_transfer_config requires kv_role when kv_connector is set")
     if config.kv_role not in (None, "kv_consumer", "kv_producer", "kv_both"):
         raise ValueError(f"Unsupported KV connector role: {config.kv_role!r}")
