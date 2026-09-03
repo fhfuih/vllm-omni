@@ -172,7 +172,7 @@ compatible. See the
 formats and additional client examples.
 
 Streaming models can use model-specific streaming endpoints documented at
-[Streaming Video Generation API](../../serving/video_stream_generation_api.md).
+[Streaming Video Output API](../../serving/streaming_video_output_api.md).
 
 ## Python API
 
