@@ -34,6 +34,7 @@ def test_config_roundtrip_to_kv_vllm_config() -> None:
     od_config = OmniDiffusionConfig.from_kwargs(
         diffusion_kv_mode="paged_scheduler",
         diffusion_kv_max_rows_per_request=1,
+        max_model_len=64,
         kv_transfer_config=dict(KV_TRANSFER_CONFIG),
     )
 
@@ -88,14 +89,27 @@ def test_scheduler_assembles_kv_stub_and_shuts_it_down() -> None:
     od_config = OmniDiffusionConfig.from_kwargs(
         diffusion_kv_mode="paged_scheduler",
         diffusion_kv_max_rows_per_request=1,
+        max_model_len=64,
         kv_transfer_config=dict(KV_TRANSFER_CONFIG),
     )
+    kv_vllm_config = mock.Mock()
+    kv_vllm_config.model_config.max_model_len = 64
+    kv_vllm_config.max_in_flight_tokens = 64
 
-    with mock.patch(
-        "vllm_omni.diffusion.diffusion_kv.kv_connector.KVConnectorFactory.create_connector",
-        return_value=fake_connector,
+    with (
+        mock.patch(
+            "vllm_omni.diffusion.diffusion_kv.kv_connector.KVConnectorFactory.create_connector",
+            return_value=fake_connector,
+        ),
+        mock.patch("vllm_omni.diffusion.sched.base_scheduler.DiffusionKVCacheManager"),
     ):
-        scheduler.initialize(od_config)
+        scheduler.initialize(
+            od_config,
+            kv_cache_config=mock.sentinel.kv_cache_config,
+            scheduler_block_size=16,
+            hash_block_size=16,
+            kv_vllm_config=kv_vllm_config,
+        )
 
     assert scheduler.kv_connector is fake_connector
     with mock.patch("vllm_omni.diffusion.diffusion_kv.kv_connector.shutdown_kv_connector") as shutdown:
