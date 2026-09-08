@@ -196,10 +196,56 @@ class TestPromptUpdateExecution:
     ) -> None:
         """Helios has no camera handler; malformed / unsupported payloads are rejected."""
         runner = _make_diffusion_model_runner(pipeline=pipeline)
-        runner.state_cache["req-1"] = _make_diffusion_request_state()
+        state = _make_diffusion_request_state()
+        runner.state_cache["req-1"] = state
 
         with pytest.raises(ValueError):
             runner.submit_interaction("req-1", cast(Any, interaction))
+
+        # Rejected composite/malformed events must leave interaction queues unchanged.
+        pipeline.encode_prompt.assert_not_called()  # pyright: ignore[reportAttributeAccessIssue]
+        assert "prompt" not in state.interaction_sessions
+        assert "camera" not in state.interaction_sessions
+
+    def test_rejected_composite_leaves_existing_prompt_queue_unchanged(
+        self,
+        pipeline: HeliosPipeline,
+    ) -> None:
+        """Helios must not apply a composite prompt when camera modality is unsupported."""
+        runner = _make_diffusion_model_runner(pipeline=pipeline)
+        state = _make_diffusion_request_state()
+        runner.state_cache["req-1"] = state
+        runner.submit_interaction("req-1", _prompt_interaction("already-queued", event_id="prior"))
+        session = state.interaction_sessions["prompt"]
+        assert isinstance(session, PromptSession)
+        prior = session.pending_event
+        assert prior is not None
+        assert prior.event_id == "prior"
+        pipeline.encode_prompt.reset_mock()  # pyright: ignore[reportAttributeAccessIssue]
+
+        with pytest.raises(ValueError, match="camera"):
+            runner.submit_interaction(
+                "req-1",
+                cast(
+                    Any,
+                    {
+                        "event_id": "cam-and-prompt",
+                        "event": {
+                            "prompt": "should-not-replace",
+                            "multi_modal_data": {
+                                "camera": {"mode": "velocity", "data": {"actions": ["w"]}},
+                            },
+                        },
+                    },
+                ),
+            )
+
+        pipeline.encode_prompt.assert_not_called()  # pyright: ignore[reportAttributeAccessIssue]
+        pending = session.pending_event
+        assert pending is not None
+        assert pending.event_id == "prior"
+        assert pending.prompt == "already-queued"
+        assert "camera" not in state.interaction_sessions
 
     @pytest.mark.parametrize("model_class_name", ["HeliosPipeline", "HeliosPyramidPipeline"])
     def test_coordinator_registers_prompt_for_helios_aliases(

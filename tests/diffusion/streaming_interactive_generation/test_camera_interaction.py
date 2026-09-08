@@ -13,6 +13,7 @@ import torch
 from vllm_omni.diffusion.interaction.coordinator import InteractionCoordinator
 from vllm_omni.diffusion.interaction.mixin import InteractionMixin
 from vllm_omni.diffusion.interaction.modality_handlers.camera import CameraSession, SE3DeltaCameraHandler
+from vllm_omni.diffusion.interaction.modality_handlers.prompt import PromptSession
 from vllm_omni.diffusion.interaction.registry import STRUCTURED_HANDLER_REGISTRY
 from vllm_omni.diffusion.interaction.types import ChunkMediaSpec, resolve_event_frame_offset
 from vllm_omni.diffusion.models.lingbot_world.actions import integrate_lingbot_camera_actions
@@ -102,6 +103,45 @@ class TestCoordinatorResolution:
                 payload={"mode": "velocity", "data": {"actions": ["w"]}},
                 transition_chunks=None,
             )
+
+    def test_enqueue_parts_rejects_unsupported_modality_atomically(self) -> None:
+        """Unsupported tracks in a composite event must not mutate any queues."""
+        pipeline = _FakePromptPipeline()
+        od_config = SimpleNamespace(model_class_name="HeliosPipeline")
+        coordinator = InteractionCoordinator.build(pipeline, od_config)
+        state = _make_state()
+        coordinator.enqueue(
+            state,
+            modality="prompt",
+            event_id="prior",
+            received_at=0.0,
+            payload={"prompt": "already-queued"},
+            transition_chunks=1,
+        )
+        prior_session = state.interaction_sessions["prompt"]
+        assert isinstance(prior_session, PromptSession)
+        prior = prior_session.pending_event
+        assert prior is not None
+        pipeline.encode_prompt.reset_mock()
+
+        with pytest.raises(ValueError, match="camera"):
+            coordinator.enqueue_parts(
+                state,
+                parts=[
+                    ("prompt", {"prompt": "should-not-replace"}),
+                    ("camera", {"mode": "velocity", "data": {"actions": ["w"]}}),
+                ],
+                event_id="composite-bad",
+                received_at=1.0,
+                transition_chunks=2,
+            )
+
+        pipeline.encode_prompt.assert_not_called()
+        pending = prior_session.pending_event
+        assert pending is not None
+        assert pending.event_id == "prior"
+        assert pending.prompt == "already-queued"
+        assert "camera" not in state.interaction_sessions
 
 
 class TestCameraHandlers:

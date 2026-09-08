@@ -1402,37 +1402,29 @@ class DiffusionModelRunner(OmniConnectorModelRunnerMixin):
             raise ValueError("interaction event requires prompt and/or multi_modal_data")
         if not isinstance(event_id, str) or not event_id:
             raise ValueError("event_id must be non-empty")
-        if has_prompt and not coordinator.has_modality("prompt"):
-            raise ValueError(f"prompt_update is not supported by pipeline {self.od_config.model_class_name!r}")
+
+        parts: list[tuple[str, dict]] = []
+        if has_prompt:
+            if not coordinator.has_modality("prompt"):
+                raise ValueError(f"prompt_update is not supported by pipeline {self.od_config.model_class_name!r}")
+            prompt = event["prompt"]
+            if not isinstance(prompt, str) or not prompt:
+                raise ValueError("prompt must be non-empty")
+            parts.append(("prompt", {"prompt": prompt}))
+        if has_mm:
+            for modality, payload in multi_modal_data.items():
+                if not isinstance(payload, dict):
+                    raise ValueError(f"multi_modal_data[{modality!r}] must be an object")
+                parts.append((str(modality), payload))
 
         state = self.state_cache.get(request_id)
         if state is None:
             raise ValueError(f"No active request state for interaction: {request_id!r}")
 
-        received_at = time.monotonic()
-
-        if has_prompt:
-            prompt = event["prompt"]
-            if not isinstance(prompt, str) or not prompt:
-                raise ValueError("prompt must be non-empty")
-            coordinator.enqueue(
-                state,
-                modality="prompt",
-                event_id=event_id,
-                received_at=received_at,
-                payload={"prompt": prompt},
-                transition_chunks=transition_chunks,
-            )
-
-        if has_mm:
-            for modality, payload in multi_modal_data.items():
-                if not isinstance(payload, dict):
-                    raise ValueError(f"multi_modal_data[{modality!r}] must be an object")
-                coordinator.enqueue(
-                    state,
-                    modality=str(modality),
-                    event_id=event_id,
-                    received_at=received_at,
-                    payload=payload,
-                    transition_chunks=transition_chunks,
-                )
+        coordinator.enqueue_parts(
+            state,
+            parts=parts,
+            event_id=event_id,
+            received_at=time.monotonic(),
+            transition_chunks=transition_chunks,
+        )

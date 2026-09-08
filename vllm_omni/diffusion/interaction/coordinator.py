@@ -83,6 +83,35 @@ class InteractionCoordinator:
             transition_chunks=transition_chunks,
         )
 
+    def enqueue_parts(
+        self,
+        state: StepRequestState,
+        *,
+        parts: list[tuple[str, InteractionPayload]],
+        event_id: str,
+        received_at: float,
+        transition_chunks: int | None,
+    ) -> None:
+        """Ensure every modality is supported, then enqueue all parts.
+
+        Composite events must not partially mutate queues when a later track is
+        unsupported.
+        """
+        if not parts:
+            raise ValueError("interaction event requires prompt and/or multi_modal_data")
+
+        for modality, _payload in parts:
+            self.get_handler(modality)  # Resolve handlers. Happy path expects no ValueError
+        for modality, payload in parts:
+            self.enqueue(
+                state,
+                modality=modality,
+                event_id=event_id,
+                received_at=received_at,
+                payload=payload,
+                transition_chunks=transition_chunks,
+            )
+
     def apply_at_chunk_boundary(
         self,
         state: StepRequestState,
