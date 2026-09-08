@@ -348,25 +348,36 @@ def get_lingbot_world_pre_process_func(
             camera_actions = None
         else:
             action_path = extra_args.get("action_path")
-            if not isinstance(action_path, (str, os.PathLike)) or not str(action_path):
-                raise ValueError("action_path is required in sampling_params.extra_args.action_path.")
-            if not configured_action_root:
-                raise ValueError(
-                    "sampling_params.extra_args.action_path requires a trusted action root configured by "
-                    f"model_config.lingbot_action_root or {_ACTION_ROOT_ENV}."
+            if action_path is None or action_path == "":
+                # Stepwise / streaming sessions may omit a request-scoped camera
+                # script and instead drive motion via mid-generation camera
+                # interaction (idle hold until the first camera event).
+                if getattr(od_config, "step_execution", False) or getattr(od_config, "streaming_output", False):
+                    trajectory = None
+                    camera_actions = None
+                    camera_action_script = None
+                else:
+                    raise ValueError("action_path is required in sampling_params.extra_args.action_path.")
+            else:
+                if not isinstance(action_path, (str, os.PathLike)) or not str(action_path):
+                    raise ValueError("action_path is required in sampling_params.extra_args.action_path.")
+                if not configured_action_root:
+                    raise ValueError(
+                        "sampling_params.extra_args.action_path requires a trusted action root configured by "
+                        f"model_config.lingbot_action_root or {_ACTION_ROOT_ENV}."
+                    )
+                action_directory = resolve_trusted_action_directory(
+                    action_path,
+                    configured_action_root,
                 )
-            action_directory = resolve_trusted_action_directory(
-                action_path,
-                configured_action_root,
-            )
-            try:
-                trajectory = load_camera_trajectory(action_directory)
-            except OSError:
-                raise ValueError(
-                    "Unable to load camera trajectory from action_path; expected poses.npy and intrinsics.npy."
-                ) from None
-            camera_actions = None
-            camera_action_script = None
+                try:
+                    trajectory = load_camera_trajectory(action_directory)
+                except OSError:
+                    raise ValueError(
+                        "Unable to load camera trajectory from action_path; expected poses.npy and intrinsics.npy."
+                    ) from None
+                camera_actions = None
+                camera_action_script = None
 
         updated_prompt = dict(prompt)
         updated_multi_modal_data = dict(multi_modal_data)
@@ -675,8 +686,10 @@ class LingBotWorldCausalDMDPipeline(
         camera_sources = (
             int(camera_trajectory is not None) + int(camera_actions is not None) + int(camera_action_script is not None)
         )
-        if camera_sources != 1:
-            raise ValueError("LingBot pre-processing must materialize exactly one camera input.")
+        if camera_sources > 1:
+            raise ValueError("LingBot pre-processing must materialize at most one camera input.")
+        # Zero camera sources are allowed for stepwise camera-interaction sessions;
+        # request-mode ``forward`` still requires an explicit trajectory or actions.
 
         request_flow_shift = (
             extra_args["flow_shift"] if "flow_shift" in extra_args else getattr(self.scheduler.config, "shift", 5.0)
@@ -1080,6 +1093,11 @@ class LingBotWorldCausalDMDPipeline(
 
     def forward(self, req: DiffusionRequestBatch) -> DiffusionOutput:
         inputs = self._parse_request(req)
+        if inputs.camera_trajectory is None and inputs.camera_actions is None:
+            raise ValueError(
+                "LingBot request mode requires camera_trajectory or camera_actions; "
+                "omit them only for stepwise camera-interaction sessions."
+            )
         if inputs.camera_action_script is not None:
             # Only step execution walks a whole rollout inside one request, so
             # a per-chunk script here would be silently dropped rather than
@@ -1440,7 +1458,21 @@ class LingBotWorldCausalDMDPipeline(
                 dtype=extra["dtype"],
                 previous=previous,
             )
-        elif isinstance(camera_session, CameraSession) and camera_session.last_trajectory is not None:
+        elif self._interaction_coordinator is not None and self._interaction_coordinator.has_modality("camera"):
+            # Camera interaction path: the runner normally calls
+            # ``apply_interaction_at_chunk_boundary`` before ``prepare_next_chunk``,
+            # which leaves ``last_trajectory`` for this block. Chunk 0 is prepared
+            # from ``prepare_encode`` before any runner apply, and a session is only
+            # created on the first enqueue — so seed an idle CameraSession and apply
+            # once when the trajectory is still missing (stationary hold).
+            if not isinstance(camera_session, CameraSession):
+                camera_session = CameraSession()
+                state.interaction_sessions["camera"] = camera_session
+            if camera_session.last_trajectory is None:
+                self.apply_interaction_at_chunk_boundary(state)
+                camera_session = state.interaction_sessions.get("camera")
+            if not isinstance(camera_session, CameraSession) or camera_session.last_trajectory is None:
+                raise RuntimeError("LingBot camera interaction failed to produce a chunk trajectory.")
             # Mid-stream camera interaction: SE3DeltaCameraHandler already integrated
             # absolute C2W poses with the LingBot WASD algorithm for this chunk.
             action_trajectory = camera_session.last_trajectory
