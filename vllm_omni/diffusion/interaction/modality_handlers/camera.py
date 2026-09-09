@@ -1,13 +1,18 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: Copyright contributors to the vLLM-Omni project
-"""Camera modality interaction handlers."""
+"""Camera modality interaction handlers.
+
+Payload is structural SE(3): ``translation`` (xyz) + unit
+quaternion ``rotation`` (x, y, z, w). WASD-style key tokens belong in
+clients, not in the engine.
+"""
 
 from __future__ import annotations
 
 import math
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, ClassVar, cast
+from typing import ClassVar, cast
 
 import torch
 from typing_extensions import Self, override
@@ -23,24 +28,21 @@ from vllm_omni.diffusion.interaction.types import (
 )
 from vllm_omni.diffusion.worker.utils import StepRequestState
 
-if TYPE_CHECKING:
-    from vllm_omni.diffusion.models.lingbot_world.camera import CameraTrajectory
-
 Vec3 = tuple[float, float, float]
 # Unit quaternion in ``(x, y, z, w)`` order. Identity is ``(0, 0, 0, 1)``.
 Quat = tuple[float, float, float, float]
-LingBotActions = tuple[str, ...]
 
 _IDENTITY_QUAT: Quat = (0.0, 0.0, 0.0, 1.0)
-_DEFAULT_WIDTH = 832
-_DEFAULT_HEIGHT = 480
-_ACTION_ORDER = ("w", "a", "s", "d", "i", "j", "k", "l")
-_VALID_ACTIONS = frozenset(_ACTION_ORDER)
 
 
 @dataclass
 class CameraPose:
-    """Canonical absolute camera pose used by the shared timeline."""
+    """Canonical absolute camera pose used by the shared timeline.
+
+    Coordinates follow Blender semantics: ``+X`` right, ``+Y`` forward,
+    ``+Z`` up. Session start is the identity transform; ``target`` poses are
+    relative to that origin.
+    """
 
     translation: Vec3 = (0.0, 0.0, 0.0)
     rotation: Quat = _IDENTITY_QUAT
@@ -78,10 +80,8 @@ class CameraPose:
 class QueuedCameraEvent(InteractionEvent):
     """Timestamped camera command waiting for the next chunk boundary."""
 
-    # Absolute pose for ``target`` mode; unused for ``velocity``.
+    # Absolute pose for ``target``; per-frame SE3 delta for ``velocity``.
     pose: CameraPose = field(default_factory=CameraPose.identity)
-    # Held WASD/IJKL keys for ``velocity`` mode; unused for ``target``.
-    actions: LingBotActions = ()
 
 
 @dataclass
@@ -89,49 +89,40 @@ class CameraSession(InteractionSession):
     """Request-local camera timeline under ``state.interaction_sessions['camera']``."""
 
     current_pose: CameraPose = field(default_factory=CameraPose.identity)
-    current_c2w: torch.Tensor = field(default_factory=lambda: torch.eye(4, dtype=torch.float64))
-    current_pitch: float = 0.0
     pending_events: list[QueuedCameraEvent] = field(default_factory=list)
     # In-flight command; ``elapsed_transition_chunks`` lives on the event.
     active_event: QueuedCameraEvent | None = None
     target_source: CameraPose | None = None
-    # Absolute C2W trajectory produced for the most recent chunk boundary.
-    last_trajectory: CameraTrajectory | None = None
+    # Absolute C2W poses ``[T, 4, 4]`` for the most recent chunk (pipeline may
+    # rebuild model-native conditioning from these without double-relativizing).
+    last_absolute_poses: torch.Tensor | None = None
 
 
 class SE3DeltaCameraHandler(InteractionHandler):
-    """Camera timeline that integrates LingBot WASD/IJKL motion into SE3 poses.
+    """Generic camera timeline that projects absolute poses to f2f SE3 deltas.
 
-    Velocity commands carry held action keys and advance with
-    :func:`integrate_lingbot_camera_actions` (movement 0.05, pitch 4deg, yaw
-    6deg). Target commands still lerp an absolute pose across chunks.
+    * ``mode=target``: lerp toward an absolute pose (relative to session start).
+    * ``mode=velocity``: hold a structural per-frame SE3 delta until replaced.
 
     ``state.conditioning['camera']`` receives dense frame-to-frame 4x4 deltas
-    ``[T, 4, 4]``. The absolute :class:`CameraTrajectory` for the chunk is also
-    stored on ``CameraSession.last_trajectory`` for model-specific consumers
-    such as LingBot World 2 step execution.
+    ``[T, 4, 4]``. Absolute poses for the chunk are stored on
+    ``CameraSession.last_absolute_poses`` for pipelines that need them (e.g.
+    LingBot plucker embedding via ``prepare_next_chunk``).
     """
 
     modality: ClassVar[str] = "camera"
     needs_chunk_media: ClassVar[bool] = True
+    # Camera conditioning must exist every chunk; apply creates the session and
+    # materializes identity/hold poses before any client enqueue.
+    lazy_initialize_session: ClassVar[bool] = False
     default_transition_chunks: ClassVar[int] = 1
-
-    def __init__(self, *, width: int = _DEFAULT_WIDTH, height: int = _DEFAULT_HEIGHT) -> None:
-        if width <= 0 or height <= 0:
-            raise ValueError("camera handler width/height must be positive")
-        self._width = int(width)
-        self._height = int(height)
 
     @classmethod
     @override
     def from_pipeline(cls, pipeline: object) -> Self:
-        width = _DEFAULT_WIDTH
-        height = _DEFAULT_HEIGHT
-        if hasattr(pipeline, "_ar_width"):
-            width = int(pipeline._ar_width)
-        if hasattr(pipeline, "_ar_height"):
-            height = int(pipeline._ar_height)
-        return cls(width=width, height=height)
+        """It doesn't need anything from the pipeline (e.g., `encode_prompt` method)"""
+        del pipeline
+        return cls()
 
     @override
     def enqueue(
@@ -153,16 +144,18 @@ class SE3DeltaCameraHandler(InteractionHandler):
         data = payload.get("data")
         if not isinstance(data, Mapping):
             raise ValueError("camera data must be an object")
+        if "actions" in data:
+            raise ValueError(
+                "camera data.actions (WASD keys) is not accepted by the engine; "
+                "send structural translation/rotation instead"
+            )
 
-        pose = CameraPose.identity()
-        actions: LingBotActions = ()
+        pose = _parse_pose(data)
         if camera_mode == "target":
-            pose = _parse_pose(data)
             duration = self.default_transition_chunks if transition_chunks is None else int(transition_chunks)
             if duration < 0:
                 raise ValueError("transition_chunks must be >= 0")
         else:
-            actions = _parse_actions(data.get("actions", ()))
             duration = 0
 
         session = _get_camera_session(state)
@@ -174,7 +167,6 @@ class SE3DeltaCameraHandler(InteractionHandler):
                     mode=camera_mode,
                     transition_chunks=duration,
                     pose=pose,
-                    actions=actions,
                 )
             )
 
@@ -199,8 +191,10 @@ class SE3DeltaCameraHandler(InteractionHandler):
                 fps=fps,
                 boundary_at=boundary_at,
             )
-            trajectory = self._poses_to_trajectory(samples)
-            session.last_trajectory = trajectory
+            if samples:
+                session.last_absolute_poses = torch.stack([p.as_matrix() for p in samples], dim=0)
+            else:
+                session.last_absolute_poses = torch.zeros((0, 4, 4), dtype=torch.float64)
             state.conditioning[self.modality] = self._project(samples)
 
         return InteractionChunkMetadata(
@@ -286,7 +280,6 @@ class SE3DeltaCameraHandler(InteractionHandler):
         event = session.active_event
         event_id = event.event_id
         session.current_pose = event.pose.clone()
-        session.current_c2w = session.current_pose.as_matrix()
         session.active_event = None
         session.target_source = None
         return event_id
@@ -307,48 +300,13 @@ class SE3DeltaCameraHandler(InteractionHandler):
             event.elapsed_transition_chunks += 1.0 / float(total_num_frames_this_chunk)
             alpha = min(1.0, event.elapsed_transition_chunks / float(duration))
             session.current_pose = _lerp_pose(source, target, alpha)
-            session.current_c2w = session.current_pose.as_matrix()
             if event.elapsed_transition_chunks >= duration:
                 return self._clear_active_target(session)
             return None
 
-        # Velocity: integrate one latent frame of held WASD/IJKL keys using the
-        # LingBot World camera algorithm (same constants as SGLang's adapter).
-        from vllm_omni.diffusion.models.lingbot_world.actions import integrate_lingbot_camera_actions
-
-        trajectory, session.current_pitch = integrate_lingbot_camera_actions(
-            [event.actions],
-            width=self._width,
-            height=self._height,
-            initial_pose=session.current_c2w,
-            initial_pitch=session.current_pitch,
-        )
-        session.current_c2w = trajectory.poses[0].detach().cpu().double().clone()
-        session.current_pose = CameraPose.from_matrix(session.current_c2w)
+        # Velocity: apply the held structural SE3 delta once per output frame.
+        session.current_pose = _compose_pose(session.current_pose, event.pose)
         return None
-
-    def _poses_to_trajectory(self, poses: list[CameraPose]) -> CameraTrajectory:
-        from vllm_omni.diffusion.models.lingbot_world.camera import CameraTrajectory
-
-        if not poses:
-            return CameraTrajectory(
-                poses=torch.zeros((0, 4, 4), dtype=torch.float64),
-                intrinsics=torch.zeros((0, 4), dtype=torch.float32),
-            )
-        mats = torch.stack([p.as_matrix() for p in poses], dim=0)
-        reference_intrinsics = torch.tensor(
-            (
-                500.0 * _DEFAULT_WIDTH / self._width,
-                500.0 * _DEFAULT_HEIGHT / self._height,
-                _DEFAULT_WIDTH / 2,
-                _DEFAULT_HEIGHT / 2,
-            ),
-            dtype=torch.float32,
-        )
-        return CameraTrajectory(
-            poses=mats,
-            intrinsics=reference_intrinsics.repeat(len(poses), 1),
-        )
 
     def _project(self, poses: list[CameraPose]) -> torch.Tensor:
         """Pack absolute poses into dense frame-to-frame 4x4 SE3 deltas."""
@@ -391,17 +349,6 @@ def _parse_pose(data: Mapping[str, object]) -> CameraPose:
     return CameraPose(translation=translation, rotation=rotation)
 
 
-def _parse_actions(value: object) -> LingBotActions:
-    if not isinstance(value, Sequence) or isinstance(value, (str, bytes)):
-        raise ValueError("camera actions must be a sequence of LingBot action keys")
-    actions: set[str] = set()
-    for item in value:
-        if not isinstance(item, str) or item.lower() not in _VALID_ACTIONS:
-            raise ValueError("camera actions supports only W/A/S/D/I/J/K/L keys")
-        actions.add(item.lower())
-    return tuple(action for action in _ACTION_ORDER if action in actions)
-
-
 def _lerp(a: float, b: float, alpha: float) -> float:
     return a + (b - a) * alpha
 
@@ -415,6 +362,11 @@ def _lerp_pose(source: CameraPose, target: CameraPose, alpha: float) -> CameraPo
         ),
         rotation=_quat_nlerp(source.rotation, target.rotation, alpha),
     )
+
+
+def _compose_pose(base: CameraPose, delta: CameraPose) -> CameraPose:
+    """Apply ``delta`` after ``base`` in the session frame (T_new = T_base @ T_delta)."""
+    return CameraPose.from_matrix(base.as_matrix() @ delta.as_matrix())
 
 
 def _quat_normalize(q: Quat) -> Quat:

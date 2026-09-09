@@ -922,10 +922,10 @@ class LingBotWorldCausalDMDPipeline(
                 ),
             )
             drop_anchor = True
-        elif inputs.camera_actions is not None:
-            # The action integrator returns post-action poses. Keep the first
-            # action visible to framewise-delta conditioning by prepending its
-            # known pre-action state (identity for a new realtime session).
+        elif inputs.camera_actions is not None or latent_aligned:
+            # Action/interaction integrators return post-action poses. Prepend the
+            # known pre-action state (identity for a new session) so the first
+            # pose still contributes a framewise delta.
             identity = torch.eye(
                 4,
                 device=trajectory.poses.device,
@@ -1093,11 +1093,6 @@ class LingBotWorldCausalDMDPipeline(
 
     def forward(self, req: DiffusionRequestBatch) -> DiffusionOutput:
         inputs = self._parse_request(req)
-        if inputs.camera_trajectory is None and inputs.camera_actions is None:
-            raise ValueError(
-                "LingBot request mode requires camera_trajectory or camera_actions; "
-                "omit them only for stepwise camera-interaction sessions."
-            )
         if inputs.camera_action_script is not None:
             # Only step execution walks a whole rollout inside one request, so
             # a per-chunk script here would be silently dropped rather than
@@ -1106,6 +1101,11 @@ class LingBotWorldCausalDMDPipeline(
                 "camera_action_script is read only by LingBot step execution; "
                 "request mode takes one three-frame camera_actions control per "
                 "block, or a camera_trajectory for the request."
+            )
+        if inputs.camera_trajectory is None and inputs.camera_actions is None:
+            raise ValueError(
+                "LingBot request mode requires camera_trajectory or camera_actions; "
+                "omit them only for stepwise camera-interaction sessions."
             )
         tick = ARDiffusionTickRequest.from_extra_args(req.sampling_params.extra_args)
         if tick is not None and self._ar_diffusion_kv_state is None:
@@ -1419,7 +1419,6 @@ class LingBotWorldCausalDMDPipeline(
             "camera_embedding_cache": camera_embedding_cache,
         }
         self._ar_text_caches(prompt_embeds, invalidate=False)
-        self._prepare_next_chunk(state)
         return state
 
     def _prepare_next_chunk(self, state: StepRequestState) -> None:
@@ -1435,7 +1434,6 @@ class LingBotWorldCausalDMDPipeline(
         previous = extra.get("camera_tail")
         from vllm_omni.diffusion.interaction.modality_handlers.camera import CameraSession
 
-        camera_session = state.interaction_sessions.get("camera")
         if extra.get("camera_action_script") is not None:
             chunk_actions = extra["camera_action_script"][state.chunk_index]
             action_trajectory, camera_pitch = integrate_lingbot_camera_actions(
@@ -1459,36 +1457,39 @@ class LingBotWorldCausalDMDPipeline(
                 previous=previous,
             )
         elif self._interaction_coordinator is not None and self._interaction_coordinator.has_modality("camera"):
-            # Camera interaction path: the runner normally calls
-            # ``apply_interaction_at_chunk_boundary`` before ``prepare_next_chunk``,
-            # which leaves ``last_trajectory`` for this block. Chunk 0 is prepared
-            # from ``prepare_encode`` before any runner apply, and a session is only
-            # created on the first enqueue — so seed an idle CameraSession and apply
-            # once when the trajectory is still missing (stationary hold).
-            if not isinstance(camera_session, CameraSession):
-                camera_session = CameraSession()
-                state.interaction_sessions["camera"] = camera_session
-            if camera_session.last_trajectory is None:
-                self.apply_interaction_at_chunk_boundary(state)
-                camera_session = state.interaction_sessions.get("camera")
-            if not isinstance(camera_session, CameraSession) or camera_session.last_trajectory is None:
-                raise RuntimeError("LingBot camera interaction failed to produce a chunk trajectory.")
-            # Mid-stream camera interaction: SE3DeltaCameraHandler already integrated
-            # absolute C2W poses with the LingBot WASD algorithm for this chunk.
-            action_trajectory = camera_session.last_trajectory
-            if int(action_trajectory.poses.shape[0]) != block_frames:
+            # Poses come from the latest boundary apply: ``prepare_encode`` for
+            # chunk 0, the diffusion runner for later chunks. This method only
+            # digests them — it does not apply interactions itself.
+            camera_session = state.interaction_sessions.get("camera")
+            if not isinstance(camera_session, CameraSession) or camera_session.last_absolute_poses is None:
+                raise RuntimeError(
+                    "LingBot camera interaction requires apply_interaction_at_chunk_boundary before prepare_next_chunk."
+                )
+            absolute_poses = camera_session.last_absolute_poses
+            if int(absolute_poses.shape[0]) != block_frames:
                 raise ValueError(
                     "camera interaction must produce exactly one pose per latent frame; "
-                    f"got {int(action_trajectory.poses.shape[0])}, expected {block_frames}."
+                    f"got {int(absolute_poses.shape[0])}, expected {block_frames}."
                 )
-            extra["camera_pitch"] = float(camera_session.current_pitch)
-            # Non-None camera_actions selects the latent-frame trajectory path in
-            # ``_prepare_camera`` (as opposed to pixel-frame interpolation).
-            placeholder_actions = ((),) * block_frames
+            # Model-native digest: absolute C2W + reference-frame intrinsics, then
+            # the existing plucker path (which relativizes internally).
+            reference_intrinsics = torch.tensor(
+                (
+                    500.0 * 832 / inputs.width,
+                    500.0 * 480 / inputs.height,
+                    832 / 2,
+                    480 / 2,
+                ),
+                dtype=torch.float32,
+            ).repeat(block_frames, 1)
+            action_trajectory = CameraTrajectory(
+                poses=absolute_poses.to(dtype=torch.float32),
+                intrinsics=reference_intrinsics,
+            )
             chunk_inputs = replace(
                 inputs,
                 camera_trajectory=action_trajectory,
-                camera_actions=placeholder_actions,
+                camera_actions=None,
                 num_frames=(block_frames - 1) * self.vae_scale_factor_temporal + 1,
                 num_latent_frames=block_frames,
             )
@@ -1496,9 +1497,8 @@ class LingBotWorldCausalDMDPipeline(
                 chunk_inputs,
                 dtype=extra["dtype"],
                 previous=previous,
+                latent_aligned=True,
             )
-            # Keep session c2w aligned with the pose tail used for the next chunk.
-            camera_session.current_c2w = camera_tail.poses[-1].detach().cpu().double().clone()
         elif extra.get("camera_embedding_cache") is not None:
             # Same slice request mode takes from its one full-trajectory
             # embedding, so both paths condition a block identically.

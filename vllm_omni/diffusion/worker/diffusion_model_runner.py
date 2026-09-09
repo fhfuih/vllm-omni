@@ -1040,6 +1040,14 @@ class DiffusionModelRunner(OmniConnectorModelRunnerMixin):
                     clear_pipeline_stage_durations(self.pipeline)
                     # encode
                     self.pipeline.prepare_encode(state)
+                    # Before chunk-0: some interactions (e.g., camera) need initial session data.
+                    if supports_interaction_apply(self.pipeline) and state.chunk_index == 0:
+                        pipe = cast(SupportsInteractionApply, self.pipeline)
+                        assert self._interaction_coordinator is not None, "Model not loaded. Call load_model() first."
+                        state.interaction_chunk_metadata = self._interaction_coordinator.maybe_prepare_initial_session(
+                            state, pipe
+                        )
+                        pipe.prepare_next_chunk(state)
                     merge_stage_durations(
                         state,
                         consume_pipeline_stage_durations(self.pipeline),
@@ -1375,18 +1383,13 @@ class DiffusionModelRunner(OmniConnectorModelRunnerMixin):
         interaction: OmniInteractionPrompt,
     ) -> None:
         """Route a midway interaction through the pipeline interaction coordinator."""
-        assert self.pipeline is not None, "Model not loaded. Call load_model() first."
+        assert self.pipeline is not None and self._interaction_coordinator is not None, (
+            "Model not loaded. Call load_model() first."
+        )
         if not self.od_config.streaming_output:
             raise ValueError("submit_interaction requires streaming_output=True")
         if not self._supports_step_mode():
             raise ValueError("submit_interaction requires step execution support")
-
-        coordinator = self._interaction_coordinator
-        if coordinator is None:
-            coordinator = InteractionCoordinator.build(self.pipeline, self.od_config)
-            self._interaction_coordinator = coordinator
-            if hasattr(self.pipeline, "_interaction_coordinator"):
-                self.pipeline._interaction_coordinator = coordinator
 
         event = interaction.get("event")
         event_id = interaction.get("event_id")
@@ -1405,7 +1408,7 @@ class DiffusionModelRunner(OmniConnectorModelRunnerMixin):
 
         parts: list[tuple[str, dict]] = []
         if has_prompt:
-            if not coordinator.has_modality("prompt"):
+            if not self._interaction_coordinator.has_modality("prompt"):
                 raise ValueError(f"prompt_update is not supported by pipeline {self.od_config.model_class_name!r}")
             prompt = event["prompt"]
             if not isinstance(prompt, str) or not prompt:
@@ -1421,7 +1424,7 @@ class DiffusionModelRunner(OmniConnectorModelRunnerMixin):
         if state is None:
             raise ValueError(f"No active request state for interaction: {request_id!r}")
 
-        coordinator.enqueue_parts(
+        self._interaction_coordinator.enqueue_parts(
             state,
             parts=parts,
             event_id=event_id,

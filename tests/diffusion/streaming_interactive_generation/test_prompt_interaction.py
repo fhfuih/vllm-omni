@@ -108,7 +108,12 @@ def _make_diffusion_model_runner(
     # instances; unit tests of submit_interaction stub this. Stepwise path tests
     # rebind to the real method.
     runner._supports_step_mode = lambda: True
-    runner._interaction_coordinator = None
+    # Mirror load_model: coordinator is always present once the runner is "loaded".
+    # Build now so handlers capture the pipeline's current encode_prompt (tests may
+    # rebind the mock before calling this helper).
+    runner._interaction_coordinator = InteractionCoordinator.build(pipeline, runner.od_config)
+    if hasattr(pipeline, "_interaction_coordinator"):
+        pipeline._interaction_coordinator = runner._interaction_coordinator
     return runner
 
 
@@ -174,7 +179,10 @@ class TestPromptUpdateExecution:
                 "event_id": "cam-only",
                 "event": {
                     "multi_modal_data": {
-                        "camera": {"mode": "velocity", "data": {"actions": ["w"]}},
+                        "camera": {
+                            "mode": "velocity",
+                            "data": {"translation": [0.0, 0.05, 0.0], "rotation": [0.0, 0.0, 0.0, 1.0]},
+                        },
                     }
                 },
             },
@@ -183,7 +191,10 @@ class TestPromptUpdateExecution:
                 "event": {
                     "prompt": "updated",
                     "multi_modal_data": {
-                        "camera": {"mode": "velocity", "data": {"actions": ["w"]}},
+                        "camera": {
+                            "mode": "velocity",
+                            "data": {"translation": [0.0, 0.05, 0.0], "rotation": [0.0, 0.0, 0.0, 1.0]},
+                        },
                     },
                 },
             },
@@ -233,7 +244,13 @@ class TestPromptUpdateExecution:
                         "event": {
                             "prompt": "should-not-replace",
                             "multi_modal_data": {
-                                "camera": {"mode": "velocity", "data": {"actions": ["w"]}},
+                                "camera": {
+                                    "mode": "velocity",
+                                    "data": {
+                                        "translation": [0.0, 0.05, 0.0],
+                                        "rotation": [0.0, 0.0, 0.0, 1.0],
+                                    },
+                                },
                             },
                         },
                     },

@@ -16,10 +16,14 @@ from vllm_omni.diffusion.interaction.modality_handlers.camera import CameraSessi
 from vllm_omni.diffusion.interaction.modality_handlers.prompt import PromptSession
 from vllm_omni.diffusion.interaction.registry import STRUCTURED_HANDLER_REGISTRY
 from vllm_omni.diffusion.interaction.types import ChunkMediaSpec, resolve_event_frame_offset
-from vllm_omni.diffusion.models.lingbot_world.actions import integrate_lingbot_camera_actions
 from vllm_omni.diffusion.worker.utils import StepRequestState
 
 pytestmark = [pytest.mark.core_model, pytest.mark.diffusion, pytest.mark.cpu]
+
+_FORWARD_VELOCITY = {
+    "mode": "velocity",
+    "data": {"translation": [0.0, 0.05, 0.0], "rotation": [0.0, 0.0, 0.0, 1.0]},
+}
 
 
 class _FakePromptPipeline(InteractionMixin):
@@ -37,11 +41,9 @@ class _FakePromptPipeline(InteractionMixin):
 
 
 class _FakeLingBotPipeline(InteractionMixin):
-    """Minimal pipeline stub exposing LingBot AR geometry for camera binding."""
+    """Minimal pipeline stub for LingBot camera registration."""
 
     def __init__(self) -> None:
-        self._ar_width = 832
-        self._ar_height = 480
         self._interaction_coordinator = None
 
     def peek_chunk_media(self, state: StepRequestState) -> ChunkMediaSpec:
@@ -86,8 +88,40 @@ class TestCoordinatorResolution:
         assert coordinator.has_modality("camera")
         handler = coordinator.get_handler("camera")
         assert isinstance(handler, SE3DeltaCameraHandler)
-        assert handler._width == 832
-        assert handler._height == 480
+        assert handler.lazy_initialize_session is False
+
+    def test_non_lazy_camera_apply_creates_session_without_enqueue(self) -> None:
+        """Camera apply must run before any enqueue to materialize identity poses."""
+        pipeline = _FakeLingBotPipeline()
+        od_config = SimpleNamespace(model_class_name="LingBotWorldCausalDMDPipeline")
+        coordinator = InteractionCoordinator.build(pipeline, od_config)
+        state = _make_state()
+
+        assert "camera" not in state.interaction_sessions
+        meta = coordinator.maybe_prepare_initial_session(state, pipeline)
+        session = state.interaction_sessions["camera"]
+        assert isinstance(session, CameraSession)
+        assert session.last_absolute_poses is not None
+        assert session.last_absolute_poses.shape == (3, 4, 4)
+        assert state.conditioning["camera"].shape == (3, 4, 4)
+        assert meta.started_event_ids == []
+        assert meta.active_event_ids == []
+
+    def test_lazy_prompt_apply_skips_without_enqueue(self) -> None:
+        pipeline = _FakePromptPipeline()
+        od_config = SimpleNamespace(model_class_name="HeliosPipeline")
+        coordinator = InteractionCoordinator.build(pipeline, od_config)
+        state = _make_state()
+
+        meta = coordinator.apply_at_chunk_boundary(state, boundary_at=0.0, chunk_index=0)
+        assert "prompt" not in state.interaction_sessions
+        assert meta.started_event_ids == []
+        assert meta.active_event_ids == []
+        assert meta.completed_event_ids == []
+
+        initial = coordinator.maybe_prepare_initial_session(state, pipeline)
+        assert "prompt" not in state.interaction_sessions
+        assert initial.started_event_ids == []
 
     def test_unsupported_modality_includes_model_context(self) -> None:
         pipeline = _FakePromptPipeline()
@@ -100,7 +134,7 @@ class TestCoordinatorResolution:
                 modality="camera",
                 event_id="cam-1",
                 received_at=0.0,
-                payload={"mode": "velocity", "data": {"actions": ["w"]}},
+                payload=_FORWARD_VELOCITY,
                 transition_chunks=None,
             )
 
@@ -129,7 +163,7 @@ class TestCoordinatorResolution:
                 state,
                 parts=[
                     ("prompt", {"prompt": "should-not-replace"}),
-                    ("camera", {"mode": "velocity", "data": {"actions": ["w"]}}),
+                    ("camera", _FORWARD_VELOCITY),
                 ],
                 event_id="composite-bad",
                 received_at=1.0,
@@ -145,6 +179,18 @@ class TestCoordinatorResolution:
 
 
 class TestCameraHandlers:
+    def test_rejects_wasd_actions_payload(self) -> None:
+        handler = SE3DeltaCameraHandler()
+        state = _make_state()
+        with pytest.raises(ValueError, match="actions"):
+            handler.enqueue(
+                state,
+                event_id="cam-wasd",
+                received_at=0.0,
+                payload={"mode": "velocity", "data": {"actions": ["w"]}},
+                transition_chunks=None,
+            )
+
     def test_target_transition_progress_and_se3_projection(self) -> None:
         handler = SE3DeltaCameraHandler()
         state = _make_state()
@@ -188,8 +234,8 @@ class TestCameraHandlers:
         assert isinstance(session, CameraSession)
         assert session.active_event is None
         assert session.current_pose.translation[2] == pytest.approx(3.0)
-        assert session.last_trajectory is not None
-        assert session.last_trajectory.poses.shape == (4, 4, 4)
+        assert session.last_absolute_poses is not None
+        assert session.last_absolute_poses.shape == (4, 4, 4)
 
     def test_single_chunk_target_completes_once(self) -> None:
         handler = SE3DeltaCameraHandler()
@@ -229,14 +275,14 @@ class TestCameraHandlers:
         assert meta2.active_event_ids == []
         assert meta2.completed_event_ids == []
 
-    def test_velocity_uses_lingbot_integrate_algorithm(self) -> None:
-        handler = SE3DeltaCameraHandler(width=832, height=480)
+    def test_velocity_composes_structural_se3_delta(self) -> None:
+        handler = SE3DeltaCameraHandler()
         state = _make_state()
         handler.enqueue(
             state,
             event_id="vel-1",
             received_at=0.0,
-            payload={"mode": "velocity", "data": {"actions": ["w"]}},
+            payload=_FORWARD_VELOCITY,
             transition_chunks=None,
         )
 
@@ -246,28 +292,23 @@ class TestCameraHandlers:
         assert meta0.active_event_ids == ["vel-1"]
         session = state.interaction_sessions["camera"]
         assert isinstance(session, CameraSession)
-        expected, expected_pitch = integrate_lingbot_camera_actions(
-            (("w",), ("w",), ("w",)),
-            width=832,
-            height=480,
+        assert session.current_pose.translation[1] == pytest.approx(0.15)
+        assert session.last_absolute_poses is not None
+        assert session.last_absolute_poses.shape == (3, 4, 4)
+        conditioning = state.conditioning["camera"]
+        assert conditioning.shape == (3, 4, 4)
+        torch.testing.assert_close(conditioning[0], torch.eye(4), atol=1e-6, rtol=0)
+        torch.testing.assert_close(
+            conditioning[1, :3, 3],
+            torch.tensor([0.0, 0.05, 0.0], dtype=torch.float32),
+            atol=1e-6,
+            rtol=0,
         )
-        torch.testing.assert_close(session.current_c2w, expected.poses[-1], atol=1e-6, rtol=0)
-        assert session.current_pitch == pytest.approx(expected_pitch)
-        assert session.last_trajectory is not None
-        torch.testing.assert_close(session.last_trajectory.poses, expected.poses, atol=1e-6, rtol=0)
 
         meta1 = handler.apply_at_chunk_boundary(state, chunk_index=1, num_frames=2, fps=16.0, boundary_at=0.125)
         assert meta1 is not None
         assert meta1.active_event_ids == ["vel-1"]
-        expected2, expected_pitch2 = integrate_lingbot_camera_actions(
-            (("w",), ("w",)),
-            width=832,
-            height=480,
-            initial_pose=expected.poses[-1],
-            initial_pitch=expected_pitch,
-        )
-        torch.testing.assert_close(session.current_c2w, expected2.poses[-1], atol=1e-6, rtol=0)
-        assert session.current_pitch == pytest.approx(expected_pitch2)
+        assert session.current_pose.translation[1] == pytest.approx(0.25)
 
     def test_velocity_completed_when_replaced_by_target(self) -> None:
         handler = SE3DeltaCameraHandler()
@@ -276,7 +317,7 @@ class TestCameraHandlers:
             state,
             event_id="vel-1",
             received_at=0.0,
-            payload={"mode": "velocity", "data": {"actions": ["w"]}},
+            payload=_FORWARD_VELOCITY,
             transition_chunks=None,
         )
         meta0 = handler.apply_at_chunk_boundary(
@@ -320,7 +361,7 @@ class TestCameraHandlers:
             state,
             event_id="vel",
             received_at=0.0,
-            payload={"mode": "velocity", "data": {"actions": ["w"]}},
+            payload=_FORWARD_VELOCITY,
             transition_chunks=None,
         )
         handler.enqueue(
@@ -348,7 +389,7 @@ class TestCameraHandlers:
         session = state.interaction_sessions["camera"]
         assert isinstance(session, CameraSession)
         assert session.active_event is None
-        assert session.current_pose.translation[2] == pytest.approx(0.0)
+        assert session.current_pose.translation[1] == pytest.approx(0.0)
 
 
 class TestResolveEventFrameOffset:
