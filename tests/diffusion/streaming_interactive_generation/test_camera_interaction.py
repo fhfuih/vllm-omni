@@ -300,7 +300,7 @@ class TestCameraHandlers:
         torch.testing.assert_close(conditioning[0], torch.eye(4), atol=1e-6, rtol=0)
         torch.testing.assert_close(
             conditioning[1, :3, 3],
-            torch.tensor([0.0, 0.0, 0.05], dtype=torch.float32),
+            torch.tensor([0.0, 0.0, 0.05], dtype=torch.float64),
             atol=1e-6,
             rtol=0,
         )

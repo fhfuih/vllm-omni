@@ -311,9 +311,9 @@ class SE3DeltaCameraHandler(InteractionHandler):
     def _project(self, poses: list[CameraPose]) -> torch.Tensor:
         """Pack absolute poses into dense frame-to-frame 4x4 SE3 deltas."""
         if not poses:
-            return torch.zeros((0, 4, 4), dtype=torch.float32)
-        mats = [p.as_matrix().float() for p in poses]
-        deltas: list[torch.Tensor] = [torch.eye(4, dtype=torch.float32)]
+            return torch.zeros((0, 4, 4), dtype=torch.float64)
+        mats = [p.as_matrix() for p in poses]
+        deltas: list[torch.Tensor] = [torch.eye(4, dtype=torch.float64)]
         prev = mats[0]
         for mat in mats[1:]:
             # Relative rigid transform: T_delta = inv(T_prev) @ T_curr.

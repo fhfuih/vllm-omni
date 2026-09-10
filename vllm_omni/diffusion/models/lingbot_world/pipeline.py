@@ -36,6 +36,7 @@ from vllm_omni.diffusion.models.lingbot_world.actions import (
     LingBotCameraActionScript,
     as_camera_action_frames,
     as_camera_action_script,
+    camera_trajectory_from_absolute_pose,
     integrate_lingbot_camera_actions,
     parse_lingbot_camera_action_frames,
     parse_lingbot_camera_action_script,
@@ -1473,18 +1474,8 @@ class LingBotWorldCausalDMDPipeline(
                 )
             # Model-native digest: absolute C2W + reference-frame intrinsics, then
             # the existing plucker path (which relativizes internally).
-            reference_intrinsics = torch.tensor(
-                (
-                    500.0 * 832 / inputs.width,
-                    500.0 * 480 / inputs.height,
-                    832 / 2,
-                    480 / 2,
-                ),
-                dtype=torch.float32,
-            ).repeat(block_frames, 1)
-            action_trajectory = CameraTrajectory(
-                poses=absolute_poses.to(dtype=torch.float32),
-                intrinsics=reference_intrinsics,
+            action_trajectory = camera_trajectory_from_absolute_pose(
+                absolute_poses, width=inputs.width, height=inputs.height
             )
             chunk_inputs = replace(
                 inputs,
