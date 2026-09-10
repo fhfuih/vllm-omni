@@ -9,7 +9,7 @@ from __future__ import annotations
 import math
 from typing import Any
 
-# Blender-frame (+X right, +Y forward, +Z up) step sizes used by the optional
+# Unity-frame (+X right, +Y up, +Z forward) step sizes used by the optional
 # WASD helper. Magnitudes mirror LingBot's script integrator; the engine never
 # sees key tokens — only structural SE3 payloads.
 _WASD_STEP = 0.05
@@ -32,15 +32,15 @@ def wasd_to_camera_payload(actions: list[str], *, mode: str = "velocity") -> dic
     """
     keys = {str(action).lower() for action in actions}
     dx = _WASD_STEP * (("d" in keys) - ("a" in keys))
-    dy = _WASD_STEP * (("w" in keys) - ("s" in keys))
-    dz = 0.0
+    dy = 0.0
+    dz = _WASD_STEP * (("w" in keys) - ("s" in keys))
     pitch = _WASD_PITCH_DEG * (("i" in keys) - ("k" in keys))
     yaw = _WASD_YAW_DEG * (("l" in keys) - ("j" in keys))
 
-    # Compose yaw (around +Z) then pitch (around +X) into one delta quaternion.
+    # Compose yaw (around +Y up) then pitch (around +X) into one delta quaternion.
     qx, qy, qz, qw = 0.0, 0.0, 0.0, 1.0
     if abs(yaw) > 0.0:
-        yx, yy, yz, yw = _quat_from_axis_angle((0.0, 0.0, 1.0), yaw)
+        yx, yy, yz, yw = _quat_from_axis_angle((0.0, 1.0, 0.0), yaw)
         qx, qy, qz, qw = yx, yy, yz, yw
     if abs(pitch) > 0.0:
         px, py, pz, pw = _quat_from_axis_angle((1.0, 0.0, 0.0), pitch)

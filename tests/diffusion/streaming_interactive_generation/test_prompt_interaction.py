@@ -181,7 +181,7 @@ class TestPromptUpdateExecution:
                     "multi_modal_data": {
                         "camera": {
                             "mode": "velocity",
-                            "data": {"translation": [0.0, 0.05, 0.0], "rotation": [0.0, 0.0, 0.0, 1.0]},
+                            "data": {"translation": [0.0, 0.0, 0.05], "rotation": [0.0, 0.0, 0.0, 1.0]},
                         },
                     }
                 },
@@ -193,7 +193,7 @@ class TestPromptUpdateExecution:
                     "multi_modal_data": {
                         "camera": {
                             "mode": "velocity",
-                            "data": {"translation": [0.0, 0.05, 0.0], "rotation": [0.0, 0.0, 0.0, 1.0]},
+                            "data": {"translation": [0.0, 0.0, 0.05], "rotation": [0.0, 0.0, 0.0, 1.0]},
                         },
                     },
                 },
@@ -247,7 +247,7 @@ class TestPromptUpdateExecution:
                                 "camera": {
                                     "mode": "velocity",
                                     "data": {
-                                        "translation": [0.0, 0.05, 0.0],
+                                        "translation": [0.0, 0.0, 0.05],
                                         "rotation": [0.0, 0.0, 0.0, 1.0],
                                     },
                                 },

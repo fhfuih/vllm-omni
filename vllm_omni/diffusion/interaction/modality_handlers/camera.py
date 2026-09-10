@@ -39,9 +39,9 @@ _IDENTITY_QUAT: Quat = (0.0, 0.0, 0.0, 1.0)
 class CameraPose:
     """Canonical absolute camera pose used by the shared timeline.
 
-    Coordinates follow Blender semantics: ``+X`` right, ``+Y`` forward,
-    ``+Z`` up. Session start is the identity transform; ``target`` poses are
-    relative to that origin.
+    Coordinates follow Unity semantics: ``+X`` right, ``+Y`` up,
+    ``+Z`` forward. Session start is the identity transform;
+    ``target`` poses are relative to that origin.
     """
 
     translation: Vec3 = (0.0, 0.0, 0.0)

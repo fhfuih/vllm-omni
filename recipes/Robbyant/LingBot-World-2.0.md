@@ -132,7 +132,7 @@ chunk, and a request generates `((num_frames - 1) // 4 + 1) // 3` chunks:
 three for `num_frames: 33`, seven for `num_frames: 81`.
 
 Mid-session camera control uses structural SE3 on `session.interaction`
-(Blender frame: `+X` right, `+Y` forward, `+Z` up). WASD key tokens belong in
+(Unity frame: `+X` right, `+Y` up, `+Z` forward). WASD key tokens belong in
 clients and are required to be converted before submitting to the service:
 
 ```json
@@ -143,7 +143,7 @@ clients and are required to be converted before submitting to the service:
      "multi_modal_data": {
        "camera": {
          "mode": "velocity",
-         "data": {"translation": [0.0, 0.05, 0.0], "rotation": [0.0, 0.0, 0.0, 1.0]}
+         "data": {"translation": [0.0, 0.0, 0.05], "rotation": [0.0, 0.0, 0.0, 1.0]}
        }
      }
    }

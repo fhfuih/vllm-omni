@@ -85,8 +85,8 @@ Models that implement interaction updates can change the active prompt:
 
 Models that register the camera modality (for example LingBot-World) also
 accept structural SE3 payloads on `event.multi_modal_data.camera`. Coordinates
-follow Blender semantics (`+X` right, `+Y` forward, `+Z` up). WASD key tokens
-are not admitted by the engine:
+follow Unity semantics (`+X` right, `+Y` up, `+Z` forward; same as LingBot's
+native camera frame). WASD key tokens are not admitted by the engine:
 
 ```json
 {
@@ -98,7 +98,7 @@ are not admitted by the engine:
         "camera": {
           "mode": "velocity",
           "data": {
-            "translation": [0.0, 0.05, 0.0],
+            "translation": [0.0, 0.0, 0.05],
             "rotation": [0.0, 0.0, 0.0, 1.0]
           }
         }

@@ -84,7 +84,7 @@ python streaming_video_client.py \
   --image-reference /path/to/first_frame.png \
   --camera-updates '[
     {"at": 1.0, "actions": ["w"]},
-    {"at": 3.0, "camera": {"mode": "target", "data": {"translation": [0.0, 1.0, 0.0], "rotation": [0.0, 0.0, 0.0, 1.0]}}, "transition_chunks": 2}
+    {"at": 3.0, "camera": {"mode": "target", "data": {"translation": [0.0, 0.0, 1.0], "rotation": [0.0, 0.0, 0.0, 1.0]}}, "transition_chunks": 2}
   ]'
 ```
 

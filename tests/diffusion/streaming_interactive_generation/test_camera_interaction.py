@@ -22,7 +22,7 @@ pytestmark = [pytest.mark.core_model, pytest.mark.diffusion, pytest.mark.cpu]
 
 _FORWARD_VELOCITY = {
     "mode": "velocity",
-    "data": {"translation": [0.0, 0.05, 0.0], "rotation": [0.0, 0.0, 0.0, 1.0]},
+    "data": {"translation": [0.0, 0.0, 0.05], "rotation": [0.0, 0.0, 0.0, 1.0]},
 }
 
 
@@ -292,7 +292,7 @@ class TestCameraHandlers:
         assert meta0.active_event_ids == ["vel-1"]
         session = state.interaction_sessions["camera"]
         assert isinstance(session, CameraSession)
-        assert session.current_pose.translation[1] == pytest.approx(0.15)
+        assert session.current_pose.translation[2] == pytest.approx(0.15)
         assert session.last_absolute_poses is not None
         assert session.last_absolute_poses.shape == (3, 4, 4)
         conditioning = state.conditioning["camera"]
@@ -300,7 +300,7 @@ class TestCameraHandlers:
         torch.testing.assert_close(conditioning[0], torch.eye(4), atol=1e-6, rtol=0)
         torch.testing.assert_close(
             conditioning[1, :3, 3],
-            torch.tensor([0.0, 0.05, 0.0], dtype=torch.float32),
+            torch.tensor([0.0, 0.0, 0.05], dtype=torch.float32),
             atol=1e-6,
             rtol=0,
         )
@@ -308,7 +308,7 @@ class TestCameraHandlers:
         meta1 = handler.apply_at_chunk_boundary(state, chunk_index=1, num_frames=2, fps=16.0, boundary_at=0.125)
         assert meta1 is not None
         assert meta1.active_event_ids == ["vel-1"]
-        assert session.current_pose.translation[1] == pytest.approx(0.25)
+        assert session.current_pose.translation[2] == pytest.approx(0.25)
 
     def test_velocity_completed_when_replaced_by_target(self) -> None:
         handler = SE3DeltaCameraHandler()
@@ -389,7 +389,7 @@ class TestCameraHandlers:
         session = state.interaction_sessions["camera"]
         assert isinstance(session, CameraSession)
         assert session.active_event is None
-        assert session.current_pose.translation[1] == pytest.approx(0.0)
+        assert session.current_pose.translation[2] == pytest.approx(0.0)
 
 
 class TestResolveEventFrameOffset:
