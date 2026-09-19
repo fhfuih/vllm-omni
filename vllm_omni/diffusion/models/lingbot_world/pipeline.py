@@ -1701,11 +1701,12 @@ class LingBotWorldCausalDMDPipeline(
                 initial_pitch=float(extra.get("camera_pitch", 0.0)),
             )
             extra["camera_pitch"] = camera_pitch
+            media_frames = self._chunk_media_frame_count(state, block_frames=block_frames)
             chunk_inputs = replace(
                 inputs,
                 camera_trajectory=action_trajectory,
                 camera_actions=chunk_actions,
-                num_frames=(block_frames - 1) * self.vae_scale_factor_temporal + 1,
+                num_frames=media_frames,
                 num_latent_frames=block_frames,
             )
             camera, camera_tail = self._prepare_camera(
@@ -1734,23 +1735,23 @@ class LingBotWorldCausalDMDPipeline(
                 )
             absolute_poses = camera_session.last_absolute_poses
             media_frames = self._chunk_media_frame_count(state, block_frames=block_frames)
-            if int(absolute_poses.shape[0]) != media_frames:
+            num_latent_frames = block_frames
+            if int(absolute_poses.shape[0]) != num_latent_frames:
                 raise ValueError(
-                    "camera interaction must produce exactly one pose per media frame; "
-                    f"got {int(absolute_poses.shape[0])}, expected {media_frames}."
+                    "camera interaction must produce exactly one pose per latent frame; "
+                    f"got {int(absolute_poses.shape[0])}, expected {num_latent_frames}."
                 )
-            # Model-native digest: absolute C2W on the media timeline, resample to
-            # latent frames, then the existing plucker path (which relativizes).
-            media_trajectory = camera_trajectory_from_absolute_pose(
-                absolute_poses, width=inputs.width, height=inputs.height
+            action_trajectory = camera_trajectory_from_absolute_pose(
+                absolute_poses,
+                width=inputs.width,
+                height=inputs.height,
             )
-            action_trajectory = interpolate_camera_trajectory(media_trajectory, block_frames)
             chunk_inputs = replace(
                 inputs,
                 camera_trajectory=action_trajectory,
                 camera_actions=None,
                 num_frames=media_frames,
-                num_latent_frames=block_frames,
+                num_latent_frames=num_latent_frames,
             )
             camera, camera_tail = self._prepare_camera(
                 chunk_inputs,
@@ -1923,15 +1924,19 @@ class LingBotWorldCausalDMDPipeline(
         return (block_frames - 1) * self.vae_scale_factor_temporal + 1
 
     def peek_chunk_media(self, state: StepRequestState) -> ChunkMediaSpec:
-        """Expose this chunk's decoded media extent for camera interaction timelines."""
-        block_frames = int(state.extra.get("block_frames") or self.transformer.config.num_frames_per_block)
-        media_frames = self._chunk_media_frame_count(state, block_frames=block_frames)
+        """Expose this chunk's decoded media extent and latent step count."""
+        num_latent_frames = int(state.extra.get("block_frames") or self.transformer.config.num_frames_per_block)
+        num_media_frames = self._chunk_media_frame_count(state, block_frames=num_latent_frames)
         fps = state.sampling.fps
         if fps is None or float(fps) <= 0:
             # Media-frame camera controls are not wall-clock paced; a unit fps keeps
             # resolve_event_frame_offset well-defined when the client omits sampling.fps.
-            fps = float(media_frames)
-        return ChunkMediaSpec(num_frames=int(media_frames), fps=float(fps))
+            fps = float(num_media_frames)
+        return ChunkMediaSpec(
+            num_media_frames=num_media_frames,
+            fps=fps,
+            num_latent_frames=num_latent_frames,
+        )
 
     def prepare_next_chunk(self, state: StepRequestState) -> None:
         """Prepare the next AR block after chunk-boundary interaction apply."""

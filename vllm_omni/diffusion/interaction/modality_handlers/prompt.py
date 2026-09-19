@@ -184,12 +184,13 @@ class PromptInteractionHandler(InteractionHandler):
         *,
         boundary_at: float,
         chunk_index: int | None = None,
-        num_frames: int | None = None,
+        num_media_frames: int | None = None,
         fps: float | None = None,
+        num_latent_frames: int | None = None,
     ) -> InteractionChunkMetadata | None:
         """Advance or start prompt interpolation before the next chunk."""
         # Prompt lerp is chunk-LWW; media timeline and caller chunk_index unused.
-        del chunk_index, num_frames, fps
+        del chunk_index, num_media_frames, fps, num_latent_frames
         session = state.interaction_sessions.get("prompt")
         assert isinstance(session, PromptSession)
 

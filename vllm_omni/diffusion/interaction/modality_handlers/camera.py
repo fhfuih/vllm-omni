@@ -95,20 +95,18 @@ class CameraSession(InteractionSession):
     # In-flight command; ``elapsed_transition_chunks`` lives on the event.
     active_event: QueuedCameraEvent | None = None
     target_source: CameraPose | None = None
-    # Absolute C2W poses ``[T, 4, 4]`` for the most recent chunk (pipeline may
-    # rebuild model-native conditioning from these without double-relativizing).
+    # Absolute C2W poses ``[num_latent_frames, 4, 4]`` for the most recent chunk.
     last_absolute_poses: torch.Tensor | None = None
 
 
 class SE3DeltaCameraHandler(InteractionHandler):
-    """Generic camera timeline that samples absolute poses per media frame.
+    """Generic camera timeline that samples absolute poses per frame.
 
     * ``mode=target``: lerp toward an absolute pose (relative to session start).
-    * ``mode=velocity``: hold a structural per-frame SE3 delta until replaced.
+    * ``mode=velocity``: hold a structural SE3 delta until replaced.
 
-    Absolute poses for the chunk are stored on ``CameraSession.last_absolute_poses``
-    for pipelines that need them (e.g. LingBot plucker embedding via
-    ``prepare_next_chunk``).
+    ``received_at`` is resolved on the media grid (``num_media_frames``/``fps``), then mapped onto latent steps.
+    Later integration and ``last_absolute_poses`` aligns with ``num_latent_frames``.
     """
 
     modality: ClassVar[str] = "camera"
@@ -200,23 +198,43 @@ class SE3DeltaCameraHandler(InteractionHandler):
         *,
         boundary_at: float,
         chunk_index: int | None = None,
-        num_frames: int | None = None,
+        num_media_frames: int | None = None,
         fps: float | None = None,
+        num_latent_frames: int | None = None,
     ) -> InteractionChunkMetadata | None:
+        """Advance camera state for one chunk and store latent-aligned poses.
+
+        .. note::
+            Hardcoded the following policy of per-frame alignment:
+
+            - Resolve ``received_at`` on the media grid, then map each media index onto a latent step.
+            - Integrate one velocity step per **latent frame**, so holding speed ``0.05`` for a chunk with
+              ``num_latent_frames=3`` yields total travel ``0.15``.
+            - ``last_absolute_poses.shape[0] == num_latent_frames``: interpolation is latent-aligned.
+
+            If future models need different scale/alignment policies, can refactor interaction registry
+            to be able to mark a policy.
+        """
         del chunk_index
-        if num_frames is None or fps is None:
-            raise ValueError("SE3DeltaCameraHandler requires chunk num_frames and fps")
+        if num_media_frames is None or fps is None:
+            raise ValueError("SE3DeltaCameraHandler requires chunk num_media_frames and fps")
+        if num_latent_frames is None:
+            num_latent_frames = num_media_frames
+        if int(num_latent_frames) <= 0:
+            raise ValueError(f"num_latent_frames must be > 0, got {num_latent_frames}")
+
         session = state.interaction_sessions.setdefault("camera", CameraSession())
         assert isinstance(session, CameraSession)
         with session.lock:
-            samples, started, active, completed = self._step_one_chunk(
+            poses, started, active, completed = self._step_one_chunk(
                 session,
-                num_frames=num_frames,
+                num_media_frames=num_media_frames,
                 fps=fps,
+                num_latent_frames=num_latent_frames,
                 boundary_at=boundary_at,
             )
-            if samples:
-                session.last_absolute_poses = torch.stack([p.as_matrix() for p in samples], dim=0)
+            if poses:
+                session.last_absolute_poses = torch.stack([p.as_matrix() for p in poses], dim=0)
             else:
                 session.last_absolute_poses = torch.zeros((0, 4, 4), dtype=torch.float64)
 
@@ -230,30 +248,33 @@ class SE3DeltaCameraHandler(InteractionHandler):
         self,
         session: CameraSession,
         *,
-        num_frames: int,
+        num_media_frames: int,
         fps: float,
+        num_latent_frames: int,
         boundary_at: float,
     ) -> tuple[list[CameraPose], list[str], list[str], list[str]]:
         """Sample absolute poses for this chunk under target/velocity semantics."""
-
-        num_frames = max(int(num_frames), 1)
+        num_media_frames = max(int(num_media_frames), 1)
+        num_latent_frames = max(int(num_latent_frames), 1)
         pending = list(session.pending_events)
         session.pending_events.clear()
 
-        resolved: list[tuple[int, QueuedCameraEvent]] = []
+        by_latent: dict[int, list[QueuedCameraEvent]] = {}
         for event in pending:
-            frame = resolve_event_frame_offset(
+            media_frame = resolve_event_frame_offset(
                 received_at=event.received_at,
                 previous_boundary_at=session.last_boundary_at,
-                num_frames=num_frames,
+                num_frames=num_media_frames,
                 fps=fps,
             )
-            resolved.append((frame, event))
-        resolved.sort(key=lambda item: item[0])
-
-        by_frame: dict[int, list[QueuedCameraEvent]] = {}
-        for frame, event in resolved:
-            by_frame.setdefault(frame, []).append(event)
+            latent_idx = _media_frame_to_latent(
+                media_frame,
+                num_media_frames=num_media_frames,
+                num_latent_frames=num_latent_frames,
+            )
+            by_latent.setdefault(latent_idx, []).append(event)
+        for events in by_latent.values():
+            events.sort(key=lambda item: item.received_at)
 
         started: list[str] = []
         completed: list[str] = []
@@ -265,13 +286,13 @@ class SE3DeltaCameraHandler(InteractionHandler):
                 seen_completed.add(event_id)
                 completed.append(event_id)
 
-        for frame_idx in range(num_frames):
-            for event in by_frame.get(frame_idx, []):
+        for latent_idx in range(num_latent_frames):
+            for event in by_latent.get(latent_idx, []):
                 started.append(event.event_id)
                 cancelled_id = self._activate_event(session, event)
                 if cancelled_id is not None:
                     _mark_completed(cancelled_id)
-            just_completed = self._step_one_frame(session, num_frames)
+            just_completed = self._step_one_frame(session, num_latent_frames)
             poses.append(session.current_pose.clone())
             if just_completed is not None:
                 _mark_completed(just_completed)
@@ -309,7 +330,7 @@ class SE3DeltaCameraHandler(InteractionHandler):
         return event_id
 
     def _step_one_frame(self, session: CameraSession, total_num_frames_this_chunk: int) -> str | None:
-        """Advance the active camera command by one output frame."""
+        """Advance the active camera command by one frame."""
         event = session.active_event
         if event is None:
             return None
@@ -330,9 +351,21 @@ class SE3DeltaCameraHandler(InteractionHandler):
                 return self._clear_active_target(session)
             return None
 
-        # Velocity: apply the held structural SE3 delta once per output frame.
+        # Velocity: apply the held structural SE3 delta once per frame.
         session.current_pose = _compose_pose(session.current_pose, event.pose)
         return None
+
+
+def _media_frame_to_latent(
+    media_frame: int,
+    *,
+    num_media_frames: int,
+    num_latent_frames: int,
+) -> int:
+    """Map a media-timeline frame index onto the latent control grid."""
+    if num_latent_frames <= 1 or num_media_frames <= 1:
+        return 0
+    return min(int(media_frame) * int(num_latent_frames) // int(num_media_frames), num_latent_frames - 1)
 
 
 def _as_xyz(value: object, *, name: str) -> Vec3:

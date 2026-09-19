@@ -25,7 +25,7 @@ class InteractionHandler(ABC):
     """
 
     modality: ClassVar[str]
-    # When True, chunk-boundary apply needs ``ChunkMediaSpec`` (num_frames/fps)
+    # When True, chunk-boundary apply needs ``ChunkMediaSpec`` (frame count & fps)
     # Those information are useful when interaction handler needs interpolation/integration on a frame-by-frame basis
     needs_chunk_media: ClassVar[bool] = False
     # When True, the coordinator skips ``apply_at_chunk_boundary`` until a session
@@ -78,7 +78,9 @@ class InteractionHandler(ABC):
         *,
         boundary_at: float,
         chunk_index: int | None = None,  # defaults to state.chunk_index when omitted
-        num_frames: int | None = None,  # only set when at least one interaction handler needs it
-        fps: float | None = None,  # only set when at least one interaction handler needs it
+        # Optional chunk media information. Only present when at least one initialized interaction handler needs it
+        num_media_frames: int | None = None,
+        fps: float | None = None,
+        num_latent_frames: int | None = None,
     ) -> InteractionChunkMetadata | None:
         """Advance request-local state and materialize this chunk's effects."""

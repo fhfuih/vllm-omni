@@ -2487,7 +2487,7 @@ def test_peek_chunk_media_matches_streaming_decoder_frame_counts(monkeypatch) ->
     with pipeline.bind_ar_diffusion_state(state.request_id, fake):
         pipeline.prepare_encode(state)
         first = pipeline.peek_chunk_media(state)
-        assert (first.num_frames, first.fps) == (9, 16.0)
+        assert (first.num_media_frames, first.fps, first.num_latent_frames) == (9, 16.0, 3)
 
         pipeline.prepare_next_chunk(state)
         while not state.chunk_denoise_completed:
@@ -2496,7 +2496,7 @@ def test_peek_chunk_media_matches_streaming_decoder_frame_counts(monkeypatch) ->
         pipeline.post_decode(state)
 
         second = pipeline.peek_chunk_media(state)
-        assert (second.num_frames, second.fps) == (12, 16.0)
+        assert (second.num_media_frames, second.fps, second.num_latent_frames) == (12, 16.0, 3)
 
 
 def test_streaming_decode_state_is_owned_by_the_session(monkeypatch) -> None:

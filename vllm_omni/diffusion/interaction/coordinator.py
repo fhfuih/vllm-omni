@@ -53,7 +53,7 @@ class InteractionCoordinator:
 
     @property
     def needs_chunk_media(self) -> bool:
-        """Whether any registered handler needs chunk ``num_frames``/``fps``."""
+        """Whether any registered handler needs chunk media/latent counts + fps."""
         return any(handler.needs_chunk_media for handler in self._handlers.values())
 
     def get_handler(self, modality: str) -> InteractionHandler:
@@ -133,14 +133,16 @@ class InteractionCoordinator:
         Handlers with ``lazy_initialize_session=False`` (e.g. camera) must exist
         before the first chunk even with no client enqueue.
         """
-        num_frames: int | None = None
+        num_media_frames: int | None = None
         fps: float | None = None
+        num_latent_frames: int | None = None
         if any(
             (not handler.lazy_initialize_session) and handler.needs_chunk_media for handler in self._handlers.values()
         ):
             media = pipeline.peek_chunk_media(state)
-            num_frames = media.num_frames
+            num_media_frames = media.num_media_frames
             fps = media.fps
+            num_latent_frames = media.num_latent_frames
 
         boundary_at = synchronized_monotonic_time()
         chunk_index = state.chunk_index
@@ -152,8 +154,9 @@ class InteractionCoordinator:
                 state,
                 boundary_at=boundary_at,
                 chunk_index=chunk_index,
-                num_frames=num_frames,
+                num_media_frames=num_media_frames,
                 fps=fps,
+                num_latent_frames=num_latent_frames,
             )
             if meta is not None:
                 metas.append(meta)
@@ -165,8 +168,9 @@ class InteractionCoordinator:
         *,
         boundary_at: float,
         chunk_index: int | None = None,
-        num_frames: int | None = None,
+        num_media_frames: int | None = None,
         fps: float | None = None,
+        num_latent_frames: int | None = None,
     ) -> InteractionChunkMetadata:
         """Fan out chunk-boundary apply to handlers in stable order (prompt first)."""
         if chunk_index is None:
@@ -180,8 +184,9 @@ class InteractionCoordinator:
                 state,
                 boundary_at=boundary_at,
                 chunk_index=chunk_index,
-                num_frames=num_frames,
+                num_media_frames=num_media_frames,
                 fps=fps,
+                num_latent_frames=num_latent_frames,
             )
             if meta is not None:
                 metas.append(meta)

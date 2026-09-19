@@ -47,26 +47,29 @@ def synchronized_monotonic_time(stamp: float | None = None) -> float:
 
 @dataclass(frozen=True)
 class ChunkMediaSpec:
-    """Decoded media extent of one generation chunk for interaction timelines.
+    """Decoded media extent and latent step count for one generation chunk.
 
-    ``num_frames`` and ``fps`` are in *media* (pixel/audio) units, not latent
-    frames. ``duration_s`` is therefore the chunk's wall-clock media length.
-    Model-specific digests (e.g. latent pose counts) must adapt after the
-    media timeline is sampled.
+    Attributes:
+        num_media_frames: Number of frames in this chunk when decoded into playable media.
+        fps: Frames per second of the media.
+        num_latent_frames: Number of latent frames in this chunk (internal DiT units).
     """
 
-    num_frames: int
+    num_media_frames: int
     fps: float
+    num_latent_frames: int
 
     def __post_init__(self) -> None:
-        if self.num_frames <= 0:
-            raise ValueError(f"ChunkMediaSpec.num_frames must be > 0, got {self.num_frames}")
+        if self.num_media_frames <= 0:
+            raise ValueError(f"ChunkMediaSpec.num_media_frames must be > 0, got {self.num_media_frames}")
+        if self.num_latent_frames <= 0:
+            raise ValueError(f"ChunkMediaSpec.num_latent_frames must be > 0, got {self.num_latent_frames}")
         if self.fps <= 0:
             raise ValueError(f"ChunkMediaSpec.fps must be > 0, got {self.fps}")
 
     @property
     def duration_s(self) -> float:
-        return float(self.num_frames) / float(self.fps)
+        return float(self.num_media_frames) / float(self.fps)
 
 
 @dataclass(kw_only=True)

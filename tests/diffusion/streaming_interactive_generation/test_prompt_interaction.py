@@ -78,7 +78,7 @@ def _make_diffusion_request_state(*, request_id: str = "req-1", fps: int | None 
         prompt="hello",
     )
     state.prompt_embeds = torch.zeros(1, 4, 2)
-    state.extra = {"window_num_frames": 8}
+    state.extra = {"window_num_frames": 8, "num_latent_frames_per_chunk": 3}
     return state
 
 
@@ -446,7 +446,11 @@ class TestPromptUpdateExecution:
                         f"that use the chunk media timeline, got {fps!r} "
                         f"(request_id={state.request_id!r})"
                     )
-                return ChunkMediaSpec(num_frames=int(state.extra["window_num_frames"]), fps=float(fps))
+                return ChunkMediaSpec(
+                    num_media_frames=int(state.extra["window_num_frames"]),
+                    fps=float(fps),
+                    num_latent_frames=int(state.extra["window_num_frames"]),
+                )
 
             def prepare_encode(self, state: StepRequestState) -> StepRequestState:
                 state.prompt_embeds = torch.zeros(1, 4, 2)

@@ -37,7 +37,7 @@ class _FakePromptPipeline(InteractionMixin):
 
     def peek_chunk_media(self, state: StepRequestState) -> ChunkMediaSpec:
         del state
-        return ChunkMediaSpec(num_frames=8, fps=16.0)
+        return ChunkMediaSpec(num_media_frames=8, fps=16.0, num_latent_frames=8)
 
 
 class _FakeLingBotPipeline(InteractionMixin):
@@ -48,7 +48,7 @@ class _FakeLingBotPipeline(InteractionMixin):
 
     def peek_chunk_media(self, state: StepRequestState) -> ChunkMediaSpec:
         del state
-        return ChunkMediaSpec(num_frames=3, fps=3.0)
+        return ChunkMediaSpec(num_media_frames=3, fps=3.0, num_latent_frames=3)
 
 
 def _make_state(*, request_id: str = "req-1") -> StepRequestState:
@@ -234,7 +234,7 @@ class TestCameraHandlers:
         meta = handler.apply_at_chunk_boundary(
             state,
             chunk_index=0,
-            num_frames=4,
+            num_media_frames=4,
             fps=16.0,
             boundary_at=0.25,
         )
@@ -250,7 +250,7 @@ class TestCameraHandlers:
         meta2 = handler.apply_at_chunk_boundary(
             state,
             chunk_index=1,
-            num_frames=4,
+            num_media_frames=4,
             fps=16.0,
             boundary_at=0.5,
         )
@@ -282,7 +282,7 @@ class TestCameraHandlers:
             meta = handler.apply_at_chunk_boundary(
                 state,
                 chunk_index=0,
-                num_frames=num_frames,
+                num_media_frames=num_frames,
                 fps=16.0,
                 boundary_at=0.5,
             )
@@ -294,7 +294,7 @@ class TestCameraHandlers:
             meta2 = handler.apply_at_chunk_boundary(
                 state,
                 chunk_index=1,
-                num_frames=num_frames,
+                num_media_frames=num_frames,
                 fps=16.0,
                 boundary_at=1.0,
             )
@@ -317,7 +317,7 @@ class TestCameraHandlers:
             transition_chunks=None,
         )
 
-        meta0 = handler.apply_at_chunk_boundary(state, chunk_index=0, num_frames=3, fps=16.0, boundary_at=0.0)
+        meta0 = handler.apply_at_chunk_boundary(state, chunk_index=0, num_media_frames=3, fps=16.0, boundary_at=0.0)
         assert meta0 is not None
         assert meta0.started_event_ids == ["vel-1"]
         assert meta0.active_event_ids == ["vel-1"]
@@ -339,7 +339,7 @@ class TestCameraHandlers:
             rtol=0,
         )
 
-        meta1 = handler.apply_at_chunk_boundary(state, chunk_index=1, num_frames=2, fps=16.0, boundary_at=0.125)
+        meta1 = handler.apply_at_chunk_boundary(state, chunk_index=1, num_media_frames=2, fps=16.0, boundary_at=0.125)
         assert meta1 is not None
         assert meta1.active_event_ids == ["vel-1"]
         assert session.current_pose.translation[2] == pytest.approx(0.25)
@@ -357,7 +357,7 @@ class TestCameraHandlers:
         meta0 = handler.apply_at_chunk_boundary(
             state,
             chunk_index=0,
-            num_frames=2,
+            num_media_frames=2,
             fps=16.0,
             boundary_at=0.0,
         )
@@ -377,7 +377,7 @@ class TestCameraHandlers:
         meta1 = handler.apply_at_chunk_boundary(
             state,
             chunk_index=1,
-            num_frames=2,
+            num_media_frames=2,
             fps=16.0,
             boundary_at=0.125,
         )
@@ -412,7 +412,7 @@ class TestCameraHandlers:
         meta = handler.apply_at_chunk_boundary(
             state,
             chunk_index=0,
-            num_frames=10,
+            num_media_frames=10,
             fps=fps,
             boundary_at=_boundary_at(boundary, 10, fps),
         )
